@@ -141,7 +141,8 @@ function ordering(value: MediaSnapshot, local: string, members: string[]): void 
 async function healthy(device: Device, peers: Device[], media: MediaKind): Promise<MediaSnapshot> {
   await expect.poll(async () => {
     const snapshot = (await device.page.evaluate(() => window.threeVoice.snapshot())).media;
-    return peers.filter((peer) => peer !== device).every((peer) => snapshot?.streams.some((stream) => stream.identity === peer.binding.member && stream.kind === media && stream.bytes > 100 && (media === "audio" ? stream.energy > 0 && stream.samples > 0 : stream.frames > 10 && stream.width === 160)));
+    const encoded = snapshot?.frames.filter((frame) => frame.direction === "encode") ?? [];
+    return encoded.length > 0 && encoded.every((frame) => frame.nonempty > 10) && peers.filter((peer) => peer !== device).every((peer) => snapshot?.streams.some((stream) => stream.identity === peer.binding.member && stream.kind === media && stream.bytes > 100 && (media === "audio" ? stream.energy > 0 && stream.samples > 0 : stream.frames > 10 && stream.width === 160)));
   }, { timeout: 20_000 }).toBe(true);
   const value = (await device.page.evaluate(() => window.threeVoice.snapshot())).media;
   expect(value).toBeDefined(); if (!value) throw new Error("No media snapshot.");

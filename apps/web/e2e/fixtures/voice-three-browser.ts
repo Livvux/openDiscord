@@ -58,7 +58,9 @@ class BrowserProof {
       const key = await createKeyMaterialFromBuffer(bytes.buffer); bytes.fill(0);
       this.materials.set(control.publisher.member, { keyId: control.keyId, reference: control.reference, key });
       this.receivedMaterial++;
-      await owner.send({ ...control, kind: "prepared", transaction: crypto.randomUUID(), sender: owner.binding, recipient: control.publisher, material: undefined });
+      // Omit material entirely: the native WASM object bridge preserves an explicit
+      // undefined property as null, which is not a valid material-free receipt.
+      await owner.send({ version: 1, kind: "prepared", transaction: crypto.randomUUID(), epoch: control.epoch, sender: owner.binding, recipient: control.publisher, publisher: control.publisher, audience: control.audience, keyId: control.keyId, reference: control.reference });
     } else {
       const material = this.sent.get(control.sender.member);
       if (!same(control.publisher, owner.binding) || !material || control.keyId !== material.keyId || control.reference !== material.reference) throw new Error("Unbound material receipt.");
