@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceCryptoOwner, type VoiceOwnerTransport } from "../src/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "../src/lib/voice/owner-guard";
 import { validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT } from "../src/lib/voice/owner-control";
+import { OwnerUnitPeer, OwnerUnitWire } from "./fixtures/voice-owner-peer";
 import type { VoiceSnapshot } from "../src/lib/voice/contracts";
 
 function locks() {
@@ -38,16 +39,50 @@ function unitTransport(): VoiceOwnerTransport {
     throw new Error("Unsupported owner unit request.");
   };
 }
-afterEach(() => { vi.unstubAllGlobals(); });
+async function pair() {
+  locks();
+  const current = snapshot(), base = snapshot().members[0];
+  const other = { ...base, voiceUserId: `@voice_${current.callId}_${base.memberId}:opendiscord.local` };
+  current.members.push(other);
+  const remote = { ...current, memberId: other.memberId, joinNonce: other.joinNonce, voiceUserId: other.voiceUserId, voiceDeviceId: other.voiceDeviceId, participantIdentity: other.participantIdentity };
+  const wire = new OwnerUnitWire(current), onFence = vi.fn(), lifetime = new AbortController();
+  const owner = await VoiceCryptoOwner.create({ accountId: current.members[0].userId, guard: await acquireVoiceOwnerGuard(current.members[0].userId), snapshot: current, lifetime: { signal: lifetime.signal, assertCurrent() {} }, transport: wire.port(current.memberId), onFence });
+  const peer = await OwnerUnitPeer.create(remote, wire.port(other.memberId));
+  return { owner, peer, current, other, wire, onFence, lifetime };
+}
+async function verify(value: Awaited<ReturnType<typeof pair>>) {
+  const { owner, peer, current, other } = value;
+  await peer.query();
+  const handle = await owner.requestVerification(other.memberId); await peer.receive();
+  const state = (await owner.verificationStates()).find(state => state.handle === handle)!;
+  const request = peer.machine.getVerificationRequest(new C.UserId(current.voiceUserId), state.flowId);
+  if (!request) throw new Error("Missing unit peer SAS request.");
+  const ready = request.acceptWithMethods([C.VerificationMethod.SasV1]); if (!ready) throw new Error("Missing unit ready.");
+  await peer.out(ready); await owner.receive();
+  await owner.verificationStep(handle, "start"); await peer.receive();
+  const sas = request.getVerification(); if (!(sas instanceof C.Sas)) throw new Error("Missing peer SAS.");
+  const accepted = sas.accept(); if (accepted) await peer.out(accepted);
+  await owner.receive(); await peer.receive(); await owner.receive();
+  const ownerState = (await owner.verificationStates()).find(state => state.handle === handle)!;
+  expect(ownerState.emojiIndices).toEqual(Array.from(sas.emojiIndex()!));
+  await owner.verificationStep(handle, "confirm");
+  for (const output of await sas.confirm()) await peer.out(output);
+  await owner.receive(); await peer.receive(); await owner.receive(); await peer.receive();
+  await owner.query(current.members.map(member => member.memberId)); await peer.query();
+  expect((await owner.verificationStates()).find(state => state.handle === handle)?.done).toBe(true);
+  await owner.admit(other.memberId);
+}
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("unreachable serial voice owner", () => {
   it("requires an actually held one-use account lock and releases only after native cleanup", async () => {
     locks(); const current = snapshot(), accountId = current.members[0].userId, onFence = vi.fn();
     const guard = await acquireVoiceOwnerGuard(accountId);
     await expect(acquireVoiceOwnerGuard(accountId)).rejects.toThrow("already held");
-    await expect(VoiceCryptoOwner.create({ accountId, guard: { accountId }, snapshot: current, lifetime: { assertCurrent() {} }, transport: unitTransport(), onFence })).rejects.toThrow("capability");
-    const owner = await VoiceCryptoOwner.create({ accountId, guard, snapshot: current, lifetime: { assertCurrent() {} }, transport: unitTransport(), onFence });
+    await expect(VoiceCryptoOwner.create({ accountId, guard: { accountId }, snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: unitTransport(), onFence })).rejects.toThrow("capability");
+    const owner = await VoiceCryptoOwner.create({ accountId, guard, snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: unitTransport(), onFence });
     try {
-      await expect(VoiceCryptoOwner.create({ accountId, guard, snapshot: current, lifetime: { assertCurrent() {} }, transport: unitTransport(), onFence })).rejects.toThrow("capability");
+      await expect(VoiceCryptoOwner.create({ accountId, guard, snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: unitTransport(), onFence })).rejects.toThrow("capability");
       expect(await owner.receive()).toEqual([]);
     } finally { const closed = owner.close(); expect(onFence).toHaveBeenCalledWith("closed"); await closed; }
     const next = await acquireVoiceOwnerGuard(accountId); releaseUnusedVoiceOwnerGuard(next);
@@ -57,7 +92,7 @@ describe("unreachable serial voice owner", () => {
     const dm = await C.OlmMachine.initialize(new C.UserId(`@dm_owner_unit_${randomUUID()}:opendiscord.local`), new C.DeviceId(randomUUID()), undefined, undefined, { debug() {}, info() {}, warn() {}, error() {} });
     const before = dm.identityKeys.ed25519.toBase64();
     const current = snapshot(), accountId = current.members[0].userId, onFence = vi.fn(); let alive = true;
-    const owner = await VoiceCryptoOwner.create({ accountId, guard: await acquireVoiceOwnerGuard(accountId), snapshot: current, lifetime: { assertCurrent() { if (!alive) throw new Error("Expired lifetime."); } }, transport: unitTransport(), onFence });
+    const owner = await VoiceCryptoOwner.create({ accountId, guard: await acquireVoiceOwnerGuard(accountId), snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() { if (!alive) throw new Error("Expired lifetime."); } }, transport: unitTransport(), onFence });
     try {
       const transition = owner.transition({ ...current, generation: 2 });
       expect(onFence).toHaveBeenCalledWith("generation-transition"); await transition;
@@ -75,4 +110,61 @@ describe("unreachable serial voice owner", () => {
     const invalid = { ...valid, [changed]: changed === "generation" ? 2 : changed === "epochId" ? randomUUID() : [] };
     expect(() => validateVoiceOwnerControl(invalid, current, epochId, [party])).toThrow();
   });
+  for (const changed of ["generation", "epochId", "audience"] as const) it(`rejects genuinely decrypted ${changed}-only stale control without admission or receipt effects`, async () => {
+    const value = await pair();
+    try {
+      await verify(value);
+      const { current, other, owner, peer, wire } = value;
+      const epochId = randomUUID(), parties = current.members.map(voiceControlParty).sort((a, b) => a.memberId.localeCompare(b.memberId));
+      await owner.setControlContext(epochId, current.members.map(member => member.memberId));
+      const good = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: current.callId, generation: current.generation, epochId, sender: voiceControlParty(other), recipient: voiceControlParty(current.members[0]), publisher: voiceControlParty(other), audience: parties, keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 5).toString("base64") };
+      // Positive genuine decryption first proves native sender verification and full Olm metadata parsing.
+      await peer.encrypt(current.members[0], good);
+      expect(await owner.receive()).toEqual([good]);
+      const invalid = { ...good, transaction: randomUUID(), [changed]: changed === "generation" ? current.generation + 1 : changed === "epochId" ? randomUUID() : [voiceControlParty(other)] };
+      await peer.encrypt(current.members[0], invalid);
+      const before = wire.sent.length;
+      await expect(owner.receive()).rejects.toThrow();
+      expect(wire.sent.slice(before).filter(entry => entry.request.kind === "send")).toEqual([]);
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(owner.admit(other.memberId)).rejects.toThrow("closed");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+  it("deduplicates concurrent native completion and late old-generation success after explicit retirement", async () => {
+    const value = await pair();
+    const original = C.OlmMachine.prototype.markRequestAsSent;
+    const completions: string[] = [];
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(function(this: C.OlmMachine, id, type, response) { completions.push(id); return original.call(this, id, type, response); });
+    try {
+      const arrived = deferred<void>(), release = deferred<void>();
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { arrived.resolve(); await release.promise; } };
+      const requested = value.owner.requestVerification(value.other.memberId);
+      await arrived.promise;
+      const send = [...value.wire.sent].reverse().find(entry => entry.request.kind === "send")!;
+      if (!("nativeRequestId" in send.request)) throw new Error("Missing native ID.");
+      const id = send.request.nativeRequestId;
+      await value.owner.transition({ ...value.current, generation: 2 });
+      expect(value.onFence).toHaveBeenCalledWith("generation-transition");
+      const retired = value.wire.sent.filter(entry => entry.request.kind === "retire");
+      expect(retired.some(entry => "nativeRequestId" in entry.request && entry.request.nativeRequestId === id)).toBe(true);
+      release.resolve(); await expect(requested).rejects.toThrow("generation interrupted");
+      expect(completions.filter(value => value === id)).toHaveLength(1);
+      expect(retired.every(entry => entry.binding.expectedGeneration === 2)).toBe(true);
+      value.wire.pause = undefined;
+      const fresh = await value.owner.requestVerification(value.other.memberId);
+      expect(fresh).toBeTruthy();
+      expect(value.wire.sent.at(-1)?.request.kind).toBe("send");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+  it("fences lifetime abort immediately and rejects late transport work before releasing the Web Lock", async () => {
+    const value = await pair();
+    try {
+      value.lifetime.abort();
+      expect(value.onFence).toHaveBeenCalledWith("lifetime-lost");
+      await expect(value.owner.receive()).rejects.toThrow("closed");
+      await value.owner.close();
+      const guard = await acquireVoiceOwnerGuard(value.current.members[0].userId); releaseUnusedVoiceOwnerGuard(guard);
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+
 });

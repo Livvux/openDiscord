@@ -10,7 +10,7 @@ type Flow = { handle: string; peer: VoiceControlParty; generation: number; reque
 export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: string; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; emojiIndices: number[] | null };
 export type VoiceOwnerTransport = (input: Readonly<{ binding: VoiceBinding; request: VoiceCryptoRequest; signal: AbortSignal }>) => Promise<unknown>;
 export class VoiceGenerationInterrupted extends Error { constructor() { super("Voice generation interrupted."); } }
-export type VoiceOwnerOptions = { accountId: string; guard: VoiceOwnerGuard; snapshot: VoiceSnapshot; lifetime: { assertCurrent(): void }; transport: VoiceOwnerTransport; onFence(reason: string): void };
+export type VoiceOwnerOptions = { accountId: string; guard: VoiceOwnerGuard; snapshot: VoiceSnapshot; lifetime: { assertCurrent(): void; signal: AbortSignal }; transport: VoiceOwnerTransport; onFence(reason: string): void };
 const syncSchema = z.object({ cursor: z.string().regex(/^\d{1,15}$/), events: z.array(z.unknown()).max(VOICE_LIMITS.syncBatch), oneTimeKeys: z.record(z.string(), z.number().int().nonnegative()), unusedFallbackKeys: z.array(z.string()).max(1) }).strict();
 const envelopeSchema = z.object({ sender: z.string(), type: z.string(), content: z.record(z.string(), z.unknown()) }).passthrough();
 const decryptedSchema = envelopeSchema.extend({ recipient: z.string(), recipient_keys: z.object({ ed25519: z.string() }), sender_device_keys: z.object({ user_id: z.string(), device_id: z.string(), keys: z.record(z.string(), z.string()) }), keys: z.object({ ed25519: z.string() }) });
@@ -23,6 +23,7 @@ export class VoiceCryptoOwner {
   private readonly registry = new Map<string, Entry>();
   private readonly flows = new Map<string, Flow>();
   private readonly admitted = new Set<string>();
+  private readonly completedPeers = new Set<string>();
   private readonly abort = new AbortController();
   private stopped = false;
   private transitioning = false;
@@ -30,6 +31,7 @@ export class VoiceCryptoOwner {
   private epochId: string | undefined;
   private audience: VoiceControlParty[] = [];
   private cleanup?: Promise<void>;
+  private readonly lifetimeLost = () => { this.stop("lifetime-lost"); };
   private constructor(private readonly options: VoiceOwnerOptions, private snapshot: VoiceSnapshot, private readonly machine: C.OlmMachine, private readonly release: () => void) {}
 
   static async create(options: VoiceOwnerOptions): Promise<VoiceCryptoOwner> {
@@ -38,6 +40,7 @@ export class VoiceCryptoOwner {
     let owner: VoiceCryptoOwner | undefined;
     try {
       options.lifetime.assertCurrent();
+      if (options.lifetime.signal.aborted) throw new Error("Voice lifetime already ended.");
       const snapshot = structuredClone(options.snapshot);
       const self = snapshot.members.find(member => member.memberId === snapshot.memberId);
       if (!self || self.userId !== options.accountId || self.voiceUserId !== snapshot.voiceUserId || self.voiceDeviceId !== snapshot.voiceDeviceId || self.joinNonce !== snapshot.joinNonce) throw new Error("Invalid voice owner enrollment.");
@@ -48,6 +51,8 @@ export class VoiceCryptoOwner {
       machine.roomKeyRequestsEnabled = false;
       machine.roomKeyForwardingEnabled = false;
       owner = new VoiceCryptoOwner(options, snapshot, machine, release);
+      options.lifetime.signal.addEventListener("abort", owner.lifetimeLost, { once: true });
+      if (options.lifetime.signal.aborted) owner.lifetimeLost();
       await owner.flush();
       const bootstrap = await owner.serial(() => machine!.bootstrapCrossSigning(false));
       if (bootstrap.uploadKeysRequest) await owner.output(bootstrap.uploadKeysRequest);
@@ -69,7 +74,13 @@ export class VoiceCryptoOwner {
   private serial<T>(work: () => T | Promise<T>, allowTransition = false): Promise<T> {
     const job = this.tail.then(async () => {
       this.assertCurrent(allowTransition);
-      try { return await work(); }
+      const revision = this.revision;
+      try {
+        const result = await work();
+        this.assertCurrent(allowTransition);
+        if (!allowTransition && revision !== this.revision) { this.admitted.clear(); this.epochId = undefined; this.audience = []; throw new VoiceGenerationInterrupted(); }
+        return result;
+      }
       catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("native-or-schema-failure"); throw error; }
     });
     this.tail = job.catch(() => undefined);
@@ -81,7 +92,7 @@ export class VoiceCryptoOwner {
     try { this.options.onFence(reason); } finally { void this.cleanupNative(); }
   }
   private cleanupNative(): Promise<void> {
-    return this.cleanup ??= this.tail.catch(() => undefined).then(() => { try { this.flows.clear(); this.registry.clear(); this.machine.close(); } finally { this.release(); } });
+    return this.cleanup ??= this.tail.catch(() => undefined).then(() => { try { this.options.lifetime.signal.removeEventListener("abort", this.lifetimeLost); this.flows.clear(); this.registry.clear(); this.completedPeers.clear(); this.machine.close(); } finally { this.release(); } });
   }
   close(reason = "closed"): Promise<void> { this.stop(reason); return this.cleanupNative(); }
   private binding(): VoiceBinding { return { callId: this.snapshot.callId, memberId: this.snapshot.memberId, joinNonce: this.snapshot.joinNonce, expectedGeneration: this.snapshot.generation }; }
@@ -113,7 +124,7 @@ export class VoiceCryptoOwner {
     }
     const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.body))), byte => byte.toString(16).padStart(2, "0")).join("");
     const previous = this.registry.get(request.id);
-    if (previous) { if (previous.type !== request.type || previous.body !== request.body || previous.digest !== digest) throw new Error("Native request identity mutated."); return previous; }
+    if (previous) { if (previous.type !== request.type || previous.body !== request.body || previous.digest !== digest || (previous.request instanceof C.ToDeviceRequest && (!(request instanceof C.ToDeviceRequest) || previous.request.event_type !== request.event_type || previous.request.txn_id !== request.txn_id))) throw new Error("Native request identity mutated."); return previous; }
     if (this.registry.size >= VOICE_LIMITS.receipts) throw new Error("Voice native registry limit.");
     if (allowTransition && request instanceof C.ToDeviceRequest) {
       const parsed = z.object({ messages: z.record(z.string(), z.record(z.string(), z.record(z.string(), z.unknown()))) }).strict().parse(body);
@@ -174,7 +185,7 @@ export class VoiceCryptoOwner {
     };
     prepared.attempt.promise = run();
     try { await prepared.attempt.promise; }
-    catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("transport-or-completion-failure"); throw error; }
+    catch (error) { if (error instanceof VoiceGenerationInterrupted) prepared.attempt.promise = undefined; else this.stop("transport-or-completion-failure"); throw error; }
   }
   async flush(): Promise<void> {
     for (let round = 0; round < 4; round++) {
@@ -197,7 +208,9 @@ export class VoiceCryptoOwner {
     await this.output(output);
   }
   async requestVerification(memberId: string): Promise<string> {
+    const revision = this.revision;
     await this.query([this.snapshot.memberId, memberId]);
+    if (revision !== this.revision) throw new VoiceGenerationInterrupted();
     const result = await this.serial(async () => {
       const peer = voiceControlParty(this.peer(memberId));
       if (memberId === this.snapshot.memberId || this.flows.size >= VOICE_LIMITS.members) throw new Error("Voice verification bound.");
@@ -206,7 +219,9 @@ export class VoiceCryptoOwner {
       this.flows.set(handle, { handle, peer, generation: this.snapshot.generation, request, confirmed: false });
       await this.observe(output); return { handle, output };
     });
-    await this.output(result.output); return result.handle;
+    await this.output(result.output);
+    if (revision !== this.revision) throw new VoiceGenerationInterrupted();
+    return result.handle;
   }
   private flow(handle: string): Flow {
     const flow = this.flows.get(handle);
@@ -243,21 +258,24 @@ export class VoiceCryptoOwner {
   admit(memberId: string): Promise<void> {
     return this.serial(async () => {
       const peer = voiceControlParty(this.peer(memberId));
-      const flow = [...this.flows.values()].find(value => value.generation === this.snapshot.generation && sameVoiceParty(value.peer, peer) && value.confirmed && value.request.isDone() && value.sas?.isDone());
-      if (!flow || !(await this.device(peer)).isVerified()) throw new Error("Explicit completed voice SAS required.");
-      this.admitted.add(memberId);
+      const flow = [...this.flows.values()].find(value => sameVoiceParty(value.peer, peer) && value.confirmed && value.request.isDone() && value.sas?.isDone());
+      const identity = JSON.stringify(peer);
+      if ((!flow && !this.completedPeers.has(identity)) || !(await this.device(peer)).isVerified()) throw new Error("Explicit completed voice SAS required.");
+      this.completedPeers.add(identity); this.admitted.add(memberId);
     });
   }
   /** Caller supplies the explicitly chosen fresh media context; no key generation or media work. */
   setControlContext(epochId: string, memberIds: readonly string[]): Promise<void> {
-    // Stop publication immediately, before waiting behind native work.
+    this.assertCurrent();
+    this.transitioning = true; this.revision++; this.epochId = undefined; this.audience = [];
     this.options.onFence("audience-context-change");
-    return this.serial(() => {
+    const selected = [...memberIds];
+    return this.transitionDrain(structuredClone(this.snapshot), true, () => {
       z.uuid().parse(epochId);
-      if (!memberIds.includes(this.snapshot.memberId) || new Set(memberIds).size !== memberIds.length || memberIds.length > VOICE_LIMITS.members || memberIds.some(id => id !== this.snapshot.memberId && !this.admitted.has(id))) throw new Error("Explicit current audience admission required.");
+      if (!selected.includes(this.snapshot.memberId) || new Set(selected).size !== selected.length || selected.length > VOICE_LIMITS.members || selected.some(id => id !== this.snapshot.memberId && !this.admitted.has(id))) throw new Error("Explicit current audience admission required.");
       this.epochId = epochId;
-      this.audience = memberIds.map(id => voiceControlParty(this.peer(id))).sort((a, b) => a.memberId.localeCompare(b.memberId));
-    });
+      this.audience = selected.map(id => voiceControlParty(this.peer(id))).sort((a, b) => a.memberId.localeCompare(b.memberId));
+    }).catch(error => { this.stop("audience-transition-failed"); throw error; });
   }
   async sendControl(raw: VoiceOwnerControl): Promise<void> {
     const output = await this.serial(async () => {
@@ -320,18 +338,23 @@ export class VoiceCryptoOwner {
       return accepted;
     });
     await this.exchange({ kind: "ack", cursor: batch.cursor });
-    await this.flush(); return controls;
+    await this.flush();
+    if (revision !== this.revision) throw new VoiceGenerationInterrupted();
+    return controls;
   }
   transition(next: VoiceSnapshot): Promise<void> {
     this.assertCurrent();
+    const admissions = [...this.admitted].map(memberId => voiceControlParty(this.peer(memberId)));
     this.transitioning = true; this.revision++; this.admitted.clear(); this.epochId = undefined; this.audience = [];
     this.options.onFence("generation-transition");
     const snapshot = structuredClone(next);
-    return this.transitionDrain(snapshot).catch(error => { this.stop("transition-failed"); throw error; });
+    return this.transitionDrain(snapshot, false, () => {
+      for (const peer of admissions) if (snapshot.members.some(member => sameVoiceParty(peer, voiceControlParty(member)))) this.admitted.add(peer.memberId);
+    }).catch(error => { this.stop("transition-failed"); throw error; });
   }
-  private async transitionDrain(next: VoiceSnapshot): Promise<void> {
+  private async transitionDrain(next: VoiceSnapshot, sameGeneration = false, finalize?: () => void): Promise<void> {
     const outputs = await this.serial(async () => {
-      if (next.callId !== this.snapshot.callId || next.memberId !== this.snapshot.memberId || next.joinNonce !== this.snapshot.joinNonce || next.voiceUserId !== this.snapshot.voiceUserId || next.voiceDeviceId !== this.snapshot.voiceDeviceId || next.generation <= this.snapshot.generation) throw new Error("Invalid retained voice transition.");
+      if (next.callId !== this.snapshot.callId || next.memberId !== this.snapshot.memberId || next.joinNonce !== this.snapshot.joinNonce || next.voiceUserId !== this.snapshot.voiceUserId || next.voiceDeviceId !== this.snapshot.voiceDeviceId || (sameGeneration ? next.generation !== this.snapshot.generation : next.generation <= this.snapshot.generation)) throw new Error("Invalid retained voice transition.");
       const own = next.members.find(member => member.memberId === next.memberId);
       if (!own || own.userId !== this.options.accountId || own.joinNonce !== next.joinNonce || own.voiceUserId !== next.voiceUserId || own.voiceDeviceId !== next.voiceDeviceId) throw new Error("Lost voice enrollment.");
       const cancel: NativeRequest[] = [];
@@ -348,7 +371,9 @@ export class VoiceCryptoOwner {
       for (const output of pending) {
         if (!output.id || !this.registry.has(output.id) || this.registry.get(output.id)?.state !== "completed") throw new Error("Unsettled native transition output.");
       }
-      this.flows.clear(); this.transitioning = false;
+      this.flows.clear();
+      for (const identity of this.completedPeers) if (!next.members.some(member => JSON.stringify(voiceControlParty(member)) === identity)) this.completedPeers.delete(identity);
+      finalize?.(); this.transitioning = false;
     }, true);
   }
 }
