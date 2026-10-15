@@ -21,7 +21,7 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#39 in production
+`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#44 (excluding open proof PR #40) in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
@@ -44,12 +44,12 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | GDPR access/export | ✅ | `/api/me/export`, JSON, tested |
 | GDPR correction | ✅ | Display name editable; SMTP-gated email change confirms current address and verifies new address; recent-session guard. Real inbox acceptance remains separate |
 | GDPR deletion | ✅ | Deletes account, sessions, messages; blocked while owning a community |
-| Consent | ✅ n/a | No optional processing that requires consent; no cookies besides the session |
+| Explicit public posting acknowledgement | ✅ | Publication is opt-in per channel; each author or integration acknowledges the current publication generation. No birth dates or identity documents are collected |
 | Minimise IPs, logs, metadata | ✅ | IPs not stored with sessions; Caddy access logs off; app logs errors only |
 | Encryption in transit | ✅ | HTTPS + HSTS; official instance uses Cloudflare/Traefik, standalone deployment uses Caddy |
 | Encryption at rest | 🟡 | TOTP secrets and backup codes encrypted by Better Auth; database relies on disk encryption (documented). Column-level encryption is not planned for message content because the server must read it to serve it |
 | E2EE for private communication | 🟡 | Matrix crypto DMs merged in #30 with desktop/mobile runtime acceptance; no external integration audit. Community text and voice are not E2EE |
-| Private content out of search engines and public APIs | ✅ | `robots.txt`, `noindex` on `/app` and `/invite`; all APIs require membership |
+| Private content out of search engines and public APIs | ✅ | `robots.txt`, `noindex` on `/app` and `/invite`; private content APIs require membership; anonymous public HTML exposes only explicitly published text channels |
 
 ### 2. Data ownership and self-hosting
 
@@ -58,7 +58,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Independent instances | ✅ | Docker Compose stack verified end-to-end (TLS, auth, SSE through Caddy) |
 | No mandatory proprietary services | ✅ | SMTP optional; no external APIs |
 | Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh`, round trip tested |
-| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachment bytes. Complete gzip file archives shipped in PR #39 with private storage, checksummed streams, atomic import and desktop/mobile acceptance; library-complete archive v3 remains in draft PR #41 |
+| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachment bytes. Complete gzip file archives shipped in PR #39 with private storage, checksummed streams, atomic import and desktop/mobile acceptance; library-complete archive v3 shipped in PR #41 |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
 | Federation research | ✅ research only | [DECISIONS.md D13](DECISIONS.md#d13-federation-research-retain-instance-boundaries): retain instance boundaries; future opt-in Matrix bridge requires separate consent, permissions and acceptance. No federation implemented |
@@ -69,7 +69,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | --- | --- | --- |
 | Communities and channels | ✅ | |
 | Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
-| Direct messages | 🟡 | **P1**, implementation in draft #30; runtime/browser acceptance pending |
+| Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
@@ -81,7 +81,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Invites and onboarding | ✅ | Expiring/revocable invites, join requirements and versioned rules acknowledgement, enforced on joins and content mutations |
 | Presence and status | ✅ | Opt-in online status (off by default), heartbeat from open tabs, shown on avatars and member lists |
 | Edit, delete, moderate messages | ✅ | Pinning (max 50 per channel, audited); safe Markdown subset (code, quotes, bold/italic/strike, http(s) links) rendered without raw HTML |
-| Opt-in public, indexable channels | ❌ | P3 |
+| Opt-in public, indexable channels | ✅ | Explicit publication, separate public title, current-generation author acknowledgement, text-only anonymous pages, reporting, discovery and terminal unpublish shipped in #44; existing channels remain private |
 
 ### 4. Voice, video and screen sharing
 
@@ -184,6 +184,5 @@ Published operator rules and minimum-age attestation shipped in #34; legal revie
 
 ### P3 — later
 
-Private custom emoji/stickers are implemented in draft PR #41 with independent review and backend/browser evidence; final exact-head acceptance, merge and production rollout remain separate gates. Native app shells,
-opt-in public indexable channels and community discovery. Native auth multi-key rotation and automated
+Private custom emoji/stickers and library-complete archives shipped in #41. Explicit public channels and community discovery shipped in #44. Native desktop shells remain in draft #45: Windows/macOS unsigned bundles build successfully; Linux runtime acceptance is still failing. Signing, notarization and platform/device acceptance remain open. Mobile native clients are not implemented. Native auth multi-key rotation and automated
 license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.
