@@ -7,6 +7,7 @@ import { RolesEditor } from "@/components/app/settings/roles-editor";
 import { getCommunitySafety, listInvites } from "@/server/communities";
 import { SafetySettings } from "@/components/app/settings/safety-settings";
 import { AutomodSettings } from "@/components/app/settings/automod-settings";
+import { NotificationLevel } from "@/components/app/settings/notification-level";
 import { getAutomod } from "@/server/automod";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
@@ -152,6 +153,9 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           )}
         </Section>
       )}
+      <Section id="notifications" title="Notifications" description="Applies to you only.">
+        <NotificationLevel communityId={view.id} level={view.notifications} />
+      </Section>
       <Section id="danger" title={view.isOwner ? "Delete community" : "Leave community"}>
         <DangerZone communityId={view.id} name={view.name} isOwner={view.isOwner} />
       </Section>

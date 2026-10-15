@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { ChannelSidebar } from "@/components/app/channel-sidebar";
 import { MobilePanel } from "@/components/app/mobile-nav";
+import { PresenceProvider } from "@/components/app/presence-provider";
 import { RealtimeProvider } from "@/components/app/realtime-provider";
 import { UnreadProvider } from "@/components/app/unread-provider";
 import { blockedIds } from "@/server/blocks";
@@ -21,6 +22,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
   const [view, blocked] = await Promise.all([loadCommunityView(user.id, communityId), blockedIds(user.id)]);
   return (
     <RealtimeProvider communityId={view.id}>
+      <PresenceProvider communityId={view.id}>
       <UnreadProvider
         communityId={view.id}
         currentUserId={user.id}
@@ -32,6 +34,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
       </MobilePanel>
       <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </UnreadProvider>
+      </PresenceProvider>
     </RealtimeProvider>
   );
 }

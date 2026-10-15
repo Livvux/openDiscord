@@ -3,6 +3,7 @@ import { isInstanceAdmin } from "@/server/instance-policy";
 import Link from "next/link";
 import { listCommunities } from "@/server/communities";
 import { requirePageUser } from "@/server/session";
+import { mutedCommunities } from "@/server/presence";
 import { communityUnread } from "@/server/unread";
 
 const NOTHING_UNREAD_SUMMARY = { unread: false, mentions: 0 };
@@ -13,13 +14,13 @@ import { RailLink } from "./rail-link";
 export async function CommunityRail() {
   const user = await requirePageUser();
   const [communities, admin] = await Promise.all([listCommunities(user.id), isInstanceAdmin(user.id)]);
-  const unread = await communityUnread(user.id, communities);
+  const [unread, muted] = await Promise.all([communityUnread(user.id, communities), mutedCommunities(user.id, communities.map((c) => c.id))]);
   return (
     <>
       <ul className="flex flex-1 flex-col items-center gap-3 overflow-y-auto py-4">
         {communities.map((c) => (
           <li key={c.id}>
-            <RailLink communityId={c.id} name={c.name} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} />
+            <RailLink communityId={c.id} name={c.name} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} muted={muted.has(c.id)} />
           </li>
         ))}
         <li>

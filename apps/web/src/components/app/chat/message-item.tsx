@@ -10,7 +10,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { decodeMentions, encodeMentions, type Mention } from "@/lib/mentions";
 import type { MessageView } from "@/server/messages";
 import { ReportDialog } from "../report-dialog";
-import { Avatar, nameColor } from "../avatar";
+import { nameColor } from "../avatar";
+import { PresenceAvatar } from "../presence-avatar";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -156,7 +157,7 @@ export function MessageItem(props: MessageItemProps) {
       aria-busy={pending || undefined}
     >
       <div className="w-8 shrink-0">
-        {!grouped && <Avatar name={message.authorName} />}
+        {!grouped && <PresenceAvatar userId={message.authorId} name={message.authorName} />}
       </div>
       <div className="min-w-0 flex-1">
         {message.replyTo && (

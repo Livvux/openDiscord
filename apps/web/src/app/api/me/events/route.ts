@@ -9,6 +9,7 @@ import { errorResponse } from "@/server/http";
 import { getMessageForBroadcast, type MessageView } from "@/server/messages";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
+import { mutedCommunities, touchPresence } from "@/server/presence";
 import { excerptOf } from "@/lib/mentions";
 
 const HEARTBEAT_MS = 25_000;
@@ -26,6 +27,8 @@ export interface MentionNotice {
   messageId: string;
   authorName: string;
   excerpt: string;
+  /** The person muted this community: badge only, no desktop notification. */
+  muted: boolean;
 }
 
 const excerpt = (message: MessageView) => excerptOf(message.content, message.mentions, EXCERPT_LENGTH);
@@ -37,6 +40,7 @@ async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "m
   const loaded = await getMessageForBroadcast(event.messageId);
   if (!loaded || loaded.message.channelId !== event.channelId) return null;
   const [c] = await db.select({ name: community.name }).from(community).where(eq(community.id, access.channel.communityId));
+  const muted = await mutedCommunities(userId, [access.channel.communityId]);
   return {
     communityId: access.channel.communityId,
     communityName: c?.name ?? "",
@@ -45,6 +49,7 @@ async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "m
     messageId: loaded.message.id,
     authorName: loaded.message.authorName,
     excerpt: excerpt(loaded.message),
+    muted: muted.has(access.channel.communityId),
   };
 }
 
@@ -94,7 +99,14 @@ export async function GET(request: Request) {
           close();
         }),
       );
-      const heartbeat = setInterval(() => void sessionValid().then((ok) => ok && send("ping", {})), HEARTBEAT_MS);
+      // The heartbeat doubles as presence: an open tab means "online" (shown only if the person opted in).
+      const beat = () => void sessionValid().then(async (ok) => {
+        if (!ok) return;
+        send("ping", {});
+        await touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
+      });
+      void touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
+      const heartbeat = setInterval(beat, HEARTBEAT_MS);
       const lifetime = setTimeout(close, MAX_LIFETIME_MS);
       let released = false;
       cleanup = () => {

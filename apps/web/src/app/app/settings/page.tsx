@@ -11,6 +11,8 @@ import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings
 import { SignOutButton } from "@/app/app/sign-out-button";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
 import { listBlocked } from "@/server/blocks";
+import { presenceVisible } from "@/server/presence";
+import { PresenceSettings } from "@/components/app/settings/presence-settings";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Account settings" };
@@ -43,7 +45,12 @@ function Section({ title, description, children }: { title: string; description?
 
 async function Settings() {
   const user = await requirePageUser();
-  const [owned, has2fa, blocked] = await Promise.all([ownedCommunityNames(user.id), twoFactorEnabled(user.id), listBlocked(user.id)]);
+  const [owned, has2fa, blocked, showPresence] = await Promise.all([
+    ownedCommunityNames(user.id),
+    twoFactorEnabled(user.id),
+    listBlocked(user.id),
+    presenceVisible(user.id),
+  ]);
   return (
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
@@ -51,6 +58,9 @@ async function Settings() {
       </Section>
       <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
         <NotificationSettings />
+      </Section>
+      <Section title="Online status" description="Off by default. When on, members of your communities see a dot while you have openDiscord open.">
+        <PresenceSettings visible={showPresence} />
       </Section>
       <Section title="Blocked people" description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
         <BlockedList blocked={blocked} />

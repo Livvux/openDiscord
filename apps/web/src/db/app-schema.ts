@@ -77,6 +77,8 @@ export const member = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+    /** "muted": no desktop notifications or unread dot for this community; mention badges stay. */
+    notifications: text("notifications", { enum: ["mentions", "muted"] }).notNull().default("mentions"),
   },
   (t) => [
     primaryKey({ columns: [t.communityId, t.userId] }),
@@ -308,3 +310,12 @@ export const userBlock = pgTable(
   },
   (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] }), index("user_block_blocked_idx").on(t.blockedId)],
 );
+
+/** Opt-in online status: shown only when `visible`, "online" means seen in the last 90 seconds. */
+export const userPresence = pgTable("user_presence", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  visible: boolean("visible").notNull().default(false),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+});
