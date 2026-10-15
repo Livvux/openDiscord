@@ -119,10 +119,12 @@ export class VoiceCryptoOwner {
   private async exchange(request: VoiceCryptoRequest, allowTransition = false): Promise<unknown> {
     this.assertCurrent(allowTransition);
     const revision = this.revision;
-    const result = await this.options.transport({ binding: this.binding(), request: voiceCryptoSchema.parse(request), signal: this.abort.signal });
-    this.assertCurrent(allowTransition);
-    if (revision !== this.revision) throw new VoiceGenerationInterrupted();
-    return result;
+    try {
+      const result = await this.options.transport({ binding: this.binding(), request: voiceCryptoSchema.parse(request), signal: this.abort.signal });
+      this.assertCurrent(allowTransition);
+      if (revision !== this.revision) throw new VoiceGenerationInterrupted();
+      return result;
+    } catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("transport-or-schema-failure"); throw error; }
   }
   private async observe(request: NativeRequest, allowTransition = false): Promise<Entry | undefined> {
     if (!(request instanceof C.KeysUploadRequest || request instanceof C.KeysQueryRequest || request instanceof C.KeysClaimRequest || request instanceof C.SignatureUploadRequest || request instanceof C.ToDeviceRequest)) throw new Error("Unsupported native voice output.");
@@ -326,7 +328,8 @@ export class VoiceCryptoOwner {
   /** Returns authenticated typed data only. No prepared/key-ready/admission side effects. */
   async receive(): Promise<VoiceOwnerControl[]> {
     const revision = this.revision;
-    const batch = syncSchema.parse(await this.exchange({ kind: "sync" }));
+    const rawBatch = await this.exchange({ kind: "sync" });
+    const batch = await this.serial(() => syncSchema.parse(rawBatch));
     const controls = await this.serial(async () => {
       if (revision !== this.revision) throw new VoiceGenerationInterrupted();
       const processed = await this.machine.receiveSyncChanges(JSON.stringify(batch.events), new C.DeviceLists([], []), new Map(Object.entries(batch.oneTimeKeys)), new Set(batch.unusedFallbackKeys), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
