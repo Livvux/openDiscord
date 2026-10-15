@@ -68,6 +68,53 @@ relayed by your server (an SFU) and not recorded; it is encrypted in transit (DT
 end-to-end. Without the LiveKit settings, voice channels can't be created and the UI hides the option.
 Networks that block UDP fall back to TCP 7881; a TURN server is not bundled.
 
+### Optional TURN over TLS on a shared Traefik listener
+
+For restrictive networks, LiveKit's embedded TURN service can share Traefik's existing 443/TCP
+listener through a dedicated hostname. Create a DNS-only A record for that hostname; ordinary
+Cloudflare HTTP proxying does not carry TURN. Add the following to the actual LiveKit configuration:
+
+```yaml
+turn:
+  enabled: true
+  domain: turn.example.com
+  tls_port: 5349
+  external_tls: true
+```
+
+Add a separate Traefik dynamic file, substituting the hostname, internal service name, existing
+entry point and certificate resolver:
+
+```yaml
+tcp:
+  routers:
+    community-turn:
+      rule: HostSNI(`turn.example.com`)
+      entryPoints: [websecure]
+      service: community-turn
+      tls:
+        certResolver: letsencrypt
+        domains: [{main: turn.example.com}]
+  services:
+    community-turn:
+      loadBalancer:
+        servers: [{address: livekit:5349}]
+```
+
+Traefik terminates TLS and forwards plaintext TURN across the private service network. Keep 5349
+private; do not enable TLS passthrough with this configuration. LiveKit 1.13 advertises public 443
+when `external_tls` is enabled. Its signaled credentials authenticate participants; never ship the
+LiveKit API secret or a static TURN password to browsers. Preserve existing relay peer restrictions.
+
+On Dokploy, change the persisted service source as well as its generated runtime file so a later
+deployment retains TURN. Save a private backup first, preserve unrelated SNI routes, and restart
+only the voice service when no participants are present. Verify certificate trust, app readiness,
+other shared hostnames and actual audio/video with `iceTransportPolicy: "relay"`; a TLS handshake
+alone does not establish media connectivity. TURN provides transport and does not add E2EE.
+
+The official instance uses `turn.opendiscord.app` and media ports 7891/TCP and 7892/UDP because
+another service owns the default 7881/7882. These are instance-specific overrides, not new defaults.
+
 ## Push notifications
 
 Optional. Generate VAPID keys once (`npx web-push generate-vapid-keys`) and set `VAPID_PUBLIC_KEY`,
