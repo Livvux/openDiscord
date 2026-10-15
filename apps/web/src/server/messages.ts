@@ -262,6 +262,8 @@ export async function toggleReaction(userId: string, rawMessageId: unknown, rawE
   const row = await loadOwnedMessage(rawMessageId);
   await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    await requireChannel(tx, row.message.channelId, userId, Permission.SendMessages);
     // Serialise per message so the distinct-emoji cap can't be raced.
     await tx.execute(sql`select 1 from ${message} where ${message.id} = ${row.message.id} for update`);
     const removed = await tx.delete(reaction)

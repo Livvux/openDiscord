@@ -1,10 +1,11 @@
-import { and, eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq, sql } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
-import { banAppeal, member } from "@/db/schema";
+import { banAppeal, community, member } from "@/db/schema";
+import { lockCommunity } from "@/server/access";
 import { acceptInvite, createCommunity, createInvite, getCommunityView, getInvitePreview, revokeInvite } from "@/server/communities";
 import { acknowledgeCommunityRules, getCommunityRules, listBanAppeals, listOwnAppealHistory, listOwnRestrictions, resolveBanAppeal, submitBanAppeal, updateCommunityRules } from "@/server/community-trust";
-import { sendMessage } from "@/server/messages";
+import { sendMessage, toggleReaction } from "@/server/messages";
 import { banMember, createRole, listAuditLog, setMemberRole, unbanMember } from "@/server/moderation";
 import { testUsers } from "./helpers";
 
@@ -21,6 +22,23 @@ beforeAll(async () => {
 afterAll(() => users.cleanup());
 
 describe("community rules", () => {
+  it("rechecks acknowledgement when a reaction waits behind a rules change", async () => {
+    const group = await createCommunity(owner, "Reaction rules");
+    const posted = await sendMessage(owner, group.channelId, "React to this");
+    let attempt: Promise<unknown> | undefined;
+    await db.transaction(async (tx) => {
+      await lockCommunity(tx, group.communityId);
+      await tx.update(community).set({ rules: "New required rules", rulesRequired: true, rulesVersion: 1 }).where(eq(community.id, group.communityId));
+      attempt = toggleReaction(owner, posted.id, "👍").catch((error: unknown) => error);
+      await vi.waitFor(async () => {
+        const blocked = await db.execute<{ count: number }>(sql`select count(*)::int as count from pg_stat_activity
+          where wait_event_type = 'Lock' and query like '%community%' and query like '%for update%'`);
+        expect(blocked.rows[0].count).toBeGreaterThan(0);
+      }, { timeout: 3000, interval: 20 });
+    });
+    expect(await attempt).toMatchObject({ message: expect.stringContaining("acknowledge") });
+  });
+
   it("requires membership to read/acknowledge, management to edit, and bounds plain text", async () => {
     await expect(getCommunityRules(stranger, communityId)).rejects.toThrow("not found");
     await expect(acknowledgeCommunityRules(stranger, communityId, 0)).rejects.toThrow("not found");
