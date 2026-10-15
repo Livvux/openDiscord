@@ -1,0 +1,13 @@
+# Unreachable serial Voice Olm owner preparation
+
+This additive draft starts S3 against strict service parent 48dce82. Nothing imports or activates the owner. It uses the public pinned 18.9 SDK, independent unnamed memory storage and a runtime one-consumption capability backed by the held `opendiscord.voice:<accountId>` Web Lock. Native cleanup retains that lock until the serialized queue actually stops; there is deliberately no timeout release that could allow two native owners.
+
+Native operations, request observation and completion run in one executor; transport waits outside it. A bounded registry preserves original IDs/type/body digest and local first observation generation, with generation-scoped transport transaction IDs kept separate. Completion reserves before awaiting native completion. Transition fences publication synchronously, publicly cancels known SAS, and retires only known old single-target ToDevice work or narrowly attributable cancellation output. Unknown first-observed transition ToDevice work fails closed. Upload/bootstrap never retires. Native exceptions and schema failures end the owner.
+
+The typed control port validates exact call/generation/epoch/audience/member/device/nonce/publisher binding and native verified sender/envelope. It generates no media key, changes no media worker, and performs no prepared/key-ready/admission side effect on receive. Explicit SAS confirmation and explicit admission are separate APIs.
+
+## Required before acceptance
+
+This is an unverified development snapshot. No heavy commands were run locally; dependency installation used `pnpm install --frozen-lockfile`. Remote lint/type/unit/full CI and independent security/TypeScript review remain required. The small test transport is only an owner-unit aid and is not service acceptance.
+
+Still required: actual SDK decrypted generation-only, epoch-only and audience-only negatives; concurrent and late completion races; unknown-commit transition; first-observed classification and fresh-work preservation; full separate DM baseline; owner-to-actual-service S4 adapter. Context changes while control requests are in flight need an explicit drain proof and further review. No production caller, route, UI, HTTP transport, heartbeat, media integration, merge or deployment is authorized by this snapshot. Browser Web Lock/teardown acceptance remains a later integration gate.
