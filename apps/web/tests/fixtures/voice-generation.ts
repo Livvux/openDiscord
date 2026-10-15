@@ -4,8 +4,8 @@ import { EphemeralVoice, VoiceTransport } from "./ephemeral-voice";
 
 export type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
 type Operation = "send" | "retire";
-type Receipt = { generation: number; disposition: "processed-current" | "processed-retired"; enqueued: number; nativeResponse: Record<string, unknown>; digest: string };
-type Pending = { request: C.ToDeviceRequest; reject: (error: Error) => void };
+export type Receipt = { generation: number; disposition: "processed-current" | "processed-retired" | "processed-absent" | "processed-refused"; enqueued: number; nativeResponse: Record<string, unknown>; digest: string };
+type Pending = { request: NativeRequest; reject: (error: Error) => void };
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 export function identity(owner: EphemeralVoice) {
@@ -15,9 +15,17 @@ export function identity(owner: EphemeralVoice) {
 /** An isolated in-memory test server; no application transport is imported. */
 export class GenerationServer extends VoiceTransport {
   generation = 1;
+  readonly enrolledUsers = new Set<string>();
+  private readonly activeUsers = new Set<string>();
+  private readonly owners = new Set<EphemeralVoice>();
   readonly retired: Receipt[] = [];
   private readonly generationReceipts = new Map<string, Receipt>();
-  advance(): void { this.generation++; }
+  override enroll(owner: EphemeralVoice): void { super.enroll(owner); this.enrolledUsers.add(owner.binding.user); this.activeUsers.add(owner.binding.user); this.owners.add(owner); }
+  override remove(owner: EphemeralVoice): void { super.remove(owner); this.activeUsers.delete(owner.binding.user); }
+  advance(): void {
+    this.generation++;
+    for (const owner of this.owners) if (this.owns(owner.binding)) super.take(owner);
+  }
 
   async process(owner: EphemeralVoice, request: NativeRequest, generation: number, operation: Operation, transportId: string): Promise<Receipt> {
     // Authorization and current generation precede receipt replay, including for retirement.
@@ -31,6 +39,7 @@ export class GenerationServer extends VoiceTransport {
       return previous;
     }
     let nativeResponse: Record<string, unknown>, enqueued = 0;
+    let disposition: Receipt["disposition"] = operation === "retire" ? "processed-retired" : "processed-current";
     if (operation === "retire") {
       if (!(request instanceof C.ToDeviceRequest)) throw new Error("Only ToDevice supports explicit retirement.");
       if (!/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(request.event_type) && request.event_type !== "m.room.encrypted") throw new Error("Unsupported retirement event.");
@@ -46,12 +55,31 @@ export class GenerationServer extends VoiceTransport {
       }
       // This branch cannot call submit/take or inspect any recipient's key record.
       nativeResponse = {};
+    } else if (request instanceof C.KeysQueryRequest || request instanceof C.KeysClaimRequest || request instanceof C.SignatureUploadRequest) {
+      const body = JSON.parse(request.body) as Record<string, unknown>;
+      const users = Object.keys(request instanceof C.KeysQueryRequest ? body.device_keys as object : request instanceof C.KeysClaimRequest ? body.one_time_keys as object : body);
+      const scoped = new RegExp(`^@voice_${this.call}_${uuid}:opendiscord\\.invalid$`);
+      if (!users.length || users.length > 8 || users.some((user) => !scoped.test(user))) throw new Error("Bounded same-call users required.");
+      const absent = users.filter((user) => !this.activeUsers.has(user));
+      if (absent.length && absent.length !== users.length) throw new Error("Mixed normal processing requires separate review.");
+      if (!absent.length) nativeResponse = await super.submit(owner, request);
+      else if (request instanceof C.KeysQueryRequest) {
+        nativeResponse = { device_keys: Object.fromEntries(users.map((user) => [user, {}])), master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} };
+        disposition = "processed-absent";
+      } else if (request instanceof C.KeysClaimRequest) {
+        nativeResponse = { one_time_keys: {}, failures: {} }; disposition = "processed-absent";
+      } else {
+        // Official /keys/signatures/upload: failures[user][key] is a standard Error.
+        // Refused storage is M_FORBIDDEN, never the cryptographic M_INVALID_SIGNATURE.
+        nativeResponse = { failures: Object.fromEntries(users.map((user) => [user, Object.fromEntries(Object.keys(body[user] as object).map((id) => [id, { errcode: "M_FORBIDDEN", error: "Target is outside current call scope." }]))])) };
+        disposition = "processed-refused";
+      }
     } else {
       const before = this.submitted.length;
       nativeResponse = await super.submit(owner, request);
       enqueued = this.submitted.slice(before).filter((entry) => entry.kind === "ToDevice").reduce((sum, entry) => sum + entry.recipients, 0);
     }
-    const receipt: Receipt = { generation, digest, nativeResponse, enqueued, disposition: operation === "retire" ? "processed-retired" : "processed-current" };
+    const receipt: Receipt = { generation, digest, nativeResponse, enqueued, disposition };
     this.generationReceipts.set(key, receipt);
     if (operation === "retire") this.retired.push(receipt);
     if (this.generationReceipts.size > 512) throw new Error("Bounded server work exceeded.");
@@ -64,7 +92,7 @@ export class GenerationDispatcher {
   readonly completions = new Map<string, number>();
   private readonly ids = new Map<string, string>();
   private readonly original: EphemeralVoice["out"];
-  private pause?: { event: string; resolve: (pending: Pending) => void };
+  private pause?: { matches: (request: NativeRequest) => boolean; resolve: (pending: Pending) => void };
   private pending?: Pending;
 
   constructor(readonly owner: EphemeralVoice, readonly server: GenerationServer) {
@@ -77,7 +105,7 @@ export class GenerationDispatcher {
     if (!id) { id = randomUUID(); this.ids.set(key, id); }
     return id;
   }
-  private async complete(request: NativeRequest, receipt: Receipt): Promise<void> {
+  async acceptResponse(request: NativeRequest, receipt: Receipt): Promise<void> {
     if (receipt.generation !== this.server.generation) throw new Error("Stale response fenced.");
     if (!request.id) return;
     if (this.completions.has(request.id)) return;
@@ -85,27 +113,38 @@ export class GenerationDispatcher {
     this.completions.set(request.id, 1);
   }
   pauseAt(phase: string): Promise<Pending> {
-    return new Promise((resolve) => { this.pause = { event: `m.key.verification.${phase}`, resolve }; });
+    return new Promise((resolve) => { this.pause = { matches: (request) => request instanceof C.ToDeviceRequest && request.event_type === `m.key.verification.${phase}`, resolve }; });
+  }
+  pauseAtType(type: C.RequestType): Promise<Pending> {
+    return new Promise((resolve) => { this.pause = { matches: (request) => request.type === type, resolve }; });
   }
   async send(request: NativeRequest): Promise<void> {
-    if (request instanceof C.ToDeviceRequest && this.pause?.event === request.event_type) {
+    if (this.pause?.matches(request)) {
       const pause = this.pause; this.pause = undefined;
       await new Promise<void>((_resolve, reject) => { this.pending = { request, reject }; pause.resolve(this.pending); });
       return;
     }
     const generation = this.server.generation;
     const response = await this.server.process(this.owner, request, generation, "send", this.transportId(request, "send"));
-    await this.complete(request, response);
+    await this.acceptResponse(request, response);
   }
   async retire(request: NativeRequest): Promise<void> {
     const receipt = await this.server.process(this.owner, request, this.server.generation, "retire", this.transportId(request, "retire"));
-    await this.complete(request, receipt);
+    await this.acceptResponse(request, receipt);
+  }
+  async respondPending(): Promise<Receipt> {
+    if (!this.pending) throw new Error("No pending native request.");
+    const pending = this.pending;
+    const receipt = await this.server.process(this.owner, pending.request, this.server.generation, "send", this.transportId(pending.request, "send"));
+    await this.acceptResponse(pending.request, receipt);
+    pending.reject(new Error("Proof paused after actual response processing.")); this.pending = undefined;
+    return receipt;
   }
   async cancelAndRetire(): Promise<void> {
     const cancel: C.ToDeviceRequest[] = [];
     // Public native handles only. Cancel unfinished flows even when the peer left.
-    for (const user of await this.owner.machine.trackedUsers()) {
-      for (const flow of this.owner.machine.getVerificationRequests(user)) {
+    for (const user of this.server.enrolledUsers) {
+      for (const flow of this.owner.machine.getVerificationRequests(new C.UserId(user))) {
         if (flow.isDone() || flow.isCancelled()) continue;
         const outgoing = flow.cancel();
         if (outgoing instanceof C.ToDeviceRequest) cancel.push(outgoing);

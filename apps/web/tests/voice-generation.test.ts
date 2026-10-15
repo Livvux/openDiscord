@@ -1,9 +1,146 @@
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { EphemeralVoice, verifyPair } from "./fixtures/ephemeral-voice";
 import { GenerationServer, GenerationDispatcher, identity } from "./fixtures/voice-generation";
 
 describe("isolated native generation retirement candidate", () => {
+  it("fences late committed HTTP responses and completes original native work exactly once", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await a.query([a, b]); await b.query([a, b]);
+      const [flow, request] = (await a.device(b)).requestVerification([C.VerificationMethod.SasV1]);
+      a.registerFlow(b.binding.user, flow.flowId);
+      const sentId = randomUUID(), originalGeneration = server.generation;
+      const committed = await server.process(a, request, originalGeneration, "send", sentId);
+      expect(committed.enqueued).toBe(1);
+      expect(await server.process(a, request, originalGeneration, "send", sentId)).toBe(committed);
+      expect(server.queued(b)).toBe(1);
+      // Recipient actually saw the old request before transition. Retirement cannot retract it.
+      await b.sync();
+      expect(b.machine.getVerificationRequest(new C.UserId(a.binding.user), flow.flowId)).toBeDefined();
+      server.advance(); flow.cancel();
+      const retirementId = randomUUID();
+      const retired = await server.process(a, request, server.generation, "retire", retirementId);
+      expect(retired.enqueued).toBe(0);
+      expect(await server.process(a, request, server.generation, "retire", retirementId)).toBe(retired);
+      await dispatcher.acceptResponse(request, retired);
+      await dispatcher.acceptResponse(request, retired);
+      expect(dispatcher.completions.get(request.id)).toBe(1);
+      await expect(dispatcher.acceptResponse(request, committed)).rejects.toThrow("Stale response fenced");
+      await expect(server.process(a, request, originalGeneration, "send", sentId)).rejects.toThrow("Current sender/generation");
+      expect(server.queued(b)).toBe(0);
+      server.remove(a);
+      await expect(server.process(a, request, server.generation, "retire", retirementId)).rejects.toThrow("Current sender/generation");
+      expect(dispatcher.completions.get(request.id)).toBe(1);
+    } finally { dispatcher.release(); a.close(); b.close(); }
+  }, 30_000);
+
+  it("recovers after retiring the original Olm prekey message without changing owner keys", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await verifyPair(a, b); await a.admit(b); await b.admit(a);
+      const before = identity(a);
+      const claim = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
+      if (!claim) throw new Error("Expected genuine initial Olm claim.");
+      await a.out(claim);
+      const payload = { version: 1, purpose: "ephemeral-voice-proof", sender: a.binding, recipient: b.binding, transaction: randomUUID(), message: "Retired initial message" };
+      const encrypted = await (await a.device(b)).encryptToDeviceEvent("app.opendiscord.voice.proof", payload, C.CollectStrategy.onlyTrustedDevices());
+      const ciphertext = JSON.parse(encrypted) as { ciphertext: Record<string, { type: number }> };
+      expect(Object.values(ciphertext.ciphertext).every((item) => item.type === 0)).toBe(true);
+      const id = randomUUID();
+      const request = new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [b.binding.user]: { [b.binding.device]: JSON.parse(encrypted) } } }));
+      const originalBody = request.body;
+      server.advance(); await dispatcher.retire(request);
+      expect(request.body).toBe(originalBody);
+      expect(server.queued(b)).toBe(0); expect(b.received).toHaveLength(0);
+      await a.send(b, "Legitimate recovery"); await b.sync();
+      expect(b.received.at(-1)?.message).toBe("Legitimate recovery");
+      await b.send(a, "Real Olm acknowledgement"); await a.sync();
+      await a.send(b, "Subsequent legitimate control"); await b.sync();
+      expect(b.received).toHaveLength(2);
+      expect(identity(a)).toEqual(before);
+      expect((await a.device(b)).isVerified()).toBe(true);
+    } finally { dispatcher.release(); a.close(); b.close(); }
+  }, 30_000);
+
+  it("processes actual empty query/claim responses without acquiring a departed peer session", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await verifyPair(a, c); await a.query([b]);
+      server.remove(b); server.advance();
+      const claim = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
+      if (!claim) throw new Error("Expected native missing session request.");
+      const receiptId = randomUUID();
+      const response = await server.process(a, claim, server.generation, "send", receiptId);
+      expect(response.disposition).toBe("processed-absent");
+      expect(response.nativeResponse).toEqual({ one_time_keys: {}, failures: {} });
+      expect(await server.process(a, claim, server.generation, "send", receiptId)).toBe(response);
+      await a.machine.markRequestAsSent(claim.id, claim.type, JSON.stringify(response.nativeResponse));
+      // Genuine absence is not a session. It may request work again: bound retries rather than spin.
+      const second = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
+      expect(second).toBeDefined();
+      const query = a.machine.queryKeysForUsers([new C.UserId(b.binding.user)]);
+      const queryResponse = await server.process(a, query, server.generation, "send", randomUUID());
+      expect(queryResponse.nativeResponse).toEqual({ device_keys: { [b.binding.user]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
+      await a.machine.markRequestAsSent(query.id, query.type, JSON.stringify(queryResponse.nativeResponse));
+      expect(await a.machine.getDevice(new C.UserId(b.binding.user), new C.DeviceId(b.binding.device))).toBeUndefined();
+      expect((await a.device(c)).isVerified()).toBe(true);
+      await a.admit(c); await c.admit(a); await a.send(c, "Surviving current peer"); await c.sync();
+      expect(c.received).toHaveLength(1);
+      expect(server.queued(c)).toBe(0);
+    } finally { dispatcher.release(); a.close(); b.close(); c.close(); }
+  }, 30_000);
+
+  it("feeds genuine per-target signature refusal to native without storing signatures or inventing invalid-signature errors", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await verifyPair(a, c);
+      const paused = dispatcher.pauseAtType(C.RequestType.SignatureUpload);
+      const flow = verifyPair(a, b).then(() => "completed", () => "interrupted");
+      const pending = await paused;
+      expect(pending.request).toBeInstanceOf(C.SignatureUploadRequest);
+      const trustBeforeResponse = (await a.device(b)).isVerified();
+      server.remove(b); server.advance();
+      const writesBefore = server.submitted.filter((entry) => entry.kind === "SignatureUpload").length;
+      const receipt = await dispatcher.respondPending();
+      expect(receipt.disposition).toBe("processed-refused");
+      const failures = receipt.nativeResponse.failures as Record<string, Record<string, { errcode: string }>>;
+      expect(Object.keys(failures)).toEqual([b.binding.user]);
+      expect(Object.values(failures[b.binding.user]).every((failure) => failure.errcode === "M_FORBIDDEN")).toBe(true);
+      expect(server.submitted.filter((entry) => entry.kind === "SignatureUpload")).toHaveLength(writesBefore);
+      expect(await flow).toBe("interrupted");
+      const stored = await a.machine.getDevice(new C.UserId(b.binding.user), new C.DeviceId(b.binding.device));
+      expect(stored?.isVerified()).toBe(trustBeforeResponse);
+      const repeated = (await a.machine.outgoingRequests()).filter((request) => request.type === C.RequestType.SignatureUpload && request.id === pending.request.id);
+      expect(repeated).toHaveLength(0);
+      expect((await a.device(c)).isVerified()).toBe(true);
+    } finally { dispatcher.release(); a.close(); b.close(); c.close(); }
+  }, 30_000);
+
+  it("keeps the independent native DM baseline invariant", async () => {
+    await C.initAsync();
+    const dm = await C.OlmMachine.initialize(new C.UserId(`@dm_${randomUUID()}:opendiscord.invalid`), new C.DeviceId(randomUUID()));
+    const digest = async () => createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), counts: await dm.roomKeyCounts(), requests: (await dm.outgoingRequests()).map((r) => [r.type, r.body]) })).digest("hex");
+    const before = await digest();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
+    try { await verifyPair(a, b); expect(await digest()).toBe(before); }
+    finally { a.close(); b.close(); expect(await digest()).toBe(before); dm.close(); }
+  }, 30_000);
+
   for (const phase of ["request", "ready", "start", "key", "mac", "done"]) {
     for (const removed of [false, true]) {
       it(`retires pending ${phase} to a ${removed ? "departed" : "current"} peer and verifies a fresh surviving peer`, async () => {
@@ -14,15 +151,16 @@ describe("isolated native generation retirement candidate", () => {
         const before = identity(a);
         try {
           await verifyPair(a, c);
-          const [left, right] = dispatchers;
-          const paused = Promise.race([left.pauseAt(phase), right.pauseAt(phase)]);
-          const oldFlow = verifyPair(a, b).then(() => "completed", () => "interrupted");
+          const [left] = dispatchers;
+          const paused = left.pauseAt(phase);
+          const oldFlow = (phase === "ready" ? verifyPair(b, a) : verifyPair(a, b)).then(() => "completed", () => "interrupted");
           const pending = await paused;
+          if (!(pending.request instanceof C.ToDeviceRequest)) throw new Error("Expected native ToDevice.");
           expect(pending.request.event_type).toBe(`m.key.verification.${phase}`);
           const immutable = { id: pending.request.id, type: pending.request.type, body: pending.request.body };
           if (removed) server.remove(b);
           server.advance();
-          for (const dispatcher of dispatchers) await dispatcher.cancelAndRetire();
+          for (const dispatcher of dispatchers) if (server.owns(dispatcher.owner.binding)) await dispatcher.cancelAndRetire();
           expect(await oldFlow).toBe("interrupted");
           expect({ id: pending.request.id, type: pending.request.type, body: pending.request.body }).toEqual(immutable);
           expect(server.retired.length).toBeGreaterThan(0);
