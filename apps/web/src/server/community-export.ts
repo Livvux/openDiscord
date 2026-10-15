@@ -5,7 +5,8 @@
 import { and, asc, count, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, auditLog, category, channel, channelOverride, community, member, mention, message, role, session, user } from "@/db/schema";
+import { attachment, auditLog, category, channel, channelOverride, community, communityAsset, member, mention, message, role, session, user } from "@/db/schema";
+import { assetRefSchema, assetText, assetTokens, MAX_MESSAGE_ASSETS, MAX_MESSAGE_STICKERS, remapAssetTokens, MAX_COMMUNITY_EMOJI, MAX_COMMUNITY_STICKERS, MAX_COMMUNITY_ASSET_BYTES, type AssetRef } from "@/lib/community-assets";
 import { requireMember } from "./access";
 import { uuidv7 } from "./uuidv7";
 import { AppError, forbidden } from "./errors";
@@ -15,13 +16,14 @@ import { ALL_PERMISSIONS, CHANNEL_PERMISSIONS } from "./permissions";
 import { channelName, channelTopic, communityName, MESSAGE_MAX_LENGTH, parse, roleName, uuid } from "./validation";
 
 export const EXPORT_FORMAT = "opendiscord.community-export";
-export const EXPORT_VERSION = 1;
+export const EXPORT_VERSION = 2;
 export const MAX_IMPORT_MESSAGES = 100_000;
 
 const key = z.string().min(1).max(64);
 export const communityExportSchema = z.object({
   format: z.literal(EXPORT_FORMAT),
-  version: z.literal(EXPORT_VERSION),
+  version: z.union([z.literal(1), z.literal(EXPORT_VERSION)]),
+  assets: z.array(assetRefSchema).max(MAX_COMMUNITY_EMOJI + MAX_COMMUNITY_STICKERS).default([]),
   community: z.object({ name: communityName, rules: z.string().trim().max(4000).default(""), rulesRequired: z.boolean().default(false) })
     .refine((c) => !c.rulesRequired || c.rules.length > 0, "Required community rules cannot be empty."),
   roles: z.array(z.object({ key, name: roleName, permissions: z.number().int(), position: z.number().int(), isDefault: z.boolean() })).max(100),
@@ -60,10 +62,11 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown, i
   const communityId = parse(uuid, rawCommunityId);
   const { community: c, authority } = await requireMember(db, communityId, userId);
   if (!authority.isOwner) throw forbidden("Only the owner can export a community.");
-  const [roles, categories, channels] = await Promise.all([
+  const [roles, categories, channels, assets] = await Promise.all([
     db.select().from(role).where(eq(role.communityId, communityId)).orderBy(asc(role.position)),
     db.select().from(category).where(eq(category.communityId, communityId)).orderBy(asc(category.position)),
     db.select().from(channel).where(eq(channel.communityId, communityId)).orderBy(asc(channel.position), asc(channel.id)),
+    db.select({ id: communityAsset.id, name: communityAsset.name, kind: communityAsset.kind }).from(communityAsset).where(eq(communityAsset.communityId, communityId)),
   ]);
   const channelIds = channels.map((ch) => ch.id);
   const [overrides, messages] = channelIds.length
@@ -98,6 +101,7 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown, i
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
     truncated,
+    assets,
     community: { name: c.name, rules: c.rules, rulesRequired: c.rulesRequired },
     roles: roles.map((r) => ({ key: r.id, name: r.name, permissions: r.permissions, position: r.position, isDefault: r.isDefault })),
     categories: categories.map((cat) => ({ key: cat.id, name: cat.name, position: cat.position })),
@@ -106,7 +110,7 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown, i
       overrides: overrides.filter((o) => o.channelId === ch.id).map((o) => ({ roleKey: o.roleId, allow: o.allow, deny: o.deny })),
     })),
     messages: messages.map(({ m, authorName }) => ({
-      key: m.id, channelKey: m.channelId, author: m.importedAuthor ?? authorName, content: asText(m.id, m.content),
+      key: m.id, channelKey: m.channelId, author: m.importedAuthor ?? authorName, content: assetText(asText(m.id, m.content)),
       createdAt: m.createdAt.toISOString(), editedAt: m.editedAt?.toISOString() ?? null, pinned: m.pinnedAt !== null,
       replyToKey: m.replyToId, threadKey: m.threadId,
       attachments: attachments.find((a) => a.messageId === m.id)?.n ?? 0,
@@ -118,6 +122,7 @@ export interface ArchiveStaging {
   sessionId: string;
   /** Created and collected by this server-side import, never read as DB IDs from the archive. */
   attachments: readonly { id: string; messageKey: string }[];
+  assets?: readonly { id: string; assetKey: string }[];
 }
 
 const CHUNK = 1000;
@@ -142,6 +147,14 @@ export async function importCommunity(userId: string, rawExport: unknown, stagin
 }
 
 async function runImport(userId: string, data: z.infer<typeof communityExportSchema>, staging?: ArchiveStaging): Promise<string> {
+  const library = data.version === 2 ? data.assets : [];
+  if (new Set(library.map((a) => a.id)).size !== library.length || new Set(library.map((a) => a.name)).size !== library.length
+    || library.filter((a) => a.kind === "emoji").length > MAX_COMMUNITY_EMOJI || library.filter((a) => a.kind === "sticker").length > MAX_COMMUNITY_STICKERS) throw new AppError("invalid", "Invalid community image library.");
+  if (staging) {
+    const files = staging.assets ?? [];
+    const ids = [...staging.attachments.map((f) => f.id), ...files.map((f) => f.id)];
+    if (new Set(ids).size !== ids.length || files.length !== library.length || new Set(files.map((f) => f.assetKey)).size !== files.length || files.some((f) => !library.some((a) => a.id === f.assetKey))) throw new AppError("invalid", "Invalid staged library references.");
+  }
   const channelKeys = new Set(data.channels.map((ch) => ch.key));
   if (data.messages.some((m) => !channelKeys.has(m.channelKey))) throw new AppError("invalid", "The export refers to a channel it doesn't contain.");
   if (staging) {
@@ -215,11 +228,32 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
       if (overrides.length) await tx.insert(channelOverride).values(overrides.map((o) => ({ ...o, channelId: created.id })));
     }
 
+    const importedAssets = new Map<string, AssetRef>();
+    if (staging?.assets?.length) {
+      let storedBytes = 0;
+      for (const source of library) {
+        const file = staging.assets.find((f) => f.assetKey === source.id)!;
+        const fresh = { id: uuidv7(), name: source.name, kind: source.kind };
+        await tx.insert(communityAsset).values({ ...fresh, communityId: c.id });
+        const linked = await tx.execute<{ size: number }>(sql`
+          update attachment set asset_id = ${fresh.id}::uuid, linked_at = now()
+          where id = ${file.id}::uuid and uploader_id = ${userId}
+            and message_id is null and channel_id is null and asset_id is null and linked_at is null
+          returning size
+        `);
+        if (linked.rows.length !== 1) throw new AppError("conflict", "Staged library files are no longer available.");
+        storedBytes += linked.rows[0].size;
+        if (storedBytes > MAX_COMMUNITY_ASSET_BYTES) throw new AppError("invalid", "The community image library exceeds 64 MiB.");
+        importedAssets.set(source.id, fresh);
+      }
+    }
     // Ids are UUIDv7 from the original times, so the order (and paging) is the original chronology and
     // replies and threads can point at messages of the same batch.
     const sorted = [...data.messages].sort((a, b) => clampTime(a.createdAt) - clampTime(b.createdAt));
     const messageIds = new Map(sorted.map((m) => [m.key, uuidv7(clampTime(m.createdAt))]));
     const rows = sorted.map((m) => {
+      const references = assetTokens(m.content);
+      if (references.length > MAX_MESSAGE_ASSETS || references.filter((a) => a.kind === "sticker").length > MAX_MESSAGE_STICKERS) throw new AppError("invalid", "An imported message exceeds the community image limit.");
       const note = !staging && m.attachments > 0 ? `\n_(${m.attachments} attachment${m.attachments === 1 ? "" : "s"} not imported)_` : "";
       const ref = (k: string | null) => (k ? (messageIds.get(k) ?? null) : null);
       return {
@@ -227,7 +261,7 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
         channelId: channelIds.get(m.channelKey)!,
         authorId: userId,
         importedAuthor: m.author,
-        content: (m.content + note).slice(0, MESSAGE_MAX_LENGTH) || "_(empty message)_",
+        content: (remapAssetTokens(m.content, importedAssets) + note).slice(0, MESSAGE_MAX_LENGTH) || "_(empty message)_",
         createdAt: new Date(clampTime(m.createdAt)),
         editedAt: m.editedAt ? new Date(clampTime(m.editedAt)) : null,
         pinnedAt: m.pinned ? new Date(clampTime(m.createdAt)) : null,
@@ -259,7 +293,7 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
           update attachment a set message_id = v.message_id, channel_id = v.channel_id, linked_at = now()
           from (values ${sql.join(links, sql`, `)}) as v(id, message_id, channel_id)
           where a.id = v.id and a.uploader_id = ${userId}
-            and a.message_id is null and a.linked_at is null and a.channel_id is null
+            and a.message_id is null and a.asset_id is null and a.linked_at is null and a.channel_id is null
           returning a.id
         `);
         if (linked.rows.length !== files.length) throw new AppError("conflict", "Staged files are no longer available. Import the archive again.");

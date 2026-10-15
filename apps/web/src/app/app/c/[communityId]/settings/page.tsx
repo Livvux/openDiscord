@@ -1,3 +1,5 @@
+import { CommunityAssetsEditor } from "@/components/app/settings/community-assets-editor";
+import { listCommunityAssets } from "@/server/community-assets";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { CommunityRules } from "@/components/app/community-rules";
@@ -23,6 +25,8 @@ import { requirePageUser } from "@/server/session";
 export const metadata: Metadata = { title: "Community settings" };
 
 const AUDIT_LABELS: Record<string, string> = {
+  "asset.create": "uploaded community image",
+  "asset.delete": "deleted community image",
   "community.rules": "updated community rules",
   "ban.appeal": "submitted a ban appeal",
   "ban.appeal.uphold": "upheld a ban appeal for",
@@ -59,7 +63,7 @@ const AUDIT_LABELS: Record<string, string> = {
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
-  if (["role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
+  if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
   if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import"].includes(e.action)) return null;
@@ -107,7 +111,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
     has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? listIntegrations(user.id, view.id) : null,
   ]);
-  const [rules, appeals] = await Promise.all([getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
+  const [rules, appeals, assets] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
   return (
@@ -118,6 +122,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           <RenameCommunity communityId={view.id} name={view.name} />
         </Section>
       )}
+      {has(a, Permission.ManageCommunity) && <Section id="community-assets" title="Emoji and stickers"><CommunityAssetsEditor communityId={view.id} initialAssets={assets} /></Section>}
       <Section
         id="members"
         title={`Members (${members.length})`}

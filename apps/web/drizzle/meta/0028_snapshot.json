@@ -1,5 +1,5 @@
 {
-  "id": "b9cd9600-27eb-44ce-baef-e507e6e48021",
+  "id": "96494f57-0595-4455-b823-85962ecc729a",
   "prevId": "b314d0f7-df53-42eb-8b75-ce67e16023e2",
   "version": "7",
   "dialect": "postgresql",
@@ -726,7 +726,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"attachment\".\"message_id\" is null",
+          "where": "\"attachment\".\"message_id\" is null and \"attachment\".\"asset_id\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}

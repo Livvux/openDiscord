@@ -8,7 +8,8 @@ export type ClientEvent =
   | { type: "message.created" | "message.updated"; message: MessageView }
   | { type: "message.deleted"; channelId: string; messageId: string }
   /** Events may have been missed (reconnect): refetch. */
-  | { type: "resync" };
+  | { type: "resync" }
+  | { type: "assets.changed" };
 
 type Listener = (event: ClientEvent) => void;
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "closed";
@@ -97,6 +98,7 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
         const { channelId, messageId } = JSON.parse(e.data) as { channelId: string; messageId: string };
         emit({ type: "message.deleted", channelId, messageId });
       });
+      es.addEventListener("assets.changed", () => (seen(), emit({ type: "assets.changed" })));
       es.addEventListener("resync", () => (seen(), emit({ type: "resync" })));
       es.addEventListener("channels.changed", () => (seen(), router.refresh()));
       es.addEventListener("removed", removed);

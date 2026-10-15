@@ -358,7 +358,7 @@ export const attachment = pgTable(
     uniqueIndex("attachment_asset_idx").on(t.assetId),
     check("attachment_asset_link_valid", sql`${t.assetId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.linkedAt} is not null)`),
     index("attachment_message_idx").on(t.messageId),
-    index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null`),
+    index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null and ${t.assetId} is null`),
     index("attachment_uploader_idx").on(t.uploaderId, t.createdAt),
   ],
 );

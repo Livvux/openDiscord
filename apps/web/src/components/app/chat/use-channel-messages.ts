@@ -46,6 +46,8 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
           case "message.deleted":
             if (event.channelId === channelId) setMessages((m) => syncReplies(m.filter((x) => x.id !== event.messageId), { deletedId: event.messageId }));
             break;
+          case "assets.changed":
+            setMessages((messages) => messages.map((message) => ({ ...message, assets: [], reactions: message.reactions.map((reaction) => ({ emoji: reaction.emoji, userIds: reaction.userIds })) })));
           case "resync":
             // Catch up on anything missed while disconnected.
             fetchPage(channelId, threadId).then(

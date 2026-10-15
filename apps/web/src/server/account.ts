@@ -1,18 +1,20 @@
 // GDPR: data access/portability (export) and erasure (account deletion via Better Auth).
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, auditLog, ban, banAppeal, channel, community, member, message, passkey, session, user } from "@/db/schema";
+import { attachment, auditLog, ban, banAppeal, channel, community, communityAsset, member, message, passkey, session, user } from "@/db/schema";
+import { assetText } from "@/lib/community-assets";
 import { exportDirectData } from "./direct-messages";
 import { listBlocked } from "./blocks";
 import { notFound } from "./errors";
 
-/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. */
-export const EXPORT_FORMAT_VERSION = 6;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. */
+export const EXPORT_FORMAT_VERSION = 7;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
 
 export interface UserExport {
+  communityImageUploads: { id: string; communityId: string; name: string; kind: "emoji" | "sticker"; size: number; createdAt: string }[];
   privateMessages: Awaited<ReturnType<typeof exportDirectData>>;
   format: "opendiscord.user-export";
   version: number;
@@ -69,7 +71,11 @@ export async function exportUserData(userId: string): Promise<UserExport> {
   const imagesOf = (messageId: string): ExportedImage[] => (byMessage.get(messageId) ?? [])
     .map(({ id, contentType, filename, size, width, height, createdAt }) => ({ id, contentType, filename, size, width, height, url: `/api/attachments/${id}`, createdAt: createdAt.toISOString() }));
 
+  const communityImageUploads = await db.select({ id: communityAsset.id, communityId: communityAsset.communityId,
+    name: communityAsset.name, kind: communityAsset.kind, size: attachment.size, createdAt: attachment.createdAt,
+  }).from(attachment).innerJoin(communityAsset, eq(communityAsset.id, attachment.assetId)).where(eq(attachment.uploaderId, userId));
   return {
+    communityImageUploads: communityImageUploads.map((asset) => ({ ...asset, createdAt: asset.createdAt.toISOString() })),
     privateMessages: await exportDirectData(userId),
     format: "opendiscord.user-export",
     version: EXPORT_FORMAT_VERSION,
@@ -95,6 +101,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
     memberships: memberships.map((m) => ({ ...m, joinedAt: m.joinedAt.toISOString() })),
     messages: messages.map((m) => ({
       ...m,
+      content: assetText(m.content),
       createdAt: m.createdAt.toISOString(),
       editedAt: m.editedAt?.toISOString() ?? null,
       images: imagesOf(m.id),
