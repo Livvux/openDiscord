@@ -88,6 +88,7 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
                 >
                   <span className="flex flex-wrap gap-x-2 text-xs text-zinc-400">
                     <span className="font-medium text-zinc-200">{m.authorName}</span>
+                    {m.authorImported && <span className="text-zinc-500">(imported)</span>}
                     <span>#{m.channelName}</span>
                     <time dateTime={m.createdAt} suppressHydrationWarning>{dateFormat.format(new Date(m.createdAt))}</time>
                   </span>

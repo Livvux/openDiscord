@@ -16,6 +16,8 @@ export interface ReplyPreview {
   id: string;
   authorId: string;
   authorName: string;
+  /** The original author of an imported message (the name isn't an account here). */
+  authorImported: boolean;
   excerpt: string;
 }
 
@@ -51,7 +53,10 @@ export async function reactionsFor(messageIds: string[]): Promise<Map<string, Re
 export async function replyPreviews(ids: string[]): Promise<Map<string, ReplyPreview>> {
   if (ids.length === 0) return new Map();
   const rows = await db
-    .select({ id: message.id, authorId: message.authorId, authorName: sql<string>`coalesce(${message.importedAuthor}, ${user.name})`, content: message.content })
+    .select({
+      id: message.id, authorId: message.authorId, authorName: sql<string>`coalesce(${message.importedAuthor}, ${user.name})`,
+      authorImported: sql<boolean>`${message.importedAuthor} is not null`, content: message.content,
+    })
     .from(message)
     .innerJoin(user, eq(user.id, message.authorId))
     .where(inArray(message.id, ids));

@@ -39,6 +39,7 @@ export function PinnedDialog({ channelId, channelName }: { channelId: string; ch
               <li key={m.id} className="grid gap-0.5 px-3 py-2 text-sm">
                 <p className="flex gap-2 text-xs text-zinc-400">
                   <span className="font-medium text-zinc-200">{m.authorName}</span>
+                  {m.authorImported && <span className="text-zinc-500">(imported)</span>}
                   <time dateTime={m.createdAt} suppressHydrationWarning>{dateFormat.format(new Date(m.createdAt))}</time>
                 </p>
                 <div className="break-words whitespace-pre-wrap text-zinc-300">

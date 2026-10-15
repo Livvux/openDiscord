@@ -73,10 +73,26 @@ describe("community import", () => {
       ["Mia", "hello @Owner", true],
       ["Owner", "welcome!", true],
     ]);
-    expect(page.messages[1].replyTo?.authorName).toBe("Mia");
+    expect(page.messages[1].replyTo).toMatchObject({ authorName: "Mia", authorImported: true });
     expect(page.messages[0].thread?.count).toBe(1);
     expect((await listPinned(importer, general.id)).map((m) => m.content)).toEqual(["hello @Owner"]);
     await expect(editMessage(importer, page.messages[0].id, "rewritten")).rejects.toThrow("can't be edited");
+  });
+
+  it("clamps impossible times and merges duplicate overrides", async () => {
+    const forged = structuredClone(exported);
+    forged.messages[0].createdAt = "2999-01-01T00:00:00.000Z";
+    forged.messages[1].createdAt = "1900-01-01T00:00:00.000Z";
+    const staff = forged.channels.find((c) => c.name === "staff-room")!;
+    staff.overrides.push({ ...staff.overrides[0] });
+    const id = await importCommunity(importer, forged);
+    const general = (await getCommunityView(importer, id)).channels.find((c) => c.name === "general")!;
+    const times = (await listMessages(importer, general.id)).messages.map((m) => Date.parse(m.createdAt));
+    expect(times.every((t) => t <= Date.now() && t >= Date.parse("2015-01-01"))).toBe(true);
+  });
+
+  it("refuses duplicate message keys", async () => {
+    await expect(importCommunity(importer, { ...exported, messages: [exported.messages[0], exported.messages[0]] })).rejects.toThrow("duplicate");
   });
 
   it("refuses files that aren't valid exports", async () => {

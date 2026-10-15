@@ -3,7 +3,7 @@ import { errorResponse, PRIVATE_NO_STORE, readJsonBody } from "@/server/http";
 import { consume } from "@/server/limits";
 import { requireUser } from "@/server/session";
 
-const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
 
 /** Creates a new community from an export file (the body). */
 export async function POST(request: Request) {

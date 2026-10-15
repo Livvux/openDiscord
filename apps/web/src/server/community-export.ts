@@ -2,7 +2,7 @@
 // authors become plain names, mentions become text. Only the owner can export (it contains every
 // member's messages) and the export is audited. Importing creates a new community owned by the
 // importer; imported messages keep their original author name and time, marked as imported.
-import { asc, count, eq, inArray } from "drizzle-orm";
+import { asc, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { attachment, auditLog, category, channel, channelOverride, community, member, mention, message, role, user } from "@/db/schema";
@@ -48,7 +48,11 @@ const exportSchema = z.object({
   })).max(MAX_IMPORT_MESSAGES),
 });
 
-export type CommunityExport = z.infer<typeof exportSchema> & { exportedAt: string };
+export type CommunityExport = z.infer<typeof exportSchema> & {
+  exportedAt: string;
+  /** More than MAX_IMPORT_MESSAGES messages existed; only the newest are included. */
+  truncated: boolean;
+};
 
 /** Everything needed to rebuild the community elsewhere. Owner only; audited. */
 export async function exportCommunity(userId: string, rawCommunityId: unknown): Promise<CommunityExport> {
@@ -69,10 +73,14 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
           .from(message)
           .innerJoin(user, eq(user.id, message.authorId))
           .where(inArray(message.channelId, channelIds))
-          .orderBy(asc(message.id))
-          .limit(MAX_IMPORT_MESSAGES),
+          .orderBy(desc(message.id))
+          .limit(MAX_IMPORT_MESSAGES + 1),
       ])
     : [[], []];
+  // Over the cap: keep the newest messages and say so.
+  const truncated = messages.length > MAX_IMPORT_MESSAGES;
+  messages.splice(MAX_IMPORT_MESSAGES);
+  messages.reverse();
   const messageIds = messages.map((r) => r.m.id);
   const [mentions, attachments] = messageIds.length
     ? await Promise.all([
@@ -88,6 +96,7 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
+    truncated,
     community: { name: c.name },
     roles: roles.map((r) => ({ key: r.id, name: r.name, permissions: r.permissions, position: r.position, isDefault: r.isDefault })),
     categories: categories.map((cat) => ({ key: cat.id, name: cat.name, position: cat.position })),
@@ -105,11 +114,27 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
 }
 
 const CHUNK = 1000;
+/** Imported times are clamped: ids derive from them, and far-future ids would sort after every live message. */
+const EARLIEST = Date.parse("2015-01-01T00:00:00Z");
+const clampTime = (iso: string) => Math.min(Math.max(Date.parse(iso), EARLIEST), Date.now());
+/** One import at a time per process: imports are large single transactions. */
+let importing = false;
 
 /** Rebuilds an exported community as a new community owned by the importer. */
 export async function importCommunity(userId: string, rawExport: unknown): Promise<string> {
   const data = parse(exportSchema, rawExport);
   await assertActiveUser(userId);
+  if (new Set(data.messages.map((m) => m.key)).size !== data.messages.length) throw new AppError("invalid", "The export contains duplicate messages.");
+  if (importing) throw new AppError("rate_limited", "Another import is running. Try again in a minute.");
+  importing = true;
+  try {
+    return await runImport(userId, data);
+  } finally {
+    importing = false;
+  }
+}
+
+async function runImport(userId: string, data: z.infer<typeof exportSchema>): Promise<string> {
   const channelKeys = new Set(data.channels.map((ch) => ch.key));
   if (data.messages.some((m) => !channelKeys.has(m.channelKey))) throw new AppError("invalid", "The export refers to a channel it doesn't contain.");
   return db.transaction(async (tx) => {
@@ -147,16 +172,22 @@ export async function importCommunity(userId: string, rawExport: unknown): Promi
         categoryId: ch.categoryKey ? (categoryIds.get(ch.categoryKey) ?? null) : null,
       }).returning({ id: channel.id });
       channelIds.set(ch.key, created.id);
-      const overrides = ch.overrides
-        .map((o) => ({ roleId: roleIds.get(o.roleKey), allow: o.allow & CHANNEL_PERMISSIONS, deny: o.deny & CHANNEL_PERMISSIONS & ~o.allow }))
-        .filter((o): o is { roleId: string; allow: number; deny: number } => !!o.roleId && (o.allow !== 0 || o.deny !== 0));
+      // One override per role (a file could list a role twice): merge, allow wins.
+      const merged = new Map<string, { allow: number; deny: number }>();
+      for (const o of ch.overrides) {
+        const roleId = roleIds.get(o.roleKey);
+        if (!roleId) continue;
+        const prev = merged.get(roleId) ?? { allow: 0, deny: 0 };
+        merged.set(roleId, { allow: prev.allow | (o.allow & CHANNEL_PERMISSIONS), deny: prev.deny | (o.deny & CHANNEL_PERMISSIONS) });
+      }
+      const overrides = [...merged].map(([roleId, o]) => ({ roleId, allow: o.allow, deny: o.deny & ~o.allow })).filter((o) => o.allow !== 0 || o.deny !== 0);
       if (overrides.length) await tx.insert(channelOverride).values(overrides.map((o) => ({ ...o, channelId: created.id })));
     }
 
     // Ids are UUIDv7 from the original times, so the order (and paging) is the original chronology and
     // replies and threads can point at messages of the same batch.
-    const sorted = [...data.messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const messageIds = new Map(sorted.map((m) => [m.key, uuidv7(Date.parse(m.createdAt))]));
+    const sorted = [...data.messages].sort((a, b) => clampTime(a.createdAt) - clampTime(b.createdAt));
+    const messageIds = new Map(sorted.map((m) => [m.key, uuidv7(clampTime(m.createdAt))]));
     const rows = sorted.map((m) => {
       const note = m.attachments > 0 ? `\n_(${m.attachments} attachment${m.attachments === 1 ? "" : "s"} not imported)_` : "";
       const ref = (k: string | null) => (k ? (messageIds.get(k) ?? null) : null);
@@ -166,9 +197,9 @@ export async function importCommunity(userId: string, rawExport: unknown): Promi
         authorId: userId,
         importedAuthor: m.author,
         content: (m.content + note).slice(0, MESSAGE_MAX_LENGTH) || "_(empty message)_",
-        createdAt: new Date(m.createdAt),
-        editedAt: m.editedAt ? new Date(m.editedAt) : null,
-        pinnedAt: m.pinned ? new Date(m.createdAt) : null,
+        createdAt: new Date(clampTime(m.createdAt)),
+        editedAt: m.editedAt ? new Date(clampTime(m.editedAt)) : null,
+        pinnedAt: m.pinned ? new Date(clampTime(m.createdAt)) : null,
         replyToId: ref(m.replyToKey),
         threadId: ref(m.threadKey),
       };
