@@ -5,6 +5,7 @@ import { has, Permission } from "@/server/permissions";
 import { ChannelLink } from "./channel-link";
 import { CreateChannelDialog } from "./create-channel-dialog";
 import { ReportDialog } from "./report-dialog";
+import { SearchDialog } from "./search-dialog";
 import { InviteDialog } from "./invite-dialog";
 
 const SETTINGS_PERMISSIONS =
@@ -17,6 +18,7 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
     <>
       <header className="flex h-12 items-center gap-1 border-b border-white/5 px-3">
         <h2 className="min-w-0 flex-1 truncate px-2 font-semibold text-zinc-100">{view.name}</h2>
+        <SearchDialog communityId={view.id} communityName={view.name} />
         <Link
           href={`/app/c/${view.id}/settings`}
           aria-label={canModerate ? "Community settings" : "Community info"}
