@@ -37,8 +37,11 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   const posting = member.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === appPath);
   await member.getByRole("button", { name: "Send message", exact: true }).click();
   expect((await posting).status()).toBe(200);
-  const row = member.getByRole("log").getByRole("listitem").filter({ hasText: "Hello from the explicitly public workshop" }).first();
-  await expect(row).toBeVisible();
+  const posted = member.getByRole("log").getByRole("listitem").filter({ hasText: "Hello from the explicitly public workshop" }).first();
+  await expect(posted).toBeVisible();
+  const messageId = await posted.getAttribute("data-message-id");
+  expect(messageId).toMatch(/^[0-9a-f-]{36}$/);
+  const row = member.locator(`[data-message-id="${messageId}"]`);
   await row.hover();
   await row.getByRole("button", { name: "Edit message", exact: true }).click();
   await row.getByRole("textbox", { name: "Edit message", exact: true }).fill("Edited public workshop text");
