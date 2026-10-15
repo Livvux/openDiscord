@@ -18,6 +18,7 @@ interface ChannelChatProps {
   initialPage: MessagePage;
   currentUserId: string;
   canSend: boolean;
+  publicGeneration?: string | null;
   canModerate: boolean;
   mediaEnabled: boolean;
   communityId: string;
@@ -40,7 +41,7 @@ const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 120;
 
 export function ChannelChat(props: ChannelChatProps) {
-  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot } = props;
+  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot, publicGeneration } = props;
   const { state } = useRealtime();
   const threadId = threadRoot?.id ?? null;
   const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
@@ -105,7 +106,7 @@ export function ChannelChat(props: ChannelChatProps) {
     setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
     const replyToId = replyTo?.id ?? null;
     setReplyTo(null);
-    const result = await sendMessage(channel.id, content, attachmentIds, replyToId, threadId);
+    const result = await sendMessage(channel.id, content, attachmentIds, replyToId, threadId, publicGeneration);
     setPending((p) => p.filter((x) => x.tempId !== tempId));
     if (result.ok) {
       upsert(result.data);
@@ -188,9 +189,10 @@ export function ChannelChat(props: ChannelChatProps) {
                   currentUserId={currentUserId}
                   blocked={blockedIds.includes(m.authorId)}
                   grouped={grouped && m.id !== firstUnread}
-                  canEdit={m.authorId === currentUserId && !m.authorImported}
+                  canEdit={canSend && m.authorId === currentUserId && !m.authorImported}
+                  publicGeneration={publicGeneration}
                   canDelete={m.authorId === currentUserId || canModerate}
-                  canReact={canSend}
+                  canReact={canSend && !publicGeneration}
                   canPin={canModerate}
                   replyBlocked={!!m.replyTo && blockedIds.includes(m.replyTo.authorId)}
                   onDeleted={remove}
@@ -220,7 +222,8 @@ export function ChannelChat(props: ChannelChatProps) {
           draft={draft}
           setDraft={setDraft}
           onSend={onSend}
-          mediaEnabled={mediaEnabled}
+          mediaEnabled={mediaEnabled && !publicGeneration}
+          isPublic={!!publicGeneration}
           communityId={communityId}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}

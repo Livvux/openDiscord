@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-/** Only the marketing site is public. Communities, invites and the API are never indexed. */
+/** Only marketing and explicitly public projections are indexable. */
 export default function robots(): MetadataRoute.Robots {
-  return { rules: { userAgent: "*", allow: "/", disallow: ["/app", "/api", "/invite"] } };
+  return { sitemap: new URL("/sitemap.xml", process.env.BETTER_AUTH_URL ?? "https://opendiscord.app").href, rules: { userAgent: "*", allow: "/", disallow: ["/app", "/api", "/invite"] } };
 }

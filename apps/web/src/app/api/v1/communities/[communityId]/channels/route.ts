@@ -1,3 +1,5 @@
+import { publicChannelState } from "@/server/public-channels";
+import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
 import { getCommunityView } from "@/server/communities";
 import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
 import { requireBot } from "@/server/integrations";
@@ -9,7 +11,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/v1/communiti
     const { communityId } = await ctx.params;
     const view = await getCommunityView(userId, communityId);
     return Response.json(
-      view.channels.map(({ id, name, topic, kind, categoryId }) => ({ id, name, topic, kind, categoryId })),
+      await Promise.all(view.channels.map(async ({ id, name, topic, kind, categoryId }) => ({ id, name, topic, kind, categoryId, publicPosting: await publicChannelState(userId, id), publicPostNotice: PUBLIC_POST_NOTICE }))),
       { headers: PRIVATE_NO_STORE },
     );
   } catch (error) {

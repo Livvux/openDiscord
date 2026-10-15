@@ -430,3 +430,23 @@ export const pushSubscription = pgTable(
   },
   (t) => [index("push_subscription_user_idx").on(t.userId)],
 );
+
+/** Exists only for a newly created, explicitly public text channel. Unpublish is terminal. */
+export const publicChannel = pgTable("public_channel", {
+  channelId: uuid("channel_id").primaryKey().references(() => channel.id, { onDelete: "cascade" }),
+  generation: uuid("generation").notNull().default(sql`uuidv7()`).unique(),
+  communityTitle: text("community_title").notNull(),
+  channelTitle: text("channel_title").notNull(),
+  createdAt: createdAt(),
+  unpublishedAt: timestamp("unpublished_at", { withTimezone: true }),
+}, (t) => [check("public_channel_title_length", sql`char_length(${t.communityTitle}) between 1 and 80 and char_length(${t.channelTitle}) between 1 and 32`)]);
+
+/** Explicitly public send-time snapshot; never join a private display name when reading it. */
+export const publicPost = pgTable("public_post", {
+  messageId: uuid("message_id").primaryKey().references(() => message.id, { onDelete: "cascade" }),
+  channelId: uuid("channel_id").notNull().references(() => publicChannel.channelId, { onDelete: "cascade" }),
+  authorName: text("author_name").notNull(),
+  content: text("content").notNull(),
+  createdAt: createdAt(),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+}, (t) => [index("public_post_channel_idx").on(t.channelId, t.messageId)]);

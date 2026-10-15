@@ -1,8 +1,10 @@
 import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { abuseReport, message } from "@/db/schema";
-import { requireChannel, requireMember } from "./access";
+import { lockCommunity, requireChannel, requireMember } from "./access";
 import { AppError, notFound } from "./errors";
+import { assertActiveUser } from "./instance-policy";
+import { publicReportTarget } from "./public-channels";
 import { parse, uuid } from "./validation";
 import { z } from "zod";
 
@@ -12,6 +14,7 @@ export async function reportContent(userId: string, input: unknown) {
   const data = parse(z.object({ communityId: uuid.optional(), messageId: uuid.optional(), reason: requiredReason })
     .refine((v) => !!v.communityId !== !!v.messageId, "Choose one report target."), input);
   return db.transaction(async (tx) => {
+    await assertActiveUser(userId, tx);
     // Cross-process rate limit and deduplication, without copying private message content.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 1))`);
     const [{ recent }] = await tx.select({ recent: count() }).from(abuseReport)
@@ -21,7 +24,13 @@ export async function reportContent(userId: string, input: unknown) {
     if (data.messageId) {
       const [row] = await tx.select({ channelId: message.channelId }).from(message).where(eq(message.id, data.messageId));
       if (!row) throw notFound("Message not found.");
-      communityId = (await requireChannel(tx, row.channelId, userId)).channel.communityId;
+      const target = await publicReportTarget(tx, data.messageId);
+      if (target) {
+        await lockCommunity(tx, target.communityId);
+        const current = await publicReportTarget(tx, data.messageId);
+        if (!current) throw notFound("Message not found.");
+        communityId = current.communityId;
+      } else communityId = (await requireChannel(tx, row.channelId, userId)).channel.communityId;
     } else if (communityId) await requireMember(tx, communityId, userId);
     if (!communityId) throw notFound();
     const [existing] = await tx.select({ id: abuseReport.id }).from(abuseReport).where(and(

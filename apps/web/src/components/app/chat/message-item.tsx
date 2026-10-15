@@ -1,5 +1,7 @@
 "use client";
 
+import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
+
 import { CornerUpLeftIcon, FileDownIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -74,6 +76,7 @@ function ReactionPicker({ onPick, onClose, channelId }: { channelId: string; onP
 }
 
 interface MessageItemProps {
+  publicGeneration?: string | null;
   message: MessageView;
   currentUserId: string;
   /** The author is blocked by the viewer: collapsed until revealed. */
@@ -94,7 +97,7 @@ interface MessageItemProps {
 }
 
 export function MessageItem(props: MessageItemProps) {
-  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply, onOpenThread } = props;
+  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply, onOpenThread, publicGeneration } = props;
   const [editing, setEditing] = useState(false);
   const [picking, setPicking] = useState(false);
   const reactButton = useRef<HTMLButtonElement>(null);
@@ -148,7 +151,7 @@ export function MessageItem(props: MessageItemProps) {
 
   function onSaveEdit(content: string) {
     startTransition(async () => {
-      const result = await editMessage(message.id, encodeAssetShortcodes(encodeMentions(content, message.mentions), assetTokens(message.content)));
+      const result = await editMessage(message.id, encodeAssetShortcodes(encodeMentions(content, message.mentions), assetTokens(message.content)), publicGeneration);
       if (result.ok) {
         setEditing(false);
         setError(null);
@@ -206,7 +209,7 @@ export function MessageItem(props: MessageItemProps) {
         )}
         {grouped && <span className="sr-only" suppressHydrationWarning>{message.authorName}, {timeFormat.format(created)}: </span>}
         {editing ? (
-          <EditForm initial={decodeAssetTokens(decodeMentions(message.content, message.mentions))} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
+          <EditForm isPublic={!!publicGeneration} initial={decodeAssetTokens(decodeMentions(message.content, message.mentions))} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
           (message.content || message.editedAt) && (
             <div className="break-words whitespace-pre-wrap text-zinc-300">
@@ -344,17 +347,20 @@ export function MessageItem(props: MessageItemProps) {
   );
 }
 
-function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pending: boolean; onSave: (c: string) => void; onCancel: () => void }) {
+function EditForm({ initial, pending, onSave, onCancel, isPublic }: { isPublic: boolean; initial: string; pending: boolean; onSave: (c: string) => void; onCancel: () => void }) {
   const [value, setValue] = useState(initial);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const canSave = !pending && (!isPublic || acknowledged);
   const id = useId();
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (value.trim()) onSave(value);
+        if (canSave && value.trim()) onSave(value);
       }}
       className="grid gap-1"
     >
+      {isPublic && <div className="text-xs text-zinc-300"><p>{PUBLIC_POST_NOTICE}</p><label className="flex items-start gap-2"><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />I acknowledge publishing this edit.</label></div>}
       <label className="sr-only" htmlFor={id}>Edit message</label>
       <textarea
         id={id}
@@ -366,14 +372,14 @@ function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pen
           if (e.key === "Escape") onCancel();
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            if (value.trim()) onSave(value);
+            if (canSave && value.trim()) onSave(value);
           }
         }}
         className="field-sizing-content min-h-10 w-full resize-none rounded-lg bg-white/5 px-3 py-2 text-zinc-100 ring-1 ring-white/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <p className="text-[11px] text-zinc-400">
         Escape to <button type="button" className="underline" onClick={onCancel}>cancel</button> · Enter to{" "}
-        <button type="submit" className="underline" disabled={pending}>save</button>
+        <button type="submit" className="underline" disabled={!canSave}>save</button>
       </p>
     </form>
   );

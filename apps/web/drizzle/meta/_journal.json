@@ -204,6 +204,13 @@
       "when": 1792091871171,
       "tag": "0028_community_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792093926936,
+      "tag": "0029_public_channels",
+      "breakpoints": true
     }
   ]
 }
