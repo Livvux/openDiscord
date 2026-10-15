@@ -160,7 +160,9 @@ removal. Cleanup claims due rows with a 30-second lease and a unique claim UUID;
 cannot overwrite a newer claim. Requests use the public SDK timeout **0.5 seconds**, with region
 failover disabled, and run sequentially. Each public bound-token invocation shares at most four RPCs and one monotonic 2.5-second
 budget across both grants, explicit creation and failure cleanup. Successful first-reservation
-cleanup is deferred to mandatory post-create revalidation; denials still consume after commit.
+cleanup is deferred to mandatory post-create revalidation; precreate authority denials also attempt
+cleanup after retirement commits, using only the same remaining allowance. Exhaustion dispatches no
+further RPC and leaves the retirement durably due.
 Interactive standalone consumption allows at most four rooms/four requests with the same budget; maintenance allows at most sixteen rooms/32 requests and
 20 seconds shared across lifecycle batches. Budgets include retries; failures are deferred durably,
 not retried by generation-ledger timers. Fair ordering uses next-attempt time then exact name. Logs contain only
@@ -172,7 +174,11 @@ call/generation, live account/session/anchor/lease, blocked pairs and channel pe
 or overfull SFU rosters retire the whole owned room. This intentionally fails closed; the same
 generation cannot be healed by issuing another token. Affected members must leave and enroll in
 a fresh call generation through the normal control flow. Source permissions are narrowed from
-current database authority, never from SFU metadata. This is eventual best-effort repair; neither
+current database authority intersected with existing effective SFU rights. LiveKit's empty source
+list with publishing enabled means unrestricted publication; repair replaces it with the explicit
+canonical sources. An empty intersection disables publishing, missing permissions disable all
+publication and subscription, and repair never expands an existing explicit restriction or enables
+data/metadata updates. This is eventual best-effort repair; neither
 instant physical revocation nor prevention of all physical room resurrection is guaranteed.
 
 Successful retired rows recur every five minutes when a consumer runs; active checks recur every

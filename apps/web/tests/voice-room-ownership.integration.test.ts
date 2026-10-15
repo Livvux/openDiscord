@@ -190,15 +190,19 @@ describe("bounded persistent cleanup", () => {
     expect((await owned(grant.roomName)).status).toBe("active");
   });
 
-  it("preserves a safe explicit subset even when canonical authority permits more sources", async () => {
+  it.each([false, true])("preserves a safe explicit subset with forbidden data=%s even when canonical authority permits more sources", async canPublishData => {
     const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
     expect(grant.sources).toHaveLength(4);
-    const participant = new ParticipantInfo({ identity: grant.participantIdentity, permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canSubscribe: true }) });
+    const participant = new ParticipantInfo({ identity: grant.participantIdentity, permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canSubscribe: true, canPublishData }) });
     vi.mocked(RoomServiceClient.prototype.listParticipants).mockResolvedValue([participant]);
     const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant").mockResolvedValue(participant);
     await due(grant.roomName);
-    expect((await consumeVoiceRooms({ maxRooms: 1 })).requests).toBe(1);
-    expect(update).not.toHaveBeenCalled();
+    expect((await consumeVoiceRooms({ maxRooms: 1 })).requests).toBe(canPublishData ? 2 : 1);
+    if (canPublishData) {
+      expect(update).toHaveBeenCalledExactlyOnceWith(grant.roomName, grant.participantIdentity, { permission: {
+        canSubscribe: true, canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canPublishData: false, canUpdateMetadata: false,
+      } });
+    } else expect(update).not.toHaveBeenCalled();
     expect((await owned(grant.roomName)).status).toBe("active");
   });
 
@@ -347,6 +351,23 @@ it("rechecks session expiry after the observed real PostgreSQL SHARE wait before
   }
 });
 
+
+it.each(["requests", "deadline"])("leaves precreate retirement durably due with zero RPCs when the %s budget is exhausted", async exhausted => {
+  const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+  await db.update(session).set({ expiresAt: new Date(0) }).where(eq(session.id, f.sessionId));
+  const budget = { remainingRequests: exhausted === "requests" ? 0 : 4, deadline: exhausted === "deadline" ? 0 : performance.now() + 2500 };
+  vi.mocked(RoomServiceClient.prototype.createRoom).mockClear();
+  vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
+  vi.mocked(RoomServiceClient.prototype.listParticipants).mockClear();
+  const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant");
+  await expect(createOwnedVoiceRoom(grant.roomName, budget)).rejects.toMatchObject({ code: "forbidden" });
+  expect(RoomServiceClient.prototype.createRoom).not.toHaveBeenCalled();
+  expect(RoomServiceClient.prototype.deleteRoom).not.toHaveBeenCalled();
+  expect(RoomServiceClient.prototype.listParticipants).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  expect((await owned(grant.roomName)).status).toBe("retired");
+  expect((await owned(grant.roomName)).nextAttemptAt.getTime()).toBeLessThanOrEqual(Date.now());
+});
 
 it("never signs after its own final grant consumer terminally retires an unexpected SFU roster", async () => {
   const f = await fixture();

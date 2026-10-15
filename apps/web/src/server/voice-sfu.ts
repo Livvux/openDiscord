@@ -105,16 +105,17 @@ export async function assertOwnedVoiceRoomActive(name: string): Promise<void> {
 
 /** Explicit server creation follows reservation COMMIT; caller revalidates enrollment again before JWT. */
 export async function createOwnedVoiceRoom(name: string, budget = createVoiceRoomBudget()): Promise<void> {
-  await assertOwnedVoiceRoomActive(name);
-  const client = voiceRoomService();
-  if (!mayRequest(budget)) throw new AppError("conflict", "Voice is temporarily busy. Try again.");
   try {
+    await assertOwnedVoiceRoomActive(name);
+    const client = voiceRoomService();
+    if (!mayRequest(budget)) throw new AppError("conflict", "Voice is temporarily busy. Try again.");
     if (!client) throw new Error("unavailable");
     budget.remainingRequests--;
     await client.createRoom({ name });
-  } catch {
+  } catch (error) {
     await retireOwnedVoiceRoom(name);
     await consumeVoiceRooms({ budget });
+    if (error instanceof AppError) throw error;
     throw new AppError("conflict", "Voice is temporarily unavailable. Refresh the current call.");
   }
 }
@@ -167,10 +168,15 @@ export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMill
             for (const participant of participants) {
               const allowed = authority.members!.find(m => m.identity === participant.identity)!;
               const current = participant.permission;
-              if (current?.canPublishData || current?.canUpdateMetadata || (current?.canPublish && allowed.sources.length === 0) || (current?.canPublishSources ?? []).some(source => !allowed.sources.includes(source))) {
+              const currentSources = current?.canPublishSources ?? [];
+              // LiveKit treats publish=true with no sources as ALL, not none. Never emit that
+              // combination for an empty intersection or infer rights from identity alone.
+              const unrestricted = !!current?.canPublish && currentSources.length === 0;
+              const sources = current?.canPublish ? allowed.sources.filter(source => unrestricted || currentSources.includes(source)) : [];
+              if (!current || unrestricted || current.canPublishData || current.canUpdateMetadata || (current.canPublish && sources.length === 0) || currentSources.some(source => !allowed.sources.includes(source))) {
                 if (!canRequest()) { retrySoon = true; break; }
                 spendRequest();
-                await client.updateParticipant(claim.roomName, participant.identity, { permission: { canSubscribe: !!current?.canSubscribe, canPublish: !!current?.canPublish && allowed.sources.length > 0, canPublishSources: (current?.canPublishSources ?? []).filter(source => allowed.sources.includes(source)), canPublishData: false, canUpdateMetadata: false } });
+                await client.updateParticipant(claim.roomName, participant.identity, { permission: { canSubscribe: !!current?.canSubscribe, canPublish: sources.length > 0, canPublishSources: sources, canPublishData: false, canUpdateMetadata: false } });
               }
             }
           }
