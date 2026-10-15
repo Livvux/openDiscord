@@ -73,11 +73,29 @@ removes unlinked objects after an hour. Other files (max 25 MB) are stored byte-
 as downloads with a generic content type, so they can't execute on the app origin; the original name is
 cleaned and shown as text. An absolute private ATTACHMENT_DIR can replace S3. Optional CLAMAV_HOST scanning fails closed before storage; production scanner deployment and signature maintenance remain operator responsibilities.
 
-## D10. End-to-end encryption (planned, P1)
+## D10. End-to-end encrypted direct messages
 
-No custom cryptography. DMs and small groups will use an audited implementation of MLS (RFC 9420) or
-the Signal protocol, chosen by audit status and maintenance at implementation time. Large community
-channels stay server-readable (moderation, search, new-member history), which is documented, not hidden.
+One-to-one DMs use the maintained Matrix Rust crypto state machine through pinned
+`@matrix-org/matrix-sdk-crypto-wasm` 18.9.0 (matrix-sdk-crypto 0.19.1, vodozemac 0.11.0).
+Olm distributes device keys; Megolm encrypts conversation events. We implement the bounded Matrix
+transport shapes over authenticated application accounts, not federation or a Matrix homeserver.
+The SDK performs signature validation, SAS verification, ratcheting and message encryption.
+Every active sending/receiving device must be verified; unknown devices fail closed.
+
+This supersedes the earlier MLS/Signal preference. Upstream OpenMLS browser bindings remain
+experimental; its audited core does not make an unaudited browser/storage integration audited.
+The maintained Matrix browser package exposes persistent IndexedDB, real SAS, cross-signing and
+key export/import in one state machine. The vodozemac audit covers that cryptographic library,
+not this application, its web delivery, transport or recovery composition. No independent audit of
+openDiscord is claimed. See [private messaging architecture and limitations](PRIVATE-MESSAGES.md).
+
+The server stores ciphertext, public keys and delivery metadata. Encrypted backups contain identity
+secrets and explicitly labelled, source-authenticated read-only history copies; the private recovery file containing the encryption key remains with
+the user. Matrix attachment encryption is reused rather than inventing an encryption format. Community
+channels remain server-readable for moderation, search and history. Voice encryption is a separate
+integration and is not implied by encrypted DMs. A destructive identity reset requires recent account
+authentication, password confirmation and TOTP when enabled, revokes all previous devices and server
+recovery material, and requires contacts to verify the new identity. It never recovers lost history.
 
 ## D11. Cloudflare is optional
 

@@ -1,0 +1,2 @@
+ALTER TABLE "dm_key" DROP CONSTRAINT "dm_key_device_id_key_id_pk";--> statement-breakpoint
+ALTER TABLE "dm_key" ADD CONSTRAINT "dm_key_device_id_key_id_fallback_pk" PRIMARY KEY("device_id","key_id","fallback");

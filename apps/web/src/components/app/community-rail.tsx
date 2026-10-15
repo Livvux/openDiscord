@@ -1,4 +1,4 @@
-import { ShieldIcon } from "lucide-react";
+import { MailIcon, ShieldIcon } from "lucide-react";
 import { isInstanceAdmin } from "@/server/instance-policy";
 import Link from "next/link";
 import { listCommunities } from "@/server/communities";
@@ -17,6 +17,7 @@ export async function CommunityRail() {
   const [unread, muted] = await Promise.all([communityUnread(user.id, communities), mutedCommunities(user.id, communities.map((c) => c.id))]);
   return (
     <>
+      <Link href="/app/messages" aria-label="Private messages" className="mt-4 rounded-xl p-2 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"><MailIcon className="size-5" /></Link>
       <ul className="flex flex-1 flex-col items-center gap-3 overflow-y-auto py-4">
         {communities.map((c) => (
           <li key={c.id}>
