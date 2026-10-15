@@ -2,12 +2,13 @@ import { and, eq } from "drizzle-orm";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attachment, community, communityAsset, user } from "@/db/schema";
+import { attachment, community, communityAsset, user, userSuspension } from "@/db/schema";
 import { assetToken } from "@/lib/community-assets";
 import { createCommunityAsset, deleteCommunityAsset, listCommunityAssets, readCommunityAsset } from "@/server/community-assets";
 import { acceptInvite, createCommunity, createInvite, leaveCommunity } from "@/server/communities";
 import { mediaEnabled, processImage, sweepAttachments } from "@/server/media";
 import { editMessage, listMessages, sendMessage, toggleReaction } from "@/server/messages";
+import { exportUserData } from "@/server/account";
 import { createRole, setMemberRole } from "@/server/moderation";
 import { testUsers } from "./helpers";
 
@@ -40,6 +41,9 @@ describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
   it("binds send/edit/reactions to the channel community and preserves removal after deletion", async () => {
     const asset = await upload("reaction_blob"); const token = assetToken(asset);
     await expect(sendMessage(outsider, otherChannelId, token)).rejects.toThrow(/another community/);
+    const outside = await sendMessage(outsider, otherChannelId, "Local content");
+    await expect(editMessage(outsider, outside.id, token)).rejects.toThrow(/another community/);
+    await expect(toggleReaction(outsider, outside.id, token)).rejects.toThrow(/another community/);
     const posted = await sendMessage(member, channelId, token);
     expect(posted.assets).toContainEqual(asset);
     await toggleReaction(member, posted.id, token);
@@ -70,6 +74,13 @@ describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
     const role = await createRole(manager, communityId, "Image manager", ["ManageCommunity"]);
     await setMemberRole(manager, role, uploader, true);
     const asset = await upload("owned_library", "emoji", uploader);
+    await sendMessage(uploader, channelId, assetToken(asset));
+    const exported = await exportUserData(uploader);
+    expect(exported.communityImageUploads.map((row) => row.id)).toContain(asset.id);
+    expect(exported.messages[0].content).toBe(":owned_library:");
+    await db.insert(userSuspension).values({ userId: uploader, reason: "Asset access regression" });
+    await expect(readCommunityAsset(uploader, asset.id)).rejects.toThrow(/suspended/);
+    await db.delete(userSuspension).where(eq(userSuspension.userId, uploader));
     await db.delete(user).where(eq(user.id, uploader));
     const [row] = await db.select().from(attachment).where(eq(attachment.assetId, asset.id));
     expect(row.uploaderId).toBeNull();

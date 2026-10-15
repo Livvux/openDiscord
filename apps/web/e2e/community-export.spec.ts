@@ -83,7 +83,7 @@ test("the owner migrates a complete archive with private image and binary files"
     if (!await create.isVisible()) await toggle.click();
     await create.click();
     const importing = owner.waitForResponse((response) => response.url().endsWith("/api/communities/import") && response.request().method() === "POST");
-    await owner.getByLabel("Or import an export file").setInputFiles({ name: "community.odc.gz", mimeType: "application/gzip", buffer: archive });
+    await owner.getByRole("dialog", { name: "Create a community", exact: true }).getByLabel("Or import an export file").setInputFiles({ name: "community.odc.gz", mimeType: "application/gzip", buffer: archive });
     const importedResponse = await importing;
     expect(importedResponse.status()).toBe(201);
     const imported: { communityId: string } = await importedResponse.json();
@@ -102,6 +102,8 @@ test("the owner migrates a complete archive with private image and binary files"
     expect(await readFile(filePath)).toEqual(binary);
     expect(await owner.evaluate(() => "archiveMustNotExecute" in window)).toBe(false);
     await expectNoA11yViolations(owner);
+    await expect(owner.getByRole("button", { name: "Send message", exact: true })).toBeInViewport({ ratio: 1 });
+    expect(await message.locator("time").evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(32);
     await owner.screenshot({ path: info.outputPath("complete-community-archive.png"), fullPage: true });
     expect(errors).toEqual([]);
   } finally { await owner.context().close(); }

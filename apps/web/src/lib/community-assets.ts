@@ -59,7 +59,12 @@ export const assetText = (content: string) => remapAssetTokens(content, new Map(
 
 /** Only references explicitly selected in this composer/editor become stored tokens. */
 export function encodeAssetShortcodes(content: string, assets: readonly AssetRef[]): string {
-  return outsideCodeAndLinks(content, (text) => assets.reduce((result, asset) => result.split(assetShortcode(asset)).join(assetToken(asset)), text));
+  const selected = new Map(assets.map((asset) => [assetShortcode(asset), asset]));
+  const shortcodes = new RegExp(`${ASSET_TOKEN_SOURCE}|:sticker/[a-z0-9_]{2,32}:|:[a-z0-9_]{2,32}:`, "g");
+  return outsideCodeAndLinks(content, (text) => text.replace(shortcodes, (value) => {
+    const asset = selected.get(value);
+    return asset ? assetToken(asset) : value;
+  }));
 }
 
 export function decodeAssetTokens(content: string): string {

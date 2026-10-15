@@ -16,6 +16,12 @@ describe("private community content tokens", () => {
     expect(assetText(code)).toBe(code);
     expect(encodeAssetShortcodes("https://example.com/:party_blob: `:party_blob:`", [asset])).toBe("https://example.com/:party_blob: `:party_blob:`");
   });
+  it("encodes repeated selections once without rewriting immutable tokens", () => {
+    expect(encodeAssetShortcodes(":party_blob: :party_blob:", [asset, asset])).toBe(`${token} ${token}`);
+    expect(encodeAssetShortcodes(token, [asset])).toBe(token);
+    const replacement = { ...asset, id: "019a1234-1234-7123-8123-123456789abd" };
+    expect(encodeAssetShortcodes(":party_blob:", [asset, replacement])).toBe(assetToken(replacement));
+  });
   it("only remaps declarations to matching fresh immutable references", () => {
     const target = { ...asset, id: "019a1234-1234-7123-8123-123456789abd" };
     expect(remapAssetTokens(token, new Map([[asset.id, target]]))).toBe(assetToken(target));
