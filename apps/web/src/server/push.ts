@@ -41,14 +41,18 @@ export function isAllowedEndpoint(endpoint: string): boolean {
 
 const subscriptionInput = z.object({
   endpoint: z.string().max(1024).refine(isAllowedEndpoint, "This push service isn't supported."),
-  keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }),
+  // P-256 public key (65 bytes) and auth secret (16 bytes), base64url as browsers send them.
+  keys: z.object({ p256dh: z.string().regex(/^[A-Za-z0-9_-]{86,88}={0,2}$/), auth: z.string().regex(/^[A-Za-z0-9_-]{21,24}={0,2}$/) }),
 });
 
 export async function savePushSubscription(userId: string, rawSubscription: unknown): Promise<void> {
   if (!pushEnabled) throw new AppError("not_found", "Push notifications aren't set up on this instance.");
   const sub = parse(subscriptionInput, rawSubscription);
-  const [{ total }] = await db.select({ total: count() }).from(pushSubscription).where(eq(pushSubscription.userId, userId));
-  enforceCap(total, MAX_SUBSCRIPTIONS_PER_USER, `Push notifications can be on for at most ${MAX_SUBSCRIPTIONS_PER_USER} devices.`);
+  const [existing] = await db.select({ id: pushSubscription.id }).from(pushSubscription).where(eq(pushSubscription.endpoint, sub.endpoint));
+  if (!existing) {
+    const [{ total }] = await db.select({ total: count() }).from(pushSubscription).where(eq(pushSubscription.userId, userId));
+    enforceCap(total, MAX_SUBSCRIPTIONS_PER_USER, `Push notifications can be on for at most ${MAX_SUBSCRIPTIONS_PER_USER} devices.`);
+  }
   // An endpoint belongs to one browser profile: re-subscribing moves it to whoever is signed in now.
   await db
     .insert(pushSubscription)
@@ -82,7 +86,8 @@ const sendWithWebPush: PushSender = async (sub, payload) => {
 
 /**
  * Pushes a mention to the person's devices if they can still read the channel and haven't muted the
- * community. Gone subscriptions (404/410) are removed. Errors are logged, never thrown.
+ * community (people who blocked the author were already left out by `syncMentions`). Gone (404/410)
+ * or unusable subscriptions are removed. Errors are logged, never thrown.
  */
 export async function pushMention(userId: string, channelId: string, messageId: string, send: PushSender = sendWithWebPush): Promise<number> {
   if (!pushEnabled && send === sendWithWebPush) return 0;
@@ -108,7 +113,11 @@ export async function pushMention(userId: string, channelId: string, messageId: 
       if (status === 404 || status === 410) gone.push(s.id);
       else if (status < 300) delivered += 1;
     } catch (error) {
-      console.error("[push] send failed", error);
+      // Network errors (ECONNRESET, ETIMEDOUT…) carry a code: keep the subscription and try next time.
+      // Without one, encryption failed before any request, i.e. the stored keys are unusable: drop it.
+      const network = typeof (error as { code?: unknown }).code === "string";
+      console.error(`[push] send failed${network ? "" : "; removing the subscription"}`, error);
+      if (!network) gone.push(s.id);
     }
   }));
   if (gone.length) await db.delete(pushSubscription).where(inArray(pushSubscription.id, gone));
