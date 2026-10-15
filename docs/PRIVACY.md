@@ -9,13 +9,18 @@ data controllers and must publish their own privacy notice; this document is the
 | --- | --- | --- | --- |
 | Community messages | TLS | Plaintext in Postgres (protect the disk) | **No** |
 | Passwords | TLS | Salted hash (Better Auth, scrypt) | n/a |
-| TOTP secrets, backup codes | TLS | Encrypted with `BETTER_AUTH_SECRET` | n/a |
+| TOTP secrets, backup codes | TLS | Encrypted with the configured Better Auth secret/keyring | n/a |
+| Direct messages | TLS and client encryption | Ciphertext in Postgres; browser crypto state in IndexedDB | **Yes**, between verified devices; see [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) |
 | Passkeys | TLS | Public keys only | n/a |
 
-**Nothing in openDiscord is end-to-end encrypted today.** The operator of an instance can technically
-read community messages. In the application, instance administrators can explicitly review a reported
-message only after providing a reason; access is audited. Global rights do not grant community membership. TLS and server-side storage protection are not E2EE, and the product must
-never claim otherwise. E2EE direct messages are planned with an audited protocol ([DECISIONS.md](DECISIONS.md) D10).
+Community messages are readable by the instance operator. In the application, instance administrators
+can explicitly review a reported community message only after providing a reason; access is audited.
+Global rights do not grant community membership. Direct messages use Matrix crypto between verified
+browser devices, with no plaintext fallback. A recipient can explicitly disclose a decrypted message
+when reporting it. Recovery copies are bounded to loaded, authenticated messages, not a complete history
+backup. Malicious operator-delivered JavaScript or a compromised device can access plaintext; the
+integration has not received an independent cryptographic audit. Voice remains encrypted in transit,
+not end-to-end. See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [DECISIONS.md](DECISIONS.md) D10.
 
 ## Data inventory
 
