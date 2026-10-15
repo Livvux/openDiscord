@@ -12,11 +12,11 @@ test.describe("voice channels", () => {
 
   test("two people talk; losing Connect removes someone from the call", async ({ browser }) => {
     const owner = await newUserPage(browser);
-    await owner.context().grantPermissions(["microphone"]);
+    await owner.context().grantPermissions(["microphone", "camera"]);
     await signUp(owner, "Vera Voice");
     await createCommunity(owner, "Talk Club");
     // Headless Chromium's fake microphone hangs on the first capture made inside the app; open it once up front.
-    await owner.evaluate(() => navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop())));
+    await owner.evaluate(() => navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then((s) => s.getTracks().forEach((t) => t.stop())));
     const invitePath = await createInviteLink(owner);
 
     await owner.getByRole("button", { name: "Create channel" }).click();
@@ -38,6 +38,19 @@ test.describe("voice channels", () => {
     await expect(member.getByText("You're connected.")).toBeVisible({ timeout: 15_000 });
     await expect(owner.getByRole("list", { name: "People in hangout" }).getByText("Walt Wave")).toBeVisible();
     await expectNoA11yViolations(member);
+
+    // Camera: the member sees the owner's video.
+    await owner.getByRole("button", { name: "Camera", exact: true }).click();
+    await expect(owner.getByRole("button", { name: "Stop camera" })).toBeVisible({ timeout: 15_000 });
+    await expect(member.getByRole("region", { name: "Video" }).getByText("Vera Voice")).toBeVisible({ timeout: 15_000 });
+    await owner.getByRole("button", { name: "Stop camera" }).click();
+    await expect(member.getByRole("region", { name: "Video" })).toHaveCount(0, { timeout: 15_000 });
+
+    // Screen sharing.
+    await owner.getByRole("button", { name: "Share screen" }).click();
+    await expect(member.getByRole("region", { name: "Video" }).getByText("Vera Voice · screen")).toBeVisible({ timeout: 15_000 });
+    await owner.getByRole("button", { name: "Stop sharing" }).click();
+    await expect(member.getByRole("region", { name: "Video" })).toHaveCount(0, { timeout: 15_000 });
 
     // The call survives navigating to a text channel, with controls in the sidebar.
     await member.getByRole("link", { name: "general" }).click();

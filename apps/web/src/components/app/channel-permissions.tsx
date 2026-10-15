@@ -15,6 +15,7 @@ const COLUMNS = {
     { bit: Permission.ViewChannels, label: "View" },
     { bit: Permission.Connect, label: "Connect" },
     { bit: Permission.Speak, label: "Speak" },
+    { bit: Permission.Video, label: "Video" },
   ],
 } as const;
 

@@ -17,17 +17,18 @@ export const Permission = {
   ViewChannels: 1 << 10,
   Connect: 1 << 11,
   Speak: 1 << 12,
+  Video: 1 << 13,
 } as const;
 
 export type PermissionName = keyof typeof Permission;
 
 export const ALL_PERMISSIONS = Object.values(Permission).reduce((a, b) => a | b, 0);
 export const DEFAULT_MEMBER_PERMISSIONS =
-  Permission.ViewChannels | Permission.SendMessages | Permission.CreateInvites | Permission.Connect | Permission.Speak;
+  Permission.ViewChannels | Permission.SendMessages | Permission.CreateInvites | Permission.Connect | Permission.Speak | Permission.Video;
 
 /** The permissions a channel can allow or deny per role. */
 export const CHANNEL_PERMISSIONS =
-  Permission.ViewChannels | Permission.SendMessages | Permission.ManageMessages | Permission.Connect | Permission.Speak;
+  Permission.ViewChannels | Permission.SendMessages | Permission.ManageMessages | Permission.Connect | Permission.Speak | Permission.Video;
 
 /** Human-readable labels for the role editor, in display order. */
 export const PERMISSION_LABELS: Record<PermissionName, string> = {
@@ -44,6 +45,7 @@ export const PERMISSION_LABELS: Record<PermissionName, string> = {
   ViewChannels: "View channels",
   Connect: "Join voice channels",
   Speak: "Speak in voice channels",
+  Video: "Camera and screen sharing in voice channels",
 };
 
 export interface MemberAuthority {

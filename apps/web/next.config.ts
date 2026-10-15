@@ -8,8 +8,8 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-  // Microphone for voice channels on this origin only; never for embedded third parties.
-  { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=(), browsing-topics=()" },
+  // Microphone, camera and screen capture for voice channels on this origin only; never for embedded third parties.
+  { key: "Permissions-Policy", value: "camera=(self), microphone=(self), display-capture=(self), geolocation=(), browsing-topics=()" },
 ];
 
 const nextConfig: NextConfig = {
