@@ -21,7 +21,7 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP and merged releases #12–#29 and #31–#36 in production
+`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#38 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
