@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeMentions, encodeMentions, mentionQuery, splitMentions } from "@/lib/mentions";
 import { parseMentionIds } from "@/server/mentions";
+import { shortFilename } from "@/lib/filename";
 
 const ann = { id: "u1", name: "Ann" };
 const annLee = { id: "u2", name: "Ann Lee" };
@@ -39,5 +40,15 @@ describe("mention tokens", () => {
     expect(mentionQuery("@", 1)).toEqual({ query: "", start: 0 });
     expect(mentionQuery("mail@example", 12)).toBeNull();
     expect(mentionQuery("@ann done", 9)).toBeNull();
+  });
+});
+
+describe("shortFilename", () => {
+  it("keeps the extension visible when shortening", () => {
+    const long = `invoice${"-".repeat(100)}.pdf.exe`;
+    expect(shortFilename(long)).toMatch(/…\.exe$/);
+    expect(shortFilename(long).length).toBeLessThanOrEqual(48);
+    expect(shortFilename("short.txt")).toBe("short.txt");
+    expect(shortFilename("x".repeat(60))).toHaveLength(48);
   });
 });

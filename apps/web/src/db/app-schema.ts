@@ -303,6 +303,8 @@ export const attachment = pgTable(
     linkedAt: timestamp("linked_at", { withTimezone: true }),
     key: text("key").notNull().unique(),
     contentType: text("content_type").notNull(),
+    /** Set for non-image files (always served as downloads); null for re-encoded images. */
+    filename: text("filename"),
     size: integer("size").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),

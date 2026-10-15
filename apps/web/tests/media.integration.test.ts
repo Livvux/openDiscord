@@ -4,10 +4,10 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { attachment } from "@/db/schema";
-import { MAX_ATTACHMENT_BYTES } from "@/lib/limits";
+import { MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES } from "@/lib/limits";
 import { exportUserData } from "@/server/account";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
-import { mediaEnabled, processImage, readAttachment, readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
+import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, processImage, readAttachment, readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
 import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
 import { testUsers } from "./helpers";
 
@@ -45,7 +45,7 @@ describe("image processing", () => {
   }, 30_000); // generating 100 noise frames is slow on CI runners
 
   it("stops reading a body that is longer than announced", async () => {
-    await expect(readLimited(new Blob([new Uint8Array(2048)]).stream(), 1024)).rejects.toThrow(/at most/);
+    await expect(readLimited(new Blob([new Uint8Array(2048)]).stream(), 1024)).rejects.toThrow(/larger than it announced/);
     expect((await readLimited(new Blob([new Uint8Array(1024)]).stream(), 1024)).byteLength).toBe(1024);
   });
 
@@ -56,12 +56,27 @@ describe("image processing", () => {
   });
 });
 
-describe.skipIf(!mediaEnabled)("attachments in R2", () => {
+describe("file names", () => {
+  it("keeps only a safe display name", () => {
+    expect(cleanFilename(encodeURIComponent("report (final).pdf"))).toBe("report (final).pdf");
+    expect(cleanFilename(encodeURIComponent("C:\\Users\\me\\secret.txt"))).toBe("secret.txt");
+    expect(cleanFilename(encodeURIComponent("a\u202egnp.exe"))).toBe("agnp.exe");
+    expect(cleanFilename(encodeURIComponent(".."))).toBe("file");
+    expect(cleanFilename("%E0%A4%A")).toBe("file");
+    expect(cleanFilename(null)).toBe("file");
+    // The end is kept, so a long name can't push the real extension out.
+    expect(cleanFilename(encodeURIComponent(`${"x".repeat(300)}.exe`))).toMatch(/^x{124}\.exe$/);
+    expect(cleanFilename(encodeURIComponent("invoice.pdf\u2800\u3000.exe"))).toBe("invoice.pdf .exe");
+  });
+});
+
+describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
   const fixtures = testUsers();
   let author: string;
   let member: string;
   let outsider: string;
   let channelId: string;
+  let communityId: string;
   const ids: string[] = [];
 
   beforeAll(async () => {
@@ -70,6 +85,7 @@ describe.skipIf(!mediaEnabled)("attachments in R2", () => {
     outsider = await fixtures.create("Outsider");
     const c = await createCommunity(author, "Media test");
     channelId = c.channelId;
+    communityId = c.communityId;
     await acceptInvite(member, await createInvite(author, c.communityId, { maxUses: null, expiresInHours: null }));
   });
   afterAll(async () => {
@@ -87,8 +103,8 @@ describe.skipIf(!mediaEnabled)("attachments in R2", () => {
   it("validates type, size and permission before reading the body", async () => {
     let read = false;
     const body = async () => { read = true; return new Uint8Array(1); };
-    await expect(uploadAttachment(author, channelId, "image/svg+xml", 10, body)).rejects.toThrow(/PNG, JPEG/);
-    await expect(uploadAttachment(author, channelId, "image/png", MAX_ATTACHMENT_BYTES + 1, body)).rejects.toThrow(/at most/);
+    await expect(uploadAttachment(author, channelId, "image/png", MAX_ATTACHMENT_BYTES + 1, body)).rejects.toThrow(/Images can be at most/);
+    await expect(uploadAttachment(author, channelId, "application/pdf", MAX_FILE_BYTES + 1, body)).rejects.toThrow(/Files can be at most/);
     await expect(uploadAttachment(outsider, channelId, "image/png", 10, body)).rejects.toThrow(/not found/);
     expect(read).toBe(false);
   });
@@ -122,6 +138,32 @@ describe.skipIf(!mediaEnabled)("attachments in R2", () => {
     // Removed images are deleted from storage right away, not after the unsent-upload grace period.
     await sweepAttachments();
     expect(await db.select().from(attachment).where(eq(attachment.id, view.id))).toHaveLength(0);
+  });
+
+  it("stores other files unchanged and serves them only as downloads", async () => {
+    const html = new TextEncoder().encode("<html><script>alert(document.cookie)</script></html>");
+    const view = await uploadAttachment(author, channelId, "text/html", html.byteLength,
+      (limit) => readLimited(new Blob([html]).stream(), limit), encodeURIComponent("../../evil\u202e.html"));
+    ids.push(view.id);
+    expect(view).toMatchObject({ filename: "evil.html", width: 0, height: 0, size: html.byteLength });
+    await sendMessage(author, channelId, "notes", [view.id]);
+    const res = await readAttachment(member, view.id);
+    // Never rendered on this origin: generic type, forced download, sandboxed, no sniffing.
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="download"; filename*=UTF-8''evil.html`);
+    expect(res.headers.get("content-security-policy")).toContain("sandbox");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(html);
+    await expect(readAttachment(outsider, view.id)).rejects.toThrow(/not found/);
+  });
+
+  it("enforces the daily upload quota atomically", async () => {
+    const heavy = await fixtures.create("Heavy uploader");
+    await acceptInvite(heavy, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));
+    // Pretend most of today's quota is already used.
+    await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `test/${heavy}`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
+    const small = new Uint8Array(8);
+    await expect(uploadAttachment(heavy, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/per day/);
   });
 
   it("requires text or at least one image", async () => {

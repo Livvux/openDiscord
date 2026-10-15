@@ -5,10 +5,11 @@ import { attachment, auditLog, channel, community, member, message, passkey, ses
 import { listBlocked } from "./blocks";
 import { notFound } from "./errors";
 
-/** 2: messages carry their images. 3: blocked people. */
-export const EXPORT_FORMAT_VERSION = 3;
+/** 2: messages carry their images. 3: blocked people. 4: file attachments (`images[].filename`). */
+export const EXPORT_FORMAT_VERSION = 4;
 
-export interface ExportedImage { id: string; url: string; contentType: string; size: number; width: number; height: number; createdAt: string }
+/** An image (filename null) or another file. */
+export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
 
 export interface UserExport {
   format: "opendiscord.user-export";
@@ -53,12 +54,12 @@ export async function exportUserData(userId: string): Promise<UserExport> {
     listBlocked(userId),
   ]);
   const images = messages.length === 0 ? [] : await db.select({
-    id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, size: attachment.size,
+    id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, filename: attachment.filename, size: attachment.size,
     width: attachment.width, height: attachment.height, createdAt: attachment.createdAt,
   }).from(attachment).where(inArray(attachment.messageId, messages.map((m) => m.id))).orderBy(asc(attachment.id));
   const byMessage = Map.groupBy(images, (i) => i.messageId!);
   const imagesOf = (messageId: string): ExportedImage[] => (byMessage.get(messageId) ?? [])
-    .map(({ id, contentType, size, width, height, createdAt }) => ({ id, contentType, size, width, height, url: `/api/attachments/${id}`, createdAt: createdAt.toISOString() }));
+    .map(({ id, contentType, filename, size, width, height, createdAt }) => ({ id, contentType, filename, size, width, height, url: `/api/attachments/${id}`, createdAt: createdAt.toISOString() }));
 
   return {
     format: "opendiscord.user-export",

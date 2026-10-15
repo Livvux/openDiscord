@@ -1,10 +1,11 @@
 "use client";
 
-import { ImagePlusIcon, LoaderCircleIcon, SendHorizontalIcon, XIcon } from "lucide-react";
+import { FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { shortFilename } from "@/lib/filename";
 import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
 interface ComposerProps {
@@ -25,15 +26,22 @@ interface ComposerProps {
 interface Upload {
   localId: string;
   name: string;
-  preview: string;
+  /** Object URL for images; null for other files. */
+  preview: string | null;
   id?: string;
   error?: string;
 }
 
 const MAX_MB = MAX_ATTACHMENT_BYTES / 1024 / 1024;
+const MAX_FILE_MB = MAX_FILE_BYTES / 1024 / 1024;
+const isImage = (file: File) => (ACCEPTED_IMAGE_TYPES as readonly string[]).includes(file.type);
 
 async function uploadFile(channelId: string, file: File): Promise<string> {
-  const res = await fetch(`/api/channels/${channelId}/attachments`, { method: "POST", body: file, headers: { "Content-Type": file.type } });
+  const res = await fetch(`/api/channels/${channelId}/attachments`, {
+    method: "POST",
+    body: file,
+    headers: { "Content-Type": file.type || "application/octet-stream", "X-Filename": encodeURIComponent(file.name) },
+  });
   const body = (await res.json().catch(() => null)) as { id?: string; error?: string } | null;
   if (!res.ok || !body?.id) throw new Error(body?.error ?? "Upload failed.");
   return body.id;
@@ -85,7 +93,7 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
   function remove(localId: string) {
     setUploads((list) => {
       const gone = list.find((u) => u.localId === localId);
-      if (gone) {
+      if (gone?.preview) {
         URL.revokeObjectURL(gone.preview);
         previews.current.delete(gone.preview);
       }
@@ -97,11 +105,15 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
     const room = MAX_ATTACHMENTS_PER_MESSAGE - uploads.length;
     for (const file of files.slice(0, Math.max(room, 0))) {
       const localId = crypto.randomUUID();
-      const preview = URL.createObjectURL(file);
-      previews.current.add(preview);
-      const accepted = (ACCEPTED_IMAGE_TYPES as readonly string[]).includes(file.type);
+      const image = isImage(file);
+      const preview = image ? URL.createObjectURL(file) : null;
+      if (preview) previews.current.add(preview);
       // Mirrors the server checks for fast feedback; the server re-validates everything.
-      const error = !accepted ? "Use a PNG, JPEG, WebP or GIF image." : file.size > MAX_ATTACHMENT_BYTES ? `Images can be at most ${MAX_MB} MB.` : undefined;
+      const error =
+        file.size === 0 ? "The file is empty."
+        : image && file.size > MAX_ATTACHMENT_BYTES ? `Images can be at most ${MAX_MB} MB.`
+        : !image && file.size > MAX_FILE_BYTES ? `Files can be at most ${MAX_FILE_MB} MB.`
+        : undefined;
       setUploads((list) => [...list, { localId, name: file.name, preview, error }]);
       if (!error) {
         uploadFile(channelId, file).then(
@@ -161,7 +173,7 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
     const sent = await onSend(content, ready, mentions);
     setSending(false);
     if (sent) {
-      uploads.forEach((u) => URL.revokeObjectURL(u.preview));
+      uploads.forEach((u) => u.preview && URL.revokeObjectURL(u.preview));
       setUploads([]);
     }
   }
@@ -211,10 +223,17 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
         </ul>
       )}
       {uploads.length > 0 && (
-        <ul aria-label="Attached images" className="flex flex-wrap gap-2 px-3 pt-3">
+        <ul aria-label="Attachments" className="flex flex-wrap gap-2 px-3 pt-3">
           {uploads.map((u) => (
             <li key={u.localId} className={`relative size-20 overflow-hidden rounded-md ring-1 ${u.error ? "ring-destructive" : "ring-white/15"}`}>
-              <Image src={u.preview} alt={u.name} fill unoptimized className={`object-cover ${u.id ? "" : "opacity-50"}`} />
+              {u.preview ? (
+                <Image src={u.preview} alt={u.name} fill unoptimized className={`object-cover ${u.id ? "" : "opacity-50"}`} />
+              ) : (
+                <span className={`flex h-full flex-col items-center justify-center gap-1 p-1 text-center ${u.id ? "" : "opacity-50"}`}>
+                  <FileIcon aria-hidden className="size-6 text-zinc-300" />
+                  <span className="text-[10px] break-all text-zinc-300">{shortFilename(u.name, 24)}</span>
+                </span>
+              )}
               {!u.id && !u.error && (
                 <span className="absolute inset-0 grid place-items-center" role="status" aria-label={`Uploading ${u.name}`}>
                   <LoaderCircleIcon className="size-5 animate-spin text-zinc-100 motion-reduce:animate-none" aria-hidden />
@@ -245,7 +264,6 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
             <input
               ref={fileInput}
               type="file"
-              accept={ACCEPTED_IMAGE_TYPES.join(",")}
               multiple
               hidden
               onChange={(e) => {
@@ -258,12 +276,12 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
               variant="ghost"
               size="icon"
               className="mb-1 text-zinc-300"
-              aria-label={`Attach images (up to ${MAX_ATTACHMENTS_PER_MESSAGE}, ${MAX_MB} MB each)`}
-              title={`Attach images (up to ${MAX_ATTACHMENTS_PER_MESSAGE}, ${MAX_MB} MB each)`}
+              aria-label={`Attach files (up to ${MAX_ATTACHMENTS_PER_MESSAGE}; images ${MAX_MB} MB, other files ${MAX_FILE_MB} MB)`}
+              title={`Attach files (up to ${MAX_ATTACHMENTS_PER_MESSAGE}; images ${MAX_MB} MB, other files ${MAX_FILE_MB} MB)`}
               disabled={uploads.length >= MAX_ATTACHMENTS_PER_MESSAGE}
               onClick={() => fileInput.current?.click()}
             >
-              <ImagePlusIcon />
+              <PaperclipIcon />
             </Button>
           </>
         )}

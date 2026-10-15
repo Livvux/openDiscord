@@ -3,21 +3,36 @@
 // metadata is dropped. Objects are only ever served through an access-checked route.
 import { randomUUID } from "node:crypto";
 import { AwsClient } from "aws4fetch";
-import { and, count, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNotNull, isNull, lt, or, sql, sum } from "drizzle-orm";
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
 import { db } from "@/db";
 import { attachment, message } from "@/db/schema";
-import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "@/lib/limits";
+import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES } from "@/lib/limits";
 import { requireChannel, type Db } from "./access";
 import { AppError, invalid, notFound } from "./errors";
 import { consume } from "./limits";
 import { Permission } from "./permissions";
 import { parse, uuid } from "./validation";
 
-export interface AttachmentView { id: string; width: number; height: number }
+export interface AttachmentView {
+  id: string;
+  width: number;
+  height: number;
+  /** Non-image files: the original name (shown, used for the download); null for images. */
+  filename: string | null;
+  size: number;
+}
 
 const UPLOAD_LIMIT = { max: 10, windowMs: 60_000 };
+/** Bytes one account may upload per day, so files can't fill the bucket. */
+export const DAILY_UPLOAD_BYTES = 500 * 1024 * 1024;
+/**
+ * Uploads are buffered in memory (up to 25 MB each), so a process only works on a few at once.
+ * shortcut: per process; stream to storage instead of buffering if uploads become the bottleneck.
+ */
+const MAX_CONCURRENT_UPLOADS = 4;
+let activeUploads = 0;
 /** Uploaded but not yet sent; bounds storage one account can occupy without posting. */
 const MAX_UNLINKED_PER_USER = 20;
 const MAX_DIMENSION = 4096;
@@ -75,6 +90,8 @@ export async function processImage(input: Uint8Array): Promise<{ data: Buffer; w
   }
 }
 
+const mb = (bytes: number) => `${bytes / 1024 / 1024} MB`;
+
 /** Reads at most `limit` bytes; a body longer than it announced is cut off instead of buffered. */
 export async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array> {
   if (!body) throw invalid("The upload is empty.");
@@ -86,44 +103,119 @@ export async function readLimited(body: ReadableStream<Uint8Array> | null, limit
     size += chunk.byteLength;
     if (size > limit) {
       await reader.cancel();
-      throw invalid(`Images can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+      throw invalid(`The upload is larger than it announced.`);
     }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 }
 
-export async function uploadAttachment(userId: string, rawChannelId: unknown, contentType: string | null, contentLength: number, body: (limit: number) => Promise<Uint8Array>): Promise<AttachmentView> {
-  const { client, url } = requireStorage();
+/**
+ * A safe display/download name: no paths, control or bidi characters, at most 128 characters.
+ * The name is only ever shown as text and sent in an RFC 5987 `filename*`, never used on disk.
+ */
+export function cleanFilename(raw: string | null): string {
+  let name = "file";
+  try {
+    name = decodeURIComponent(raw ?? "") || "file";
+  } catch {
+    // Malformed encoding: fall back to the generic name.
+  }
+  const cleaned = name
+    .normalize("NFKC")
+    .split(/[\\/]/)
+    .pop()!
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    // Blank-looking characters (braille blank, ideographic space…) would hide a real extension.
+    .replace(/[\p{Z}\u2800\u3164\uFFA0]+/gu, " ")
+    .trim()
+    .slice(-128);
+  return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned : "file";
+}
+
+/** `encodeURIComponent` plus the characters RFC 5987 doesn't allow unencoded. */
+const rfc5987 = (value: string) => encodeURIComponent(value).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
+const isImageType = (type: string) => (ACCEPTED_IMAGE_TYPES as readonly string[]).includes(type);
+
+/**
+ * Stores an upload for a later message. Images are decoded and re-encoded; anything else is kept as is
+ * and only ever served as a download (see `readAttachment`).
+ */
+export async function uploadAttachment(
+  userId: string,
+  rawChannelId: unknown,
+  contentType: string | null,
+  contentLength: number,
+  body: (limit: number) => Promise<Uint8Array>,
+  rawFilename: string | null = null,
+): Promise<AttachmentView> {
+  requireStorage();
   const channelId = parse(uuid, rawChannelId);
   consume(`upload:${userId}`, UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs);
-  if (!contentType || !(ACCEPTED_IMAGE_TYPES as readonly string[]).includes(contentType.split(";")[0].trim())) {
-    throw invalid("Use a PNG, JPEG, WebP or GIF image.");
-  }
+  const type = (contentType ?? "").split(";")[0].trim().toLowerCase();
+  const image = isImageType(type);
+  const limit = image ? MAX_ATTACHMENT_BYTES : MAX_FILE_BYTES;
   // Checked before reading the body, so oversized uploads are never buffered.
   if (!Number.isFinite(contentLength) || contentLength <= 0) throw invalid("The upload needs a Content-Length.");
-  if (contentLength > MAX_ATTACHMENT_BYTES) throw invalid(`Images can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+  if (contentLength > limit) throw invalid(`${image ? "Images" : "Files"} can be at most ${mb(limit)}.`);
   await requireChannel(db, channelId, userId, Permission.SendMessages);
-  const [{ unlinked }] = await db.select({ unlinked: count() }).from(attachment)
-    .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
-  if (unlinked >= MAX_UNLINKED_PER_USER) throw new AppError("rate_limited", "Send or remove your pending images first.");
 
-  const image = await processImage(await body(contentLength));
-  const key = `attachments/${randomUUID()}.webp`;
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    return await storeUpload(userId, channelId, image, rawFilename, await body(contentLength));
+  } finally {
+    activeUploads -= 1;
+  }
+}
+
+async function storeUpload(userId: string, channelId: string, image: boolean, rawFilename: string | null, raw: Uint8Array): Promise<AttachmentView> {
+  const { client, url } = requireStorage();
+  let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
+  if (image) {
+    const processed = await processImage(raw);
+    stored = { data: processed.data, contentType: "image/webp", width: processed.width, height: processed.height, filename: null, ext: "webp" };
+  } else {
+    if (raw.byteLength === 0) throw invalid("The file is empty.");
+    // The stored type is fixed: what the browser claimed is never trusted for serving.
+    stored = { data: raw, contentType: "application/octet-stream", width: 0, height: 0, filename: cleanFilename(rawFilename), ext: "bin" };
+  }
+  const key = `attachments/${randomUUID()}.${stored.ext}`;
   // Row first: if the upload fails afterwards, the unlinked row lets the sweeper clean up.
-  const [row] = await db.insert(attachment).values({
-    channelId, uploaderId: userId, key, contentType: "image/webp", size: image.data.byteLength, width: image.width, height: image.height,
-  }).returning({ id: attachment.id });
-  const res = await client.fetch(url(key), { method: "PUT", body: new Uint8Array(image.data), headers: { "Content-Type": "image/webp" } });
+  // Checks and insert are serialised per person, so parallel uploads can't slip past the caps.
+  const row = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
+    const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
+      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
+    if (unlinked >= MAX_UNLINKED_PER_USER) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
+    const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
+      .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
+    if ((today ?? 0) + stored.data.byteLength > DAILY_UPLOAD_BYTES) {
+      throw new AppError("rate_limited", `You can upload at most ${mb(DAILY_UPLOAD_BYTES)} per day.`);
+    }
+    const [created] = await tx.insert(attachment).values({
+      channelId, uploaderId: userId, key, contentType: stored.contentType, filename: stored.filename,
+      size: stored.data.byteLength, width: stored.width, height: stored.height,
+    }).returning({ id: attachment.id });
+    return created;
+  });
+  const res = await client.fetch(url(key), {
+    method: "PUT",
+    // No copy: the buffer is ours (from the request or sharp), never a SharedArrayBuffer.
+    body: stored.data as Uint8Array<ArrayBuffer>,
+    // Explicit length: some S3 implementations (MinIO, Garage) refuse chunked uploads.
+    headers: { "Content-Type": stored.contentType, "Content-Length": String(stored.data.byteLength) },
+  });
   if (!res.ok) {
     await db.delete(attachment).where(eq(attachment.id, row.id));
     console.error("[media] upload failed", res.status, await res.text().catch(() => ""));
-    throw new AppError("conflict", "The image couldn't be stored. Try again.");
+    throw new AppError("conflict", "The file couldn't be stored. Try again.");
   }
-  return { id: row.id, width: image.width, height: image.height };
+  return { id: row.id, width: stored.width, height: stored.height, filename: stored.filename, size: stored.data.byteLength };
 }
 
-export const attachmentIds = z.array(uuid).max(MAX_ATTACHMENTS_PER_MESSAGE, `Attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} images.`);
+export const attachmentIds = z.array(uuid).max(MAX_ATTACHMENTS_PER_MESSAGE, `Attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files.`);
 
 /** Links the sender's own unsent uploads from the same channel to a new message. */
 export async function linkAttachments(tx: Db, userId: string, channelId: string, messageId: string, ids: string[]) {
@@ -131,13 +223,16 @@ export async function linkAttachments(tx: Db, userId: string, channelId: string,
   const linked = await tx.update(attachment).set({ messageId, linkedAt: new Date() })
     .where(and(inArray(attachment.id, ids), eq(attachment.uploaderId, userId), eq(attachment.channelId, channelId), isNull(attachment.messageId), isNull(attachment.linkedAt)))
     .returning({ id: attachment.id });
-  if (linked.length !== new Set(ids).size) throw invalid("An image is no longer available. Remove it and attach it again.");
+  if (linked.length !== new Set(ids).size) throw invalid("An attachment is no longer available. Remove it and attach it again.");
 }
 
 export async function attachmentsFor(messageIds: string[]): Promise<Map<string, AttachmentView[]>> {
   const byMessage = new Map<string, AttachmentView[]>();
   if (messageIds.length === 0) return byMessage;
-  const rows = await db.select({ id: attachment.id, messageId: attachment.messageId, width: attachment.width, height: attachment.height })
+  const rows = await db.select({
+    id: attachment.id, messageId: attachment.messageId, width: attachment.width, height: attachment.height,
+    filename: attachment.filename, size: attachment.size,
+  })
     .from(attachment).where(inArray(attachment.messageId, messageIds)).orderBy(attachment.id);
   for (const { messageId, ...view } of rows) byMessage.set(messageId!, [...(byMessage.get(messageId!) ?? []), view]);
   return byMessage;
@@ -147,7 +242,7 @@ export async function attachmentsFor(messageIds: string[]): Promise<Map<string, 
 export async function readAttachment(userId: string, rawId: unknown): Promise<Response> {
   const { client, url } = requireStorage();
   const id = parse(uuid, rawId);
-  const [row] = await db.select({ key: attachment.key, contentType: attachment.contentType, channelId: message.channelId })
+  const [row] = await db.select({ key: attachment.key, contentType: attachment.contentType, filename: attachment.filename, channelId: message.channelId })
     .from(attachment).innerJoin(message, eq(message.id, attachment.messageId)).where(eq(attachment.id, id));
   if (!row) throw notFound("Attachment not found.");
   await requireChannel(db, row.channelId, userId);
@@ -162,7 +257,10 @@ export async function readAttachment(userId: string, rawId: unknown): Promise<Re
       ...(res.headers.has("Content-Length") && { "Content-Length": res.headers.get("Content-Length")! }),
       // Short, so someone removed from the channel stops seeing cached copies soon.
       "Cache-Control": "private, max-age=300",
-      "Content-Disposition": `inline; filename="${id}.webp"`,
+      // Files are always downloads: an uploaded HTML or SVG file must never render on this origin.
+      "Content-Disposition": row.filename
+        ? `attachment; filename="download"; filename*=UTF-8''${rfc5987(row.filename)}`
+        : `inline; filename="${id}.webp"`,
       "Content-Security-Policy": "default-src 'none'; sandbox",
       "X-Content-Type-Options": "nosniff",
       "Cross-Origin-Resource-Policy": "same-origin",
@@ -174,7 +272,15 @@ export async function readAttachment(userId: string, rawId: unknown): Promise<Re
  * Deletes objects whose message, channel, community or author is gone (right away), and uploads that
  * were never sent (after an hour). They are unreachable from the moment they are unlinked.
  */
-export async function sweepAttachments(now = Date.now()): Promise<number> {
+let sweeping: Promise<number> | null = null;
+
+export function sweepAttachments(now = Date.now()): Promise<number> {
+  // Single flight: uploads trigger sweeps too, and overlapping runs would delete the same objects twice.
+  sweeping ??= sweep(now).finally(() => (sweeping = null));
+  return sweeping;
+}
+
+async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
   const { client, url } = storage;
   const stale = await db.select({ id: attachment.id, key: attachment.key }).from(attachment)
