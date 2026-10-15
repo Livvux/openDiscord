@@ -55,6 +55,18 @@ describe("private encrypted conversations", () => {
     const next = await handleCryptoRequest(authA(), { ...request, requestId: randomUUID() });
     expect(JSON.stringify(next)).not.toContain("signed_curve25519:one");
   });
+  it("separates fallback and one-time prekey IDs without resurrecting consumed keys", async () => {
+    const oneTime = { key: "e".repeat(43), signatures: {} };
+    const fallback = { key: "f".repeat(43), signatures: {}, fallback: true };
+    const body = { one_time_keys: { "signed_curve25519:shared": oneTime }, fallback_keys: { "signed_curve25519:shared": fallback } };
+    await handleCryptoRequest(authB(), { kind: "upload", body });
+    const request = () => ({ kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(bob)]: { [bDevice]: "signed_curve25519" } } } });
+    expect(await handleCryptoRequest(authA(), request())).toEqual({ failures: {}, one_time_keys: { [matrix(bob)]: { [bDevice]: { "signed_curve25519:shared": oneTime } } } });
+    expect((await handleCryptoRequest(authB(), { kind: "sync" })).unusedFallbackKeys).toEqual(["signed_curve25519"]);
+    await handleCryptoRequest(authB(), { kind: "upload", body });
+    expect(await handleCryptoRequest(authA(), request())).toEqual({ failures: {}, one_time_keys: { [matrix(bob)]: { [bDevice]: { "signed_curve25519:shared": fallback } } } });
+    await expect(handleCryptoRequest(authB(), { kind: "upload", body: { one_time_keys: { "signed_curve25519:shared": fallback } } })).rejects.toThrow("immutable");
+  });
   it("accepts ciphertext only, deduplicates sends and isolates timeline access", async () => {
     await expect(appendDirectMessage(authA(), conversation, { transactionId: randomUUID(), content: { body: "plaintext" } })).rejects.toThrow();
     const transactionId = randomUUID();
@@ -117,6 +129,7 @@ describe("private encrypted conversations", () => {
   });
   it("blocking stops delivery; revocation is terminal; deleting accounts cascades private stores", async () => {
     await blockUser(bob, alice);
+    expect((await handleCryptoRequest(authB(), { kind: "sync" })).events).toEqual([]);
     await expect(appendDirectMessage(authA(), conversation, { transactionId: randomUUID(), content: envelope })).rejects.toThrow();
     await revokeDmDevice(alice, aDevice);
     await expect(handleCryptoRequest(authA(), { kind: "sync" })).rejects.toThrow();

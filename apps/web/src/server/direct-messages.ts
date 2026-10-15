@@ -206,6 +206,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     const own = await deviceFor(tx, auth), ownUser = matrixUser(auth.userId);
     if (data.kind === "sync") {
+      const blocks = await tx.select().from(userBlock).where(or(eq(userBlock.blockerId, auth.userId), eq(userBlock.blockedId, auth.userId)));
+      const blockedPeers = blocks.map((row) => row.blockerId === auth.userId ? row.blockedId : row.blockerId);
+      if (blockedPeers.length) await tx.delete(dmMailbox).where(and(eq(dmMailbox.deviceId, own.id), inArray(dmMailbox.senderId, blockedPeers)));
       const events = await tx.select().from(dmMailbox).where(eq(dmMailbox.deviceId, own.id)).orderBy(asc(dmMailbox.id)).limit(100);
       const keys = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, own.id), or(eq(dmKey.fallback, true), eq(dmKey.used, false))));
       return { cursor: String(events.at(-1)?.id ?? 0), events: events.map((e) => e.event), oneTimeKeys: { signed_curve25519: keys.filter((k) => !k.fallback && !k.used).length }, unusedFallbackKeys: keys.some((k) => k.fallback && !k.used) ? ["signed_curve25519"] : [] };
@@ -229,7 +232,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
         for (const [keyId, raw] of entries) {
           if (!/^signed_curve25519:[A-Za-z0-9_-]{1,100}$/.test(keyId)) throw invalid("Unsupported prekey.");
           const content = parse(keyBody, raw);
-          const [existing] = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, own.id), eq(dmKey.keyId, keyId)));
+          const [existing] = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, own.id), eq(dmKey.keyId, keyId), eq(dmKey.fallback, fallback)));
           if (existing && !same(existing.content, content)) throw conflict("Prekeys are immutable.");
           if (!existing) {
             if (fallback) await tx.delete(dmKey).where(and(eq(dmKey.deviceId, own.id), eq(dmKey.fallback, true)));
@@ -316,7 +319,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
           const [key] = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, id), or(eq(dmKey.fallback, true), eq(dmKey.used, false)))).orderBy(asc(dmKey.fallback), asc(dmKey.keyId)).limit(1);
           if (key) {
             response[id] = { [key.keyId]: key.content };
-            await tx.update(dmKey).set({ used: true }).where(and(eq(dmKey.deviceId, id), eq(dmKey.keyId, key.keyId)));
+            await tx.update(dmKey).set({ used: true }).where(and(eq(dmKey.deviceId, id), eq(dmKey.keyId, key.keyId), eq(dmKey.fallback, key.fallback)));
           }
         }
         one_time_keys[matrixId] = response;
@@ -332,12 +335,14 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
         for (const [id, rawContent] of Object.entries(record(rawDevices))) {
           const content = parseDeviceEvent(data.eventType, rawContent);
+          const largeOwnTransfer = Buffer.byteLength(JSON.stringify(content)) > 8192;
+          if (largeOwnTransfer && (target !== auth.userId || data.eventType !== "m.room.encrypted")) throw invalid("Device event exceeds the size limit.");
           if (data.eventType === "m.room.encrypted") {
             if (content.algorithm !== "m.olm.v1.curve25519-aes-sha2" || content.sender_key !== record(own.keys?.keys)[`curve25519:${own.id}`]) throw invalid("Invalid encrypted device event.");
           } else if ((content.from_device !== undefined && content.from_device !== own.id) || (content.requesting_device_id !== undefined && content.requesting_device_id !== own.id)) throw invalid("Verification sender mismatch.");
           for (const device of devices.filter((d) => d.id === id || id === "*")) {
             if (++deliveries > 40) throw invalid("Too many device deliveries.");
-            if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= 2000) throw invalid("The recipient's device mailbox is full.");
+            if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= (largeOwnTransfer ? 16 : 256)) throw invalid("The recipient's device mailbox is full.");
             await tx.insert(dmMailbox).values({ deviceId: device.id, senderId: auth.userId, event: { sender: ownUser, type: data.eventType, content } });
           }
         }

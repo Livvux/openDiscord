@@ -35,7 +35,7 @@ export const dmKey = pgTable("dm_key", {
   content: jsonb("content").$type<Record<string, unknown>>().notNull(),
   fallback: boolean("fallback").notNull().default(false),
   used: boolean("used").notNull().default(false),
-}, (t) => [primaryKey({ columns: [t.deviceId, t.keyId] })]);
+}, (t) => [primaryKey({ columns: [t.deviceId, t.keyId, t.fallback] })]);
 
 export const dmSignature = pgTable("dm_signature", {
   signerId: text("signer_id").notNull().references(() => user.id, { onDelete: "cascade" }),
