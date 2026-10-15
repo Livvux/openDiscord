@@ -29,6 +29,13 @@
       "when": 1792056351767,
       "tag": "0003_early_inhumans",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792058589588,
+      "tag": "0004_rapid_manta",
+      "breakpoints": true
     }
   ]
 }

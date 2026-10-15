@@ -32,8 +32,7 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |
 | Instance administrators, suspensions and settings | Instance governance and abuse prevention | Instance administrators; users see their own access restrictions | Until revoked; suspension ends when lifted or the account is deleted |
 | Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Retained until an operator retention process removes them; reporter/resolver links are removed on account deletion |
-| Instance audit log | Administrative accountability | Instance administrators after 2FA confirmation | Retained independently of community deletion; no automated retention job yet. Stores reasons and target IDs, never copies message bodies |
-| Admin verification: session and confirmation time | Require recent 2FA for global administration | Server only | Valid for 15 minutes; removed with the session |
+| Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; no automated retention job yet. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
 There are no analytics, tracking pixels, advertising identifiers, third-party fonts or third-party
@@ -57,7 +56,7 @@ scripts. The Content Security Policy blocks requests to other origins.
 ## Search engines and public access
 
 Private areas (`/app`, `/invite`, `/api`) are excluded via `robots.txt` and `noindex`. Community-content APIs
-require membership. Instance administration separately requires global rights and recent 2FA confirmation. Public, indexable channels will exist only as an explicit opt-in (P2).
+require membership. Instance administration separately requires global rights and a live authenticated session. Public, indexable channels will exist only as an explicit opt-in (P2).
 
 ## Backups
 

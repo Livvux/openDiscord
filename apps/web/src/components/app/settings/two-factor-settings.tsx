@@ -21,7 +21,7 @@ function QrCode({ value }: { value: string }) {
 
 type Setup = { totpURI: string; backupCodes: string[] };
 
-export function TwoFactorSettings({ enabled, required = false }: { enabled: boolean; required?: boolean }) {
+export function TwoFactorSettings({ enabled }: { enabled: boolean }) {
   const router = useRouter();
   const [setup, setSetup] = useState<Setup | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,8 +60,6 @@ export function TwoFactorSettings({ enabled, required = false }: { enabled: bool
   }
 
   const errorText = error && <p role="alert" className="text-sm text-destructive">{error}</p>;
-
-  if (enabled && required) return <p className="text-sm text-success">Authenticator app is on and required for your instance administrator account.</p>;
 
   if (enabled) {
     return (

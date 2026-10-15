@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { Pool } from "pg";
-import { authenticatorCode } from "../tests/totp";
 import { expectNoA11yViolations, newUserPage } from "./helpers";
 
-test("reporting and global administration enforce 2FA and apply suspensions", async ({ browser, baseURL }, testInfo) => {
+test("global administration works without 2FA and applies reports and suspensions", async ({ browser, baseURL }, testInfo) => {
   test.setTimeout(120_000);
   const page = await newUserPage(browser);
   const db = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -27,17 +26,8 @@ test("reporting and global administration enforce 2FA and apply suspensions", as
     // Test-only role fixture. Runtime grants are exposed exclusively through authenticated admin actions.
     await db.query("insert into instance_admin (user_id) values ($1)", [adminId]);
     await page.goto("/app/admin");
-    await expect(page.getByText("Two-factor authentication is required before you can use these rights.")).toBeVisible();
-    const setup = await page.request.post("/api/auth/two-factor/enable", { headers: { Origin: baseURL! }, data: { password } });
-    expect(setup.ok()).toBe(true);
-    const secret = new URL((await setup.json()).totpURI).searchParams.get("secret")!;
-    const code = authenticatorCode(secret);
-    const confirmed = await page.request.post("/api/auth/two-factor/verify-totp", { headers: { Origin: baseURL! }, data: { code } });
-    expect(confirmed.ok()).toBe(true);
-    await page.reload();
-    await page.getByLabel("Authenticator code").fill(code);
-    await page.getByRole("button", { name: "Unlock administration" }).click();
     await expect(page.getByRole("heading", { name: "Instance control" })).toBeVisible();
+    await expect(page.getByLabel("Authenticator code")).toHaveCount(0);
     await expectNoA11yViolations(page);
 
     const chatterEmail = `chatter-${suffix}@example.test`;

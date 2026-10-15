@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { AdminPanel, AdminUnlock } from "@/components/app/settings/instance-admin";
+import { AdminPanel } from "@/components/app/settings/instance-admin";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { adminDashboard, requireInstanceAdmin } from "@/server/instance-admin";
 import { orNotFound } from "@/server/pages";
@@ -25,10 +25,7 @@ export default function AdminPage({ searchParams }: PageProps<"/app/admin">) {
 async function Administration({ searchParams }: Pick<PageProps<"/app/admin">, "searchParams">) {
   const user = await requirePageUser();
   const actor = { userId: user.id, sessionId: user.sessionId };
-  const state = await orNotFound(requireInstanceAdmin(actor, undefined, false));
-  if (!state.unlocked) {
-    return <AdminUnlock enabled={state.twoFactorEnabled === true} />;
-  }
+  await orNotFound(requireInstanceAdmin(actor));
   const params = await searchParams;
   const search = typeof params.q === "string" ? params.q.slice(0, 100) : "";
   const status = typeof params.status === "string" && ["open", "dismissed", "removed"].includes(params.status) ? params.status : "open";

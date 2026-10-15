@@ -16,17 +16,15 @@ The command uses `apps/web/.env`, requires an existing, unsuspended account and 
 administrator exists. It never creates an account or assigns rights by matching an email during login.
 For containers or secret injection, run the script with the same `DATABASE_URL` as the installation.
 
-Open `/app/admin` (shield icon in the community rail). Set up an authenticator app in account settings,
-then confirm a TOTP code in administration. Confirmation unlocks the current session for 15 minutes.
-The first account can enroll 2FA after bootstrap but cannot use administration before enrollment and
-confirmation. Further admin grants require the target to have 2FA enabled already.
+Open `/app/admin` (shield icon in the community rail) while signed in with the administrator account.
+No authenticator app or additional code confirmation is required. Two-factor authentication remains
+optional in account settings, including for instance administrators. Existing 2FA enrollments are
+preserved and can be disabled with the account password through the normal account settings flow.
 
 Only existing instance administrators can grant or revoke further rights. All operations verify the
-live session, current role, suspension state, enabled 2FA and recent confirmation on the server.
-Exporting an administrator's authenticator key or regenerating recovery codes also requires recent confirmation.
-Invalid confirmation attempts are limited in PostgreSQL across processes and sessions. Administrators
-cannot disable 2FA or delete their account while they retain the role. Demote them first. Concurrent
-admin changes are serialized, and removing the last administrator is rejected.
+live session, current role and suspension state on the server. Administrators cannot delete their
+account while they retain the role. Demote them first. Concurrent admin changes are serialized,
+and removing the last administrator is rejected.
 
 ## Operations
 
@@ -49,9 +47,8 @@ admin changes are serialized, and removing the last administrator is rejected.
   invitations. Configure limits for owned communities, channels, roles and active invitations.
   Lowering limits does not remove existing data.
 - **Audit:** actor ID/name, UTC timestamp, action, target and mandatory reason. Role changes, settings,
-  session revocation, suspension, ownership transfer, report decisions, private-content access and
-  admin confirmation are recorded. Mutations and their audit records commit atomically. No message
-  bodies, credentials or session tokens are written into the instance audit log. Report reasons and
+  session revocation, suspension, ownership transfer, report decisions and private-content access are
+  recorded. Mutations and their audit records commit atomically. No message bodies, credentials or session tokens are written into the instance audit log. Report reasons and
   operator reasons can contain personal information and should be written accordingly.
 
 Lists show at most 50 matching users, communities or reports, and the latest 100 audit entries.
@@ -61,13 +58,17 @@ This first version has no arbitrary private-channel browser, account deletion to
 ## Data and rollback
 
 The additive migration `0003_early_inhumans.sql` adds instance tables and community suspension fields.
-It also prevents disabling an administrator's enabled 2FA at the database boundary, including races
-with a role grant. Existing accounts and community roles are preserved. Back up PostgreSQL before
-applying migrations. To roll back a release, retain these tables and deploy the previous application
-version; do not drop moderation/audit evidence. An application rollback also removes enforcement of
-these new instance suspensions, so assess active suspensions before rolling back.
+Migration `0004_rapid_manta.sql` removes the former admin-only 2FA trigger and the obsolete temporary
+admin-verification table. Account 2FA credentials, administrator roles and audit records are preserved.
+Back up PostgreSQL before applying migrations. Rolling back to code that queries `admin_verification`
+requires reinstating its matching schema before starting that version. Retain moderation and audit
+records. Rolling back to code from before instance administration also removes enforcement of
+instance suspensions, so assess active suspensions before rolling back.
 
 Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and `pnpm test:e2e` against an isolated,
 migrated PostgreSQL 18 test database. Integration suites run serially because settings apply across
-all accounts. The admin E2E uses disposable accounts on desktop and mobile and checks real TOTP,
-reporting, private-content review, removal, account/community suspension and accessibility.
+all accounts. The admin E2E uses disposable accounts on desktop and mobile and checks administration
+without 2FA, reporting, private-content review, removal, account/community suspension and accessibility.
+
+Optional 2FA enrollment and disabling on administrator accounts are covered by integration tests;
+normal 2FA and passkey sign-in remain covered by the security E2E suite.

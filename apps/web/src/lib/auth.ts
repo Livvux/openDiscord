@@ -1,14 +1,13 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 import { AppError } from "@/server/errors";
 import { ownedCommunityNames, unlinkFromAuditLog } from "@/server/account";
-import { requireInstanceAdmin } from "@/server/instance-admin";
 import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
 
@@ -59,23 +58,6 @@ export const auth = betterAuth({
       },
       afterDelete: async (user) => unlinkFromAuditLog(user.id),
     },
-  },
-  hooks: {
-    before: createAuthMiddleware(async (ctx) => {
-      const recoveryAccess = ctx.path === "/two-factor/get-totp-uri" || ctx.path === "/two-factor/generate-backup-codes";
-      if (ctx.path === "/two-factor/disable" || recoveryAccess) {
-        const current = await getSessionFromCtx(ctx);
-        if (current && await isInstanceAdmin(current.user.id)) {
-          if (!recoveryAccess) throw new APIError("FORBIDDEN", { message: "Two-factor authentication is mandatory for instance administrators." });
-          // An old session plus a password must not be enough to obtain a new second factor.
-          try { await requireInstanceAdmin({ userId: current.user.id, sessionId: current.session.id }); }
-          catch (error) {
-            if (error instanceof AppError) throw new APIError("FORBIDDEN", { message: error.message });
-            throw error;
-          }
-        }
-      }
-    }),
   },
   databaseHooks: {
     user: {

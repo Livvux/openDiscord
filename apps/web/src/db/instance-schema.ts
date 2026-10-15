@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import { session, user } from "./auth-schema";
+import { user } from "./auth-schema";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
 
@@ -13,10 +13,6 @@ export const userSuspension = pgTable("user_suspension", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   reason: text("reason").notNull(),
   createdAt: createdAt(),
-});
-export const adminVerification = pgTable("admin_verification", {
-  sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
-  verifiedAt: timestamp("verified_at", { withTimezone: true }).defaultNow().notNull(),
 });
 export const instanceSettings = pgTable("instance_settings", {
   id: text("id").primaryKey().default("instance"),

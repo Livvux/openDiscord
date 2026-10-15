@@ -20,7 +20,7 @@ async function main() {
       await tx.insert(instanceAdmin).values({ userId: target.id });
       await tx.insert(instanceAuditLog).values({ actorId: target.id, action: "admin.bootstrap", targetId: target.id, reason: `Operator bootstrap: ${reason.trim()}` });
     });
-    console.log("First instance administrator assigned to the existing account. Verified 2FA is required before administration can be used.");
+    console.log("First instance administrator assigned to the existing account. Sign in and open /app/admin.");
   } finally {
     await db.$client.end();
   }

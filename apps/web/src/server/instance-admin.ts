@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gt, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { abuseReport, adminVerification, channel, community, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userSuspension } from "@/db/schema";
+import { abuseReport, channel, community, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userSuspension } from "@/db/schema";
 import type { Db } from "./access";
 import { AppError, forbidden, notFound } from "./errors";
 import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "./instance-policy";
@@ -10,21 +10,14 @@ import { publish } from "./realtime";
 import { parse, uuid } from "./validation";
 
 export interface AdminActor { userId: string; sessionId: string }
-export const ADMIN_VERIFICATION_MS = 15 * 60_000;
-
-export async function requireInstanceAdmin(actor: AdminActor, tx: Db = db, verified = true) {
+export async function requireInstanceAdmin(actor: AdminActor, tx: Db = db) {
   await assertActiveUser(actor.userId, tx);
-  const [row] = await tx.select({ twoFactorEnabled: user.twoFactorEnabled, verifiedAt: adminVerification.verifiedAt })
-    .from(instanceAdmin).innerJoin(user, eq(user.id, instanceAdmin.userId))
-    .innerJoin(session, and(eq(session.userId, user.id), eq(session.id, actor.sessionId), gt(session.expiresAt, new Date())))
-    .leftJoin(adminVerification, eq(adminVerification.sessionId, session.id))
+  const [row] = await tx.select({ userId: instanceAdmin.userId })
+    .from(instanceAdmin)
+    .innerJoin(session, and(eq(session.userId, instanceAdmin.userId), eq(session.id, actor.sessionId), gt(session.expiresAt, new Date())))
     .where(eq(instanceAdmin.userId, actor.userId));
   if (!row) throw forbidden("Instance administrator access required.");
-  const unlocked = row.twoFactorEnabled === true && !!row.verifiedAt && row.verifiedAt.getTime() > Date.now() - ADMIN_VERIFICATION_MS;
-  if (verified && !unlocked) {
-    throw forbidden("Confirm your authenticator code to unlock instance administration for 15 minutes.");
-  }
-  return { ...row, unlocked };
+  return row;
 }
 
 function audit(tx: Db, actor: AdminActor, action: string, targetId: string, reason: string) {
@@ -38,32 +31,6 @@ async function mutate<T>(actor: AdminActor, fn: (tx: Db) => Promise<T>) {
     await requireInstanceAdmin(actor, tx);
     return fn(tx);
   });
-}
-
-export async function verifyAdminSession(actor: AdminActor, verify: () => Promise<unknown>) {
-  const valid = await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor.userId}, 2))`);
-    const state = await requireInstanceAdmin(actor, tx, false);
-    if (!state.twoFactorEnabled) throw forbidden("Enable two-factor authentication in account settings first.");
-    const [{ failures }] = await tx.select({ failures: count() }).from(instanceAuditLog).where(and(
-      eq(instanceAuditLog.actorId, actor.userId), eq(instanceAuditLog.action, "admin.verify.failed"),
-      gt(instanceAuditLog.createdAt, new Date(Date.now() - 10 * 60_000)),
-    ));
-    if (failures >= 5) throw new AppError("rate_limited", "Too many invalid codes. Try again in 10 minutes.");
-    try { await verify(); } catch (error) {
-      // Only authentication failures are presented as invalid codes; infrastructure failures must surface.
-      const { isAPIError } = await import("better-auth/api");
-      if (!isAPIError(error)) throw error;
-      await audit(tx, actor, "admin.verify.failed", actor.userId, "Invalid authenticator code");
-      return false;
-    }
-    await tx.insert(adminVerification).values({ sessionId: actor.sessionId }).onConflictDoUpdate({
-      target: adminVerification.sessionId, set: { verifiedAt: new Date() },
-    });
-    await audit(tx, actor, "admin.verify", actor.userId, "Authenticator verification for instance administration");
-    return true;
-  });
-  if (!valid) throw forbidden("Invalid authenticator code.");
 }
 
 export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "", rawStatus: unknown = "open") {
@@ -165,19 +132,16 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
   const grant = parse(z.boolean(), enabled);
   const reason = parse(requiredReason, rawReason);
   await mutate(actor, async (tx) => {
-    const [target] = await tx.select({ id: user.id, twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, id)).for("update");
+    const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
     if (!target) throw notFound("Account not found.");
     if (grant) {
       await assertActiveUser(id, tx);
-      if (!target.twoFactorEnabled) throw forbidden("This account must enable two-factor authentication first.");
       await tx.insert(instanceAdmin).values({ userId: id }).onConflictDoNothing();
     } else {
       const [{ total }] = await tx.select({ total: count() }).from(instanceAdmin);
       if (total <= 1 && await isInstanceAdmin(id, tx)) throw forbidden("The last instance administrator cannot be removed.");
       await tx.delete(instanceAdmin).where(eq(instanceAdmin.userId, id));
     }
-    // A newly granted admin must step up; demotion also invalidates previous elevated sessions.
-    await tx.delete(adminVerification).where(sql`${adminVerification.sessionId} in (select ${session.id} from ${session} where ${session.userId} = ${id})`);
     await audit(tx, actor, grant ? "admin.grant" : "admin.revoke", id, reason);
   });
 }

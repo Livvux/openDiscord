@@ -8,7 +8,6 @@ import { Sessions } from "@/components/app/settings/sessions";
 import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings";
 import { SignOutButton } from "@/app/app/sign-out-button";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
-import { isInstanceAdmin } from "@/server/instance-policy";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Account settings" };
@@ -41,14 +40,14 @@ function Section({ title, description, children }: { title: string; description?
 
 async function Settings() {
   const user = await requirePageUser();
-  const [owned, has2fa, admin] = await Promise.all([ownedCommunityNames(user.id), twoFactorEnabled(user.id), isInstanceAdmin(user.id)]);
+  const [owned, has2fa] = await Promise.all([ownedCommunityNames(user.id), twoFactorEnabled(user.id)]);
   return (
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
         <ProfileForm name={user.name} email={user.email} />
       </Section>
-      <Section title="Authenticator app" description={admin ? "Required for instance administrators. Confirm a code in administration before making changes." : "Optional two-factor authentication with a time-based code (TOTP)."}>
-        <TwoFactorSettings enabled={has2fa} required={admin} />
+      <Section title="Authenticator app" description="Optional two-factor authentication with a time-based code (TOTP).">
+        <TwoFactorSettings enabled={has2fa} />
       </Section>
       <Section title="Passkeys" description="Sign in with Face ID, Touch ID, Windows Hello or a security key.">
         <PasskeySettings />

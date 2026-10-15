@@ -11,33 +11,6 @@ import { Textarea } from "@/components/ui/textarea";
 import type { ActionResult } from "@/server/errors";
 import type { AdminDashboard } from "@/server/instance-admin";
 
-export function AdminUnlock({ enabled }: { enabled: boolean }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-  return (
-    <section className="mx-auto grid max-w-lg gap-4 px-6 py-10">
-      <h2 className="text-xl font-semibold">Secure instance administration</h2>
-      <p className="text-muted-foreground">These rights apply across the instance, independently of community roles. All administrative changes and reported-content access are audited.</p>
-      {!enabled ? <><p>Two-factor authentication is required before you can use these rights.</p><Link href="/app/settings" className="text-brand-mint underline">Set up an authenticator app</Link></> : (
-        <form className="grid gap-3" onSubmit={(event) => {
-          event.preventDefault();
-          const code = String(new FormData(event.currentTarget).get("code")).replace(/\s/g, "");
-          startTransition(async () => {
-            const result = await actions.verifyAdmin(code);
-            if (!result.ok) setError(result.error);
-          });
-        }}>
-          <Label htmlFor="admin-code">Authenticator code</Label>
-          <Input id="admin-code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required autoFocus />
-          <p className="text-xs text-muted-foreground">Confirm a code to unlock administration in this session for 15 minutes.</p>
-          {error && <p role="alert" className="text-destructive">{error}</p>}
-          <Button type="submit" disabled={pending}>Unlock administration</Button>
-        </form>
-      )}
-    </section>
-  );
-}
-
 function AdminAction({ label, description, action, extraLabel, extraType = "text" }: {
   label: string; description: string; extraLabel?: string; extraType?: "text" | "email";
   action: (reason: string, extra: string) => Promise<ActionResult<unknown>>;
@@ -113,9 +86,9 @@ export function AdminPanel({ data, search, status }: { data: AdminDashboard; sea
     </Section>
     <Section id="settings" title="Instance settings"><SettingsForm settings={data.settings} /></Section>
     <Section id="admins" title="Instance administrators">
-      <p className="text-muted-foreground">Only instance administrators can grant these rights. The target account must have 2FA enabled. The last admin cannot be removed, suspended or deleted.</p>
+      <p className="text-muted-foreground">Only instance administrators can grant these rights. The last admin cannot be removed, suspended or deleted.</p>
       <ul className="space-y-3">{data.admins.map((u) => <li key={u.id} className="flex flex-wrap items-center justify-between gap-2"><span className="break-all">{u.email}</span><AdminAction label="Remove admin" description={`Remove instance rights from ${u.email}.`} action={(r) => actions.setAdmin(u.id, false, r)} /></li>)}</ul>
-      {data.users.filter((u) => !u.adminId && !u.suspendedAt).map((u) => <div key={u.id} className="flex flex-wrap items-center justify-between gap-2"><span className="break-all text-muted-foreground">{u.email}</span><AdminAction label="Grant admin" description={`Grant full instance administrator rights to ${u.email}. Two-factor authentication must already be enabled.`} action={(r) => actions.setAdmin(u.id, true, r)} /></div>)}
+      {data.users.filter((u) => !u.adminId && !u.suspendedAt).map((u) => <div key={u.id} className="flex flex-wrap items-center justify-between gap-2"><span className="break-all text-muted-foreground">{u.email}</span><AdminAction label="Grant admin" description={`Grant full instance administrator rights to ${u.email}.`} action={(r) => actions.setAdmin(u.id, true, r)} /></div>)}
     </Section>
     <Section id="audit" title="Instance audit log">
       <ol className="divide-y">{data.logs.map((entry) => <li key={entry.id} className="space-y-1 py-3 break-words">
