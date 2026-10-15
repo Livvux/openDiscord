@@ -104,6 +104,7 @@ describe("isolated native generation retirement candidate", () => {
       expect(server.queued(b)).toBe(0);
       server.remove(a);
       await expect(server.process(a, request, server.generation, "retire", retirementId)).rejects.toThrow("Current sender/generation");
+      await expect(dispatcher.acceptResponse(request, retired)).rejects.toThrow("Sender is no longer current");
       expect(dispatcher.completions.get(request.id)).toBe(1);
     } finally { dispatcher.release(); a.close(); b.close(); }
   }, 30_000);

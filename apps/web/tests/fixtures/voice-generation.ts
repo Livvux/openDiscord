@@ -256,7 +256,8 @@ export class GenerationDispatcher {
     return id;
   }
   async acceptResponse(request: NativeRequest, receipt: Receipt): Promise<void> {
-    if (receipt.generation !== this.server.generation) throw new Error("Stale response fenced.");
+    if (!this.server.owns(this.owner.binding)) { this.owner.close(); throw new GenerationInterrupted("Sender is no longer current."); }
+    if (receipt.generation !== this.server.generation) throw new GenerationInterrupted("Stale response fenced.");
     const operation = receipt.disposition === "processed-retired" ? "retire" : "send";
     const digest = createHash("sha256").update(JSON.stringify([this.owner.binding, receipt.generation, operation, request.id, request.type, request.body])).digest("hex");
     if (digest !== receipt.digest) throw new Error("Response does not bind original native request.");
