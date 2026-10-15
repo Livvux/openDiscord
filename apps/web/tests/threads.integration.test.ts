@@ -5,13 +5,13 @@ import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
-let owner: string, member: string, outsider: string;
+let owner: string, member: string, outsider: string, outsiderFriend: string;
 let communityId: string, generalId: string;
 
 beforeAll(async () => {
-  [owner, member, outsider] = await Promise.all(["Owner", "Member", "Outsider"].map(users.create));
+  [owner, member, outsider, outsiderFriend] = await Promise.all(["Owner", "Member", "Outsider", "Third"].map(users.create));
   ({ communityId, channelId: generalId } = await createCommunity(owner, "Threads"));
-  await acceptInvite(member, await createInvite(owner, communityId, { expiresInHours: 24, maxUses: 1 }));
+  for (const u of [member, outsiderFriend]) await acceptInvite(u, await createInvite(owner, communityId, { expiresInHours: 24, maxUses: 1 }));
 });
 afterAll(() => users.cleanup());
 
@@ -41,10 +41,20 @@ describe("threads", () => {
     await expect(listMessages(outsider, generalId, undefined, root.id)).rejects.toThrow("Channel not found.");
   });
 
+  it("doesn't mark the channel unread for thread replies", async () => {
+    const { markChannelRead } = await import("@/server/unread");
+    const { getCommunityView } = await import("@/server/communities");
+    const root = await sendMessage(member, generalId, "quiet root");
+    await markChannelRead(owner, generalId, root.id);
+    await sendMessage(member, generalId, "thread chatter", [], null, root.id);
+    expect((await getCommunityView(owner, communityId)).channels.find((c) => c.id === generalId)?.unread).toBe(false);
+  });
+
   it("deletes a thread with its root", async () => {
-    const root = await sendMessage(member, generalId, "temporary topic");
-    await sendMessage(owner, generalId, "reply", [], null, root.id);
-    await deleteMessage(member, root.id);
+    // Spread over authors: each has a 5-per-5-seconds message limit.
+    const root = await sendMessage(outsiderFriend, generalId, "temporary topic");
+    await sendMessage(outsiderFriend, generalId, "reply", [], null, root.id);
+    await deleteMessage(outsiderFriend, root.id);
     await expect(listMessages(owner, generalId, undefined, root.id)).rejects.toThrow("Thread not found.");
   });
 });

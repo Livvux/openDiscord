@@ -49,7 +49,8 @@ export async function unreadState(userId: string, channelIds: string[]): Promise
     .select({
       channelId: channel.id,
       lastReadId: channelReadState.lastReadId,
-      unread: sql<boolean>`exists (select 1 from ${message} where ${message.channelId} = ${channel.id} and ${message.authorId} <> ${userId} and ${after(message)})`,
+      // Thread replies don't make the channel unread: the channel's read marker only follows top-level messages.
+      unread: sql<boolean>`exists (select 1 from ${message} where ${message.channelId} = ${channel.id} and ${message.threadId} is null and ${message.authorId} <> ${userId} and ${after(message)})`,
       // shortcut: one correlated query per channel; switch to a grouped query if communities grow to hundreds of channels.
       mentions: sql<number>`(select count(*) from (select 1 from ${mention} inner join ${message} on ${message.id} = ${mention.messageId} where ${mention.userId} = ${userId} and ${message.channelId} = ${channel.id} and ${after(message)} and not exists (select 1 from ${userBlock} where ${userBlock.blockerId} = ${userId} and ${userBlock.blockedId} = ${message.authorId}) limit ${MENTION_COUNT_CAP}) capped)`.mapWith(Number),
     })

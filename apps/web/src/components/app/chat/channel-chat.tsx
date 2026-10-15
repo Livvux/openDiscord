@@ -44,7 +44,10 @@ export function ChannelChat(props: ChannelChatProps) {
   const { state } = useRealtime();
   const threadId = threadRoot?.id ?? null;
   const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
-  const [openThread, setOpenThread] = useState<MessageView | null>(null);
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  // The live root from the list: edits show up, and a deleted root closes its thread.
+  const openThread = openThreadId ? (messages.find((m) => m.id === openThreadId) ?? null) : null;
+  const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -232,7 +235,7 @@ export function ChannelChat(props: ChannelChatProps) {
     <div className="flex min-h-0 flex-1">
       {column}
       {openThread && (
-        <ThreadPanel key={openThread.id} {...props} root={openThread} onClose={() => setOpenThread(null)} />
+        <ThreadPanel key={openThread.id} {...props} root={openThread} onClose={() => setOpenThreadId(null)} />
       )}
     </div>
   );

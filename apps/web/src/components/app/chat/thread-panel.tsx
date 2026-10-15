@@ -27,9 +27,11 @@ export function ThreadPanel({ root, onClose, ...chat }: ThreadPanelProps) {
         else setError(body?.error ?? "Couldn't load the thread.");
       })
       .catch(() => active && setError("Couldn't load the thread."));
-    panel.current?.focus();
     return () => void (active = false);
   }, [chat.channel.id, root.id]);
+
+  // Move focus into the panel once, when it opens.
+  useEffect(() => panel.current?.focus(), []);
 
   return (
     <aside
