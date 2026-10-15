@@ -73,7 +73,7 @@
 
 - [ ] Implement and verify local attachments/scanning, attachment-complete exports, mobile/accessibility and measured scaling.
 - [ ] Implement custom emoji/stickers and explicit public channels/discovery; deliver native clients with signing requirements accounted for.
-- [ ] Complete governance/license checks and cost-backed funding disclosure; record federation research conclusions.
+- [x] Complete governance/license declaration checks and cost-backed funding disclosure; record federation research conclusions (D13). Professional license compatibility review remains external.
 
 ## Evidence ledger
 
@@ -92,3 +92,9 @@
 - [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation. Exact-head CI 38778505661 passed at 77ffba8; merged and deployed as 90920fe. Public browser verified approved operator details and the required age checkbox; ready200 and environment mode0600. No date of birth or identity document is collected. External legal review remains open.
 - [PR #30](https://github.com/Livvux/openDiscord/pull/30): encrypted DMs with Matrix crypto WASM18.9.0 are still in implementation and runtime verification. No plaintext fallback or completed/audited E2EE claim is made. Voice E2EE has not shipped.
 - SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, TURN, physical-device voice and push delivery remain separate acceptance checks.
+
+### Auth key rotation evidence (2026-10-15)
+
+- [PR #36](https://github.com/Livvux/openDiscord/pull/36) exposes Better Auth1.7.7 native versioned encryption keys with sanitized configuration validation and Compose passthrough. Independent TypeScript and security reviews approved ace7a8e.
+- Exact-head CI38780435291 passed lint, types, migrations, unit/integration, encrypted restore, production/Docker builds and desktop/mobile browser checks. Native PostgreSQL integration proves legacy/previous-version TOTP and backup-code decryption, rejected retired keys and a real authenticator challenge after rotation. Browser auth/2FA flows run with disposable versioned keys.
+- Merged and deployed as b266d70; readiness returned200 and the public mobile sign-in page was checked. Production key values were not changed. This delivers rotation support, not an actual primary-key change or automatic key retirement; legacy ciphertext and retained backups still need their original keys.
