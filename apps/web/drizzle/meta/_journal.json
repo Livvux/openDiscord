@@ -211,6 +211,13 @@
       "when": 1792093926936,
       "tag": "0029_public_channels",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792099255384,
+      "tag": "0030_voice_call_control",
+      "breakpoints": true
     }
   ]
 }
