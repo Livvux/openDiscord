@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { channel, session, user } from "@/db/schema";
+import { channel, community, session, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { POST, GET, HEAD, PUT, PATCH, DELETE, OPTIONS } from "@/app/api/voice/control/route";
 import { acceptInvite, createInvite, createCommunity } from "@/server/communities";
@@ -15,7 +15,7 @@ import { VOICE_HTTP_REQUEST_BYTES } from "@/server/voice-http";
 import { REGISTRATION_HEADERS } from "./helpers";
 
 const ids: string[] = [], origin = new URL(process.env.BETTER_AUTH_URL!).origin;
-afterAll(async () => { if (ids.length) await db.delete(user).where(inArray(user.id, ids)); });
+afterAll(async () => { if (ids.length) { await db.delete(community).where(inArray(community.ownerId, ids)); await db.delete(user).where(inArray(user.id, ids)); } });
 function request(body: unknown, headers: Record<string, string> = {}) { return new Request(`${origin}/api/voice/control`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: JSON.stringify(body) }); }
 async function account() {
   const signup = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email: `voice-route-${randomUUID()}@example.test`, password: "correct horse battery", name: "Voice HTTP route" }, returnHeaders: true });

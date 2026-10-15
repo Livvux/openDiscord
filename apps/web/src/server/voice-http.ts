@@ -11,7 +11,7 @@ import { parse } from "./validation";
 
 export const VOICE_RESPONSE_HEADERS = PRIVATE_NO_STORE;
 
-/** A future handler must apply private,no-store to every success AND error response. */
+/** Voice control accepts JSON only from this instance's exact browser origin. */
 export function assertVoiceOrigin(request: Request): void {
   const configured = process.env.BETTER_AUTH_URL;
   if (!configured) throw forbidden("Voice is unavailable.");
