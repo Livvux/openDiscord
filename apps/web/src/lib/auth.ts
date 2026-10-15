@@ -49,6 +49,8 @@ export const auth = betterAuth({
   },
   emailVerification: {
     sendOnSignUp: mailEnabled,
+    // Accounts created before SMTP was configured get a link when they sign in, instead of being locked out.
+    sendOnSignIn: mailEnabled,
     autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user, url }) => {
       await sendMail(user.email, "Verify your openDiscord account", `Confirm your email address:\n${url}`);
