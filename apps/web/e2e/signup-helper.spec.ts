@@ -29,7 +29,7 @@ test("signup reports a rejected auth response without hiding it behind a redirec
       body: JSON.stringify({ code: "SIGNUP_QA_REJECTED", message: "Synthetic sign-up rejection." }),
     }));
     await expect(signUp(page, "Rejected auth response")).rejects.toThrow("HTTP 403 (SIGNUP_QA_REJECTED)");
-    await expect(page.getByRole("alert")).toHaveText("Synthetic sign-up rejection.");
+    await expect(page.locator("form:visible").getByRole("alert")).toHaveText("Synthetic sign-up rejection.");
     const diagnostics: unknown = JSON.parse(await readFile(test.info().outputPath("signup-diagnostics.json"), "utf8"));
     expect(diagnostics).toMatchObject({ phase: "auth-response", status: 403, apiErrorCode: "SIGNUP_QA_REJECTED", redirectMs: null });
   } finally {
