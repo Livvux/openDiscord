@@ -134,20 +134,30 @@ describe("unreachable serial voice owner", () => {
     const value = await pair();
     const original = C.OlmMachine.prototype.markRequestAsSent;
     const completions: string[] = [];
-    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(function(this: C.OlmMachine, id, type, response) { completions.push(id); return original.call(this, id, type, response); });
+    const completionArrived = deferred<void>(), completionRelease = deferred<void>();
+    let targetId: string | undefined;
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, response) {
+      completions.push(id);
+      if (id === targetId) { completionArrived.resolve(); await completionRelease.promise; }
+      return original.call(this, id, type, response);
+    });
     try {
-      const arrived = deferred<void>(), release = deferred<void>();
-      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { arrived.resolve(); await release.promise; } };
+      const arrived = deferred<void>(), release = deferred<void>(), sendReturned = deferred<void>();
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { arrived.resolve(); await release.promise; sendReturned.resolve(); } };
       const requested = value.owner.requestVerification(value.other.memberId);
       await arrived.promise;
       const send = [...value.wire.sent].reverse().find(entry => entry.request.kind === "send")!;
       if (!("nativeRequestId" in send.request)) throw new Error("Missing native ID.");
-      const id = send.request.nativeRequestId;
-      await value.owner.transition({ ...value.current, generation: 2 });
+      const id = send.request.nativeRequestId; targetId = id;
+      const transition = value.owner.transition({ ...value.current, generation: 2 });
+      await completionArrived.promise;
+      // Late send success arrives while real native retirement completion is awaiting its barrier.
+      release.resolve(); await sendReturned.promise;
+      completionRelease.resolve(); await transition;
       expect(value.onFence).toHaveBeenCalledWith("generation-transition");
       const retired = value.wire.sent.filter(entry => entry.request.kind === "retire");
       expect(retired.some(entry => "nativeRequestId" in entry.request && entry.request.nativeRequestId === id)).toBe(true);
-      release.resolve(); await expect(requested).rejects.toThrow("generation interrupted");
+      await expect(requested).rejects.toThrow("generation interrupted");
       expect(completions.filter(value => value === id)).toHaveLength(1);
       expect(retired.every(entry => entry.binding.expectedGeneration === 2)).toBe(true);
       value.wire.pause = undefined;

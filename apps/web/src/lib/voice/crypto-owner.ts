@@ -1,6 +1,6 @@
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
-import { VOICE_LIMITS, voiceBindingSchema, voiceCryptoSchema, voiceEventSchema, type VoiceBinding, type VoiceCryptoRequest, type VoiceMember, type VoiceSnapshot } from "./contracts";
+import { VOICE_DOMAIN, VOICE_LIMITS, voiceBindingSchema, voiceCryptoSchema, voiceEventSchema, type VoiceBinding, type VoiceCryptoRequest, type VoiceMember, type VoiceSnapshot } from "./contracts";
 import { consumeVoiceOwnerGuard, type VoiceOwnerGuard } from "./owner-guard";
 import { sameVoiceParty, validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 
@@ -16,6 +16,16 @@ const envelopeSchema = z.object({ sender: z.string(), type: z.string(), content:
 const decryptedSchema = envelopeSchema.extend({ recipient: z.string(), recipient_keys: z.object({ ed25519: z.string() }), sender_device_keys: z.object({ user_id: z.string(), device_id: z.string(), keys: z.record(z.string(), z.string()) }), keys: z.object({ ed25519: z.string() }) });
 const deviceOutcomeSchema = z.object({ nativeResponse: z.object({}).strict(), disposition: z.discriminatedUnion("status", [z.object({ status: z.literal("processed-current"), enqueued: z.literal(1) }).strict(), z.object({ status: z.literal("processed-retired"), enqueued: z.literal(0) }).strict()]) }).strict();
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
+
+function validateSnapshot(snapshot: VoiceSnapshot): void {
+  voiceBindingSchema.parse({ callId: snapshot.callId, memberId: snapshot.memberId, joinNonce: snapshot.joinNonce, expectedGeneration: snapshot.generation });
+  z.array(z.unknown()).min(1).max(VOICE_LIMITS.members).parse(snapshot.members);
+  if (new Set(snapshot.members.map(member => member.memberId)).size !== snapshot.members.length || new Set(snapshot.members.map(member => member.voiceDeviceId)).size !== snapshot.members.length) throw new Error("Duplicate voice enrollment binding.");
+  for (const member of snapshot.members) {
+    z.uuid().parse(member.memberId); z.uuid().parse(member.voiceDeviceId); z.uuid().parse(member.joinNonce);
+    if (member.voiceUserId !== `@voice_${snapshot.callId}_${member.memberId}:${VOICE_DOMAIN}` || member.participantIdentity !== `v1:${member.memberId}`) throw new Error("Invalid voice-only namespace binding.");
+  }
+}
 
 /** Unreachable preparation: no route, browser singleton, DM owner, polling or media activation. */
 export class VoiceCryptoOwner {
@@ -42,9 +52,9 @@ export class VoiceCryptoOwner {
       options.lifetime.assertCurrent();
       if (options.lifetime.signal.aborted) throw new Error("Voice lifetime already ended.");
       const snapshot = structuredClone(options.snapshot);
+      validateSnapshot(snapshot);
       const self = snapshot.members.find(member => member.memberId === snapshot.memberId);
       if (!self || self.userId !== options.accountId || self.voiceUserId !== snapshot.voiceUserId || self.voiceDeviceId !== snapshot.voiceDeviceId || self.joinNonce !== snapshot.joinNonce) throw new Error("Invalid voice owner enrollment.");
-      voiceBindingSchema.parse({ callId: snapshot.callId, memberId: snapshot.memberId, joinNonce: snapshot.joinNonce, expectedGeneration: snapshot.generation });
       await C.initAsync();
       options.lifetime.assertCurrent();
       machine = await C.OlmMachine.initialize(new C.UserId(snapshot.voiceUserId), new C.DeviceId(snapshot.voiceDeviceId), undefined, undefined, silent);
@@ -137,6 +147,11 @@ export class VoiceCryptoOwner {
     this.registry.set(entry.id, entry);
     return entry;
   }
+  private scopedUser(user: string): boolean {
+    const prefix = `@voice_${this.snapshot.callId}_`, suffix = `:${VOICE_DOMAIN}`;
+    if (!user.startsWith(prefix) || !user.endsWith(suffix)) return false;
+    return z.uuid().safeParse(user.slice(prefix.length, -suffix.length)).success;
+  }
   private requestInput(request: NativeRequest, id: string | undefined, retire: boolean): VoiceCryptoRequest {
     const body: unknown = JSON.parse(request.body);
     const requestId = crypto.randomUUID();
@@ -145,12 +160,16 @@ export class VoiceCryptoOwner {
       const input = voiceCryptoSchema.parse({ kind: retire ? "retire" : "send", body, eventType: request.event_type, requestId, nativeRequestId: id, nativeTxnId: request.txn_id });
       const messages = z.object({ messages: z.record(z.string(), z.record(z.string(), z.unknown())) }).strict().parse(body).messages;
       const users = Object.entries(messages), devices = users.length === 1 ? Object.entries(users[0][1]) : [];
-      if (users.length !== 1 || devices.length !== 1 || !voiceEventSchema(request.event_type)?.safeParse(devices[0][1]).success) throw new Error("Unsupported native recipient/event shape.");
+      if (users.length !== 1 || !this.scopedUser(users[0][0]) || devices.length !== 1 || !z.uuid().safeParse(devices[0][0]).success || !voiceEventSchema(request.event_type)?.safeParse(devices[0][1]).success) throw new Error("Unsupported native recipient/event shape.");
       return input;
     }
     const kind = request instanceof C.KeysUploadRequest ? "upload" : request instanceof C.KeysQueryRequest ? "query" : request instanceof C.KeysClaimRequest ? "claim" : request instanceof C.SignatureUploadRequest ? "signatures" : undefined;
     if (!kind || retire) throw new Error("Native output cannot retire.");
-    if (kind === "signatures" && (typeof body !== "object" || body === null || Object.keys(body).length !== 1)) throw new Error("Native signatures must have one outer user.");
+    if (kind === "signatures" && (typeof body !== "object" || body === null || Object.keys(body).length !== 1 || !this.scopedUser(Object.keys(body)[0]))) throw new Error("Native signatures must have one outer user.");
+    if (kind === "query" || kind === "claim") {
+      const targets = z.record(z.string(), z.unknown()).parse(z.record(z.string(), z.unknown()).parse(body)[kind === "query" ? "device_keys" : "one_time_keys"]);
+      if (Object.keys(targets).length > VOICE_LIMITS.members || Object.keys(targets).some(user => !this.scopedUser(user))) throw new Error("Native query/claim crossed voice call scope.");
+    }
     return voiceCryptoSchema.parse({ kind, body, ...(id ? { requestId, nativeRequestId: id } : {}) });
   }
   private async output(request: NativeRequest, retire = false, allowTransition = false): Promise<void> {
@@ -357,6 +376,7 @@ export class VoiceCryptoOwner {
   }
   private async transitionDrain(next: VoiceSnapshot, sameGeneration = false, finalize?: () => void): Promise<void> {
     const outputs = await this.serial(async () => {
+      validateSnapshot(next);
       if (next.callId !== this.snapshot.callId || next.memberId !== this.snapshot.memberId || next.joinNonce !== this.snapshot.joinNonce || next.voiceUserId !== this.snapshot.voiceUserId || next.voiceDeviceId !== this.snapshot.voiceDeviceId || (sameGeneration ? next.generation !== this.snapshot.generation : next.generation <= this.snapshot.generation)) throw new Error("Invalid retained voice transition.");
       const own = next.members.find(member => member.memberId === next.memberId);
       if (!own || own.userId !== this.options.accountId || own.joinNonce !== next.joinNonce || own.voiceUserId !== next.voiceUserId || own.voiceDeviceId !== next.voiceDeviceId) throw new Error("Lost voice enrollment.");
