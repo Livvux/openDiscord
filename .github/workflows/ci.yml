@@ -39,6 +39,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - run: pnpm test
+      - name: Rehearse encrypted backup and isolated restore
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age
+          pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
       - run: pnpm build
       - name: Start LiveKit (dev mode)
         run: docker run -d --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
