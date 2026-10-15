@@ -8,6 +8,8 @@ const transport = process.env.SMTP_URL
 export const mailEnabled = transport !== null;
 
 export async function sendMail(to: string, subject: string, text: string) {
+  // Bot and webhook accounts use the reserved .invalid domain (RFC 2606): never mail them.
+  if (/\.invalid$/i.test(to)) return;
   if (!transport) {
     // Self-hosted installs without SMTP: surface the message in the server log.
     console.info(`[mail disabled] to=${to} subject=${subject}\n${text}`);

@@ -6,6 +6,7 @@ import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
 import * as communities from "@/server/communities";
+import * as integrations from "@/server/integrations";
 import { toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as messages from "@/server/messages";
@@ -89,6 +90,12 @@ export const setNotificationLevel = async (communityId: string, level: "mentions
 
 export const joinVoice = async (channelId: string) => run((u) => voice.createVoiceToken(u, channelId), false);
 export const listVoiceParticipants = async (channelId: string) => run((u) => voice.listVoiceParticipants(u, channelId), false);
+
+export const createIntegration = async (
+  communityId: string,
+  input: { kind: "bot"; name: string } | { kind: "webhook"; name: string; channelId: string },
+) => run((u) => integrations.createIntegration(u, communityId, input));
+export const revokeIntegration = async (id: string) => run((u) => integrations.revokeIntegration(u, id));
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>
   run((u) => moderation.kickMember(u, communityId, userId, reason));

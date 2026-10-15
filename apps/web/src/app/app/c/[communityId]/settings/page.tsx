@@ -10,6 +10,8 @@ import { AutomodSettings } from "@/components/app/settings/automod-settings";
 import { NotificationLevel } from "@/components/app/settings/notification-level";
 import { CategoriesEditor } from "@/components/app/settings/categories-editor";
 import { getAutomod } from "@/server/automod";
+import { listIntegrations } from "@/server/integrations";
+import { IntegrationsEditor } from "@/components/app/settings/integrations-editor";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
@@ -39,6 +41,10 @@ const AUDIT_LABELS: Record<string, string> = {
   "invites.auto_pause": "Raid protection paused invites",
   "community.safety": "changed safety settings",
   "automod.update": "changed AutoMod rules",
+  "bot.create": "added the bot",
+  "bot.revoke": "revoked the bot",
+  "webhook.create": "created the webhook",
+  "webhook.revoke": "revoked the webhook",
   "automod.block": "had a message blocked by AutoMod",
 };
 
@@ -82,7 +88,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
   const a = view.authority;
-  const [members, roles, invites, bans, audit, safety, automod] = await Promise.all([
+  const [members, roles, invites, bans, audit, safety, automod, integrations] = await Promise.all([
     listMembers(user.id, view.id),
     listRoles(user.id, view.id),
     has(a, Permission.ManageCommunity) ? listInvites(user.id, view.id) : null,
@@ -90,6 +96,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
     has(a, Permission.ViewAuditLog) ? listAuditLog(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? getCommunitySafety(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
+    has(a, Permission.ManageCommunity) ? listIntegrations(user.id, view.id) : null,
   ]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
@@ -129,6 +136,15 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
       {automod && (
         <Section id="automod" title="AutoMod" description="Refuses messages that break these rules before anyone sees them. Refusals appear in the audit log without the message.">
           <AutomodSettings communityId={view.id} rules={automod} />
+        </Section>
+      )}
+      {integrations && (
+        <Section id="integrations" title="Bots and webhooks" description="Connect other tools. Tokens are shown once; creation and revocation are audited.">
+          <IntegrationsEditor
+            communityId={view.id}
+            integrations={integrations}
+            textChannels={view.channels.filter((c) => c.kind === "text").map(({ id, name }) => ({ id, name }))}
+          />
         </Section>
       )}
       {invites && (

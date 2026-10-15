@@ -343,3 +343,31 @@ export const userPresence = pgTable("user_presence", {
   visible: boolean("visible").notNull().default(false),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
 });
+
+/**
+ * A bot (a member with roles, using the public API with its token) or an incoming webhook (posts
+ * into one channel). Each has its own user row for authorship; tokens are stored as SHA-256 hashes.
+ * Revoked integrations keep their row so old messages still show as from a bot.
+ */
+export const integration = pgTable(
+  "integration",
+  {
+    id: id(),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => community.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["bot", "webhook"] }).notNull(),
+    name: text("name").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Webhooks only: the channel they post into. */
+    channelId: uuid("channel_id").references(() => channel.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index("integration_community_idx").on(t.communityId), index("integration_user_idx").on(t.userId)],
+);

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, count, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLog, ban, channel, channelOverride, community, invite, member, role, user } from "@/db/schema";
+import { auditLog, ban, channel, channelOverride, community, integration, invite, member, role, user } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
@@ -116,7 +116,12 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
   const { authority } = await requireMember(db, communityId, userId);
   if (!authority.isOwner) throw forbidden("Only the owner can delete a community.");
   const voiceRooms = await db.select({ id: channel.id }).from(channel).where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
-  await db.delete(community).where(eq(community.id, communityId));
+  // Bot and webhook accounts exist only for this community; their messages go with it anyway.
+  const botUsers = await db.select({ id: integration.userId }).from(integration).where(eq(integration.communityId, communityId));
+  await db.transaction(async (tx) => {
+    await tx.delete(community).where(eq(community.id, communityId));
+    if (botUsers.length) await tx.delete(user).where(inArray(user.id, botUsers.map((b) => b.id)));
+  });
   await publish({ type: "community.deleted", communityId });
   await Promise.all(voiceRooms.map((r) => closeVoiceRoom(r.id)));
 }
