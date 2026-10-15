@@ -92,7 +92,7 @@ const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "s
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
-  it.each(["lease", "session"] as const)("rechecks %s time after an observed non-Voice user row-lock wait", async (deadline) => {
+  it.each((["lease", "session"] as const).flatMap(deadline => (["heartbeat", "crypto", "join-retry"] as const).map(operation => ({ deadline, operation }))))("rechecks $deadline after an observed row-lock wait before $operation", async ({ deadline, operation }) => {
     const { endpoints: [a] } = await fixture(1);
     const writer = await db.$client.connect();
     const start = Date.now();
@@ -105,7 +105,10 @@ describe("voice-only scope, immutable public state and replay", () => {
       await writer.query('select id from "user" where id = $1 for update', [a.userId]);
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(start);
-      pending = heartbeatVoiceControl(memberAuth(a), binding(a)).then(value => ({ value }), error => ({ error }));
+      const action = operation === "heartbeat" ? heartbeatVoiceControl(memberAuth(a), binding(a))
+        : operation === "crypto" ? crypto(a, { kind: "sync" })
+        : joinVoiceControl({ userId: a.userId, sessionId: a.sessionId, anchorDeviceId: a.anchorDeviceId, anchorSecret: a.anchorSecret }, { channelId: a.snapshot.channelId, joinNonce: a.snapshot.joinNonce, voiceDeviceId: a.snapshot.voiceDeviceId, enrollmentSecret: a.secret, consent: true });
+      pending = action.then(value => ({ value }), error => ({ error }));
       let observed = false;
       for (let i = 0; i < 100; i++) {
         const { rows: [{ blocked }] } = await db.$client.query<{ blocked: boolean }>("select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))) as blocked", [pid]);
@@ -115,7 +118,7 @@ describe("voice-only scope, immutable public state and replay", () => {
       expect(observed).toBe(true);
       vi.setSystemTime(start + 20_000);
       await writer.query("COMMIT");
-      expect(await pending).toMatchObject({ error: { code: "forbidden" } });
+      expect(await pending).toMatchObject({ error: { code: operation === "join-retry" && deadline === "lease" ? "conflict" : "forbidden" } });
       const [member] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
       if (deadline === "lease") expect(member.state).toBe("left");
       expect(member.leaseExpiresAt.getTime()).toBeLessThanOrEqual(deadline === "lease" ? start + 20_000 : new Date(a.snapshot.leaseExpiresAt).getTime());
@@ -141,6 +144,8 @@ describe("voice-only scope, immutable public state and replay", () => {
     expect(await crypto(a, unknownRequest)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
     expect(await db.$count(voiceControlMailbox)).toBe(before);
     await expect(crypto(a, { ...retire, requestId: request.requestId })).rejects.toMatchObject({ code: "conflict" });
+    await expect(crypto(a, { ...retire, nativeRequestId: randomUUID() })).rejects.toMatchObject({ code: "conflict" });
+    await expect(crypto(a, { ...retire, nativeTxnId: randomUUID() })).rejects.toMatchObject({ code: "conflict" });
     for (const kind of ["send", "retire", "signatures"]) {
       const body = kind === "signatures" ? {} : { messages: {} };
       await expect(crypto(a, kind === "signatures" ? { kind, body } : { ...request, kind, requestId: randomUUID(), body })).rejects.toMatchObject({ code: "invalid" });
@@ -161,6 +166,51 @@ describe("voice-only scope, immutable public state and replay", () => {
     expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
     expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, b.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(0);
     expect(await db.$count(voiceSignature, eq(voiceSignature.signerMemberId, a.snapshot.memberId))).toBe(0);
+  });
+  it.each(["session", "anchor", "lease", "generation"] as const)("checks current %s authority before retirement receipt replay", async (loss) => {
+    const { endpoints: [a, b] } = await fixture();
+    const request = { ...send(a, b), kind: "retire" };
+    await crypto(a, request);
+    if (loss === "session") await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, a.sessionId));
+    else if (loss === "anchor") await db.update(dmDevice).set({ revokedAt: new Date() }).where(eq(dmDevice.id, a.anchorDeviceId));
+    else if (loss === "lease") await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    else await leaveVoiceControl(memberAuth(b), binding(b));
+    await expect(crypto(a, request)).rejects.toMatchObject({ code: loss === "generation" ? "conflict" : "forbidden" });
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+  });
+  it("retires healthy current and unknown targets without any identity/prekey/signature read or mailbox insert", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    const transaction = db.transaction.bind(db);
+    let forbiddenAccesses = 0;
+    // Instrument the real transaction; retain its real PostgreSQL locks, reads and receipt writes.
+    const spy = vi.spyOn(db, "transaction").mockImplementation((callback, config) => transaction(tx => callback(new Proxy(tx, {
+      get(target, key, receiver) {
+        const method: unknown = Reflect.get(target, key, receiver);
+        if ((key !== "select" && key !== "insert") || typeof method !== "function") return method;
+        return (...args: unknown[]) => {
+          if (key === "insert" && args[0] === voiceControlMailbox) { forbiddenAccesses++; throw new Error("Retirement mailbox insert"); }
+          const builder: object = Reflect.apply(method, target, args);
+          if (key !== "select") return builder;
+          return new Proxy(builder, {
+            get(query, property, queryReceiver) {
+              const from: unknown = Reflect.get(query, property, queryReceiver);
+              if (property !== "from" || typeof from !== "function") return from;
+              return (table: unknown) => {
+                if (table === voiceIdentity || table === voicePrekey || table === voiceSignature) { forbiddenAccesses++; throw new Error("Retirement key read"); }
+                return Reflect.apply(from, query, [table]);
+              };
+            },
+          });
+        };
+      },
+    })), config));
+    try {
+      expect(await crypto(a, { ...send(a, b), kind: "retire" })).toMatchObject({ disposition: { status: "processed-retired", enqueued: 0 } });
+      const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`;
+      const request = send(a, b);
+      expect(await crypto(a, { ...request, kind: "retire", body: { messages: { [unknown]: request.body.messages[b.snapshot.voiceUserId] } } })).toMatchObject({ disposition: { status: "processed-retired", enqueued: 0 } });
+      expect(forbiddenAccesses).toBe(0);
+    } finally { spy.mockRestore(); }
   });
   it("requires a real owned live session, active anchor possession, Connect and consent", async () => {
     const f = await fixture(1), a = f.endpoints[0], input = { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: a.secret, consent: true };
@@ -195,6 +245,7 @@ describe("voice-only scope, immutable public state and replay", () => {
         { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [target]: { [device]: "signed_curve25519" } } } },
         { kind: "signatures", body: { [target]: { [device]: keys(b) } } },
         { ...send(a, b), body: { messages: { [target]: { [device]: { transaction_id: randomUUID() } } } } },
+        { ...send(a, b), kind: "retire", body: { messages: { [target]: { [device]: { transaction_id: randomUUID() } } } } },
       ];
       for (const request of requests) await expect(crypto(a, request)).rejects.toMatchObject({ code: "not_found" });
     }

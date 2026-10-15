@@ -174,6 +174,7 @@ Upgrades introducing migration `0031` require complete writer quiescence. Follow
 [0031 compatibility rollout and recovery procedure](OPERATIONS.md#0031-compatible-writer-rollout)
 before starting a migration or new application image. The generic sequence below is insufficient
 for this version boundary: Compose startup dependencies do not stop existing replicas or jobs.
+Use the following generic sequence only for upgrades that do not cross that boundary.
 
 ```sh
 scripts/backup.sh
