@@ -48,8 +48,8 @@ or **Stop transfer retries**. Stopping retries cannot recall a delivery already 
 sender's browser must be open to retry. Large snapshots use the encrypted backup path instead.
 
 **Create encrypted recovery backup** exports the SDK's cross-signing secrets together with a bounded
-history archive. The archive contains the most recent **200 messages loaded and authenticated by this
-browser**, with their complete ciphertext envelopes and source-verification dates. Load earlier
+history archive. The archive contains the most recent **up to 200 messages loaded and authenticated by this
+browser**, bounded to 3.5 MB of serialized source copies, with their complete ciphertext envelopes and source-verification dates. Load earlier
 messages before backing up if those are needed. It does not promise to include unread messages or
 every historical conversation. Source/device fingerprint, account, original web origin, backup ID and
 format version are bound inside the encrypted snapshot.
@@ -81,7 +81,7 @@ or when its local archive is deleted; it is never implicitly installed as the cu
 
 Local verified-copy caches and recovered archives are stored as encrypted attachments in IndexedDB,
 with unlocking information in the same browser origin. This is not protection against endpoint or
-same-origin code compromise. At most ten local archives and 200 source-cache messages are retained;
+same-origin code compromise. At most ten local archives and 200 source-cache messages (3.5 MB total) are retained;
 local archives can be removed separately from server backups. Future backups include the current
 browser's verified-copy cache, not automatically every previously recovered archive.
 

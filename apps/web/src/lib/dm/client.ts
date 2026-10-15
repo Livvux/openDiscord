@@ -2,7 +2,7 @@
 
 import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
-import { archiveSchema, HistoryStore, historyEntrySchema, MAX_HISTORY_COPIES, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
+import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
 
 type SDK = typeof Matrix;
@@ -101,7 +101,7 @@ export class PrivateMessaging {
       client.releaseLock = release;
       client.historyStore = await HistoryStore.open(userId, metadata.id, C);
       history = client.historyStore;
-      client.verifiedHistory = new Map((await client.historyStore.cached()).map((entry) => [entry.envelope.id, entry]));
+      client.verifiedHistory = new Map(boundedHistory(await client.historyStore.cached()).map((entry) => [entry.envelope.id, entry]));
       client.recoveredArchives = await client.historyStore.archives();
       client.pendingRecovery = await client.historyStore.pendingIdentity();
       await dmFetch("/api/dm", { action: "register", input: { id: metadata.id, secret: metadata.secret, name: "Web browser" } });
@@ -275,7 +275,7 @@ export class PrivateMessaging {
         } catch { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup." }); }
       }
       if (historyChanged) {
-        this.verifiedHistory = new Map([...this.verifiedHistory.entries()].slice(-MAX_HISTORY_COPIES));
+        this.verifiedHistory = new Map(boundedHistory([...this.verifiedHistory.values()]).map((entry) => [entry.envelope.id, entry]));
         await this.historyStore.put("verified-cache", [...this.verifiedHistory.values()]);
       }
       return result;

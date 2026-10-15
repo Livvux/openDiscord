@@ -5,6 +5,7 @@ import { z } from "zod";
 import { DM_MAX_BACKUP_BYTES, encryptedMessageSchema, plainMessageSchema } from "./contracts";
 
 export const MAX_HISTORY_COPIES = 200;
+export const MAX_HISTORY_BYTES = 3_500_000;
 export const historyEntrySchema = z.object({
   envelope: z.object({ id: z.uuid(), conversationId: z.uuid(), senderId: z.string().max(64), deviceId: z.uuid(), transactionId: z.uuid(), content: encryptedMessageSchema, createdAt: z.iso.datetime() }).strict(),
   message: plainMessageSchema,
@@ -19,6 +20,18 @@ export const recoverySnapshotSchema = archiveSchema.extend({ secrets: z.unknown(
 export type HistoryEntry = z.infer<typeof historyEntrySchema>;
 export type HistoryArchive = z.infer<typeof archiveSchema>;
 export type RecoverySnapshot = z.infer<typeof recoverySnapshotSchema>;
+/** Keep the newest loaded copies within both count and encrypted backup byte budgets. */
+export function boundedHistory(entries: HistoryEntry[]): HistoryEntry[] {
+  const selected: HistoryEntry[] = [];
+  const encoder = new TextEncoder();
+  let bytes = 2;
+  for (const entry of entries.slice(-MAX_HISTORY_COPIES).reverse()) {
+    const size = encoder.encode(JSON.stringify(entry)).length + (selected.length ? 1 : 0);
+    if (bytes + size > MAX_HISTORY_BYTES) break;
+    selected.push(entry); bytes += size;
+  }
+  return selected.reverse();
+}
 const outgoingSchema = z.object({ id: z.uuid(), target: z.uuid(), snapshot: recoverySnapshotSchema, attempts: z.number().int().min(0).max(8), attemptedAt: z.number().nonnegative() }).strict();
 export type PendingTransfer = z.infer<typeof outgoingSchema>;
 
