@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VoiceCryptoOwner, type VoiceOwnerTransport } from "../src/lib/voice/crypto-owner";
+import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport } from "../src/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "../src/lib/voice/owner-guard";
 import { validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT } from "../src/lib/voice/owner-control";
 import { OwnerUnitPeer, OwnerUnitWire } from "./fixtures/voice-owner-peer";
@@ -90,14 +90,23 @@ describe("unreachable serial voice owner", () => {
   it("keeps native DM keys unchanged, synchronously fences transition and refuses lifetime resurrection", async () => {
     locks(); await C.initAsync();
     const dm = await C.OlmMachine.initialize(new C.UserId(`@dm_owner_unit_${randomUUID()}:opendiscord.local`), new C.DeviceId(randomUUID()), undefined, undefined, { debug() {}, info() {}, warn() {}, error() {} });
-    const before = dm.identityKeys.ed25519.toBase64();
+    const room = new C.RoomId(`!owner_dm_history_${randomUUID()}:opendiscord.local`);
+    await dm.shareRoomKey(room, [], new C.EncryptionSettings());
+    const history = { msgtype: "m.text", body: "Independent owner unit DM history" };
+    const encryptedHistory = { type: "m.room.encrypted", event_id: `$${randomUUID()}`, sender: dm.userId.toString(), origin_server_ts: Date.now(), content: JSON.parse(await dm.encryptRoomEvent(room, "m.room.message", JSON.stringify(history))) };
+    const decryptHistory = async () => JSON.parse((await dm.decryptRoomEvent(JSON.stringify(encryptedHistory), room, new C.DecryptionSettings(C.TrustRequirement.Untrusted))).event).content;
+    const baseline = async () => ({ keys: [dm.identityKeys.ed25519.toBase64(), dm.identityKeys.curve25519.toBase64()], counts: (await dm.roomKeyCounts()).total, trust: (await dm.getIdentity(dm.userId))?.isVerified() ?? false, flows: dm.getVerificationRequests(dm.userId).map(flow => flow.flowId), outgoing: (await dm.outgoingRequests()).map(request => ({ type: request.type, digest: createHash("sha256").update(JSON.stringify(JSON.parse(request.body))).digest("hex") })).sort((a, b) => a.type - b.type || a.digest.localeCompare(b.digest)) });
+    const before = await baseline();
+    expect(await decryptHistory()).toEqual(history);
+    expect(await baseline()).toEqual(before);
     const current = snapshot(), accountId = current.members[0].userId, onFence = vi.fn(); let alive = true;
     const owner = await VoiceCryptoOwner.create({ accountId, guard: await acquireVoiceOwnerGuard(accountId), snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() { if (!alive) throw new Error("Expired lifetime."); } }, transport: unitTransport(), onFence });
     try {
       const transition = owner.transition({ ...current, generation: 2 });
       expect(onFence).toHaveBeenCalledWith("generation-transition"); await transition;
       expect(await owner.receive()).toEqual([]);
-      expect(dm.identityKeys.ed25519.toBase64()).toBe(before);
+      expect(await baseline()).toEqual(before);
+      expect(await decryptHistory()).toEqual(history);
       alive = false; await expect(owner.flush()).rejects.toThrow("Expired lifetime");
       expect(onFence).toHaveBeenCalledWith("lifetime-lost");
       alive = true; await expect(owner.flush()).rejects.toThrow("closed");
@@ -207,6 +216,89 @@ describe("unreachable serial voice owner", () => {
       await value.owner.setControlContext(randomUUID(), value.current.members.map(member => member.memberId));
       expect(value.onFence).toHaveBeenCalledWith("audience-context-change");
     } finally { await value.owner.close(); value.peer.close(); }
+  });
+
+  it("closes on malformed sync response instead of retaining a schema-failed owner", async () => {
+    locks(); const current = snapshot(), accountId = current.members[0].userId, onFence = vi.fn(), port = unitTransport();
+    const owner = await VoiceCryptoOwner.create({ accountId, guard: await acquireVoiceOwnerGuard(accountId), snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: input => input.request.kind === "sync" ? Promise.resolve({ cursor: "0", events: "invalid" }) : port(input), onFence });
+    try {
+      await expect(owner.receive()).rejects.toThrow();
+      expect(onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(owner.flush()).rejects.toThrow("closed");
+    } finally { await owner.close(); }
+  });
+  it("closes an unexpected native failure without affecting an independent native peer", async () => {
+    const value = await pair();
+    const before = value.peer.machine.identityKeys.ed25519.toBase64(), original = C.OlmMachine.prototype.outgoingRequests;
+    vi.spyOn(C.OlmMachine.prototype, "outgoingRequests").mockImplementation(async function(this: C.OlmMachine) {
+      const output = await original.call(this);
+      if (this.userId.toString() === value.current.voiceUserId) throw new Error("Unexpected native operation failure.");
+      return output;
+    });
+    try {
+      await expect(value.owner.flush()).rejects.toThrow("Unexpected native operation failure");
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      expect(value.peer.machine.identityKeys.ed25519.toBase64()).toBe(before);
+      await value.peer.flush();
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+  it("closes native ownership while old HTTP is pending and fences its late response", async () => {
+    const value = await pair();
+    const arrived = deferred<void>(), release = deferred<void>();
+    try {
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "query") { arrived.resolve(); await release.promise; } };
+      const pending = value.owner.query([value.current.memberId, value.other.memberId]);
+      const failed = expect(pending).rejects.toThrow("closed");
+      await arrived.promise;
+      value.lifetime.abort(); expect(value.onFence).toHaveBeenCalledWith("lifetime-lost");
+      await value.owner.close();
+      const guard = await acquireVoiceOwnerGuard(value.current.members[0].userId);
+      release.resolve(); await failed;
+      await releaseUnusedVoiceOwnerGuard(guard);
+    } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+
+  it("retires registered old work after an intentionally interrupted actual send commit", async () => {
+    const value = await pair();
+    try {
+      let interrupted = false;
+      value.wire.pause = async entry => {
+        if (!interrupted && entry.memberId === value.current.memberId && entry.request.kind === "send") { interrupted = true; throw new VoiceGenerationInterrupted(); }
+      };
+      await expect(value.owner.requestVerification(value.other.memberId)).rejects.toBeInstanceOf(VoiceGenerationInterrupted);
+      const sent = value.wire.sent.find(entry => entry.request.kind === "send")!;
+      expect(value.onFence).not.toHaveBeenCalled();
+      await value.owner.transition({ ...value.current, generation: 2 });
+      const retired = value.wire.sent.find(entry => entry.request.kind === "retire" && "nativeRequestId" in sent.request && entry.request.nativeRequestId === sent.request.nativeRequestId);
+      expect(retired).toBeDefined();
+      expect(value.wire.sent.filter(entry => entry.request.kind === "send")).toHaveLength(1);
+      // The original send already committed. Retirement reports only its own zero-enqueue operation.
+      expect(retired?.binding.expectedGeneration).toBe(2);
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+  it("fails closed on genuine native output first observed at transition instead of backdating its generation", async () => {
+    const value = await pair();
+    const arrived = deferred<void>(), release = deferred<void>();
+    try {
+      await value.peer.query();
+      const handle = await value.owner.requestVerification(value.other.memberId); await value.peer.receive();
+      const state = (await value.owner.verificationStates())[0];
+      const request = value.peer.machine.getVerificationRequest(new C.UserId(value.current.voiceUserId), state.flowId);
+      if (!request) throw new Error("Missing unit request.");
+      const ready = request.acceptWithMethods([C.VerificationMethod.SasV1]); if (!ready) throw new Error("Missing unit ready.");
+      await value.peer.out(ready); await value.owner.receive();
+      await value.owner.verificationStep(handle, "start"); await value.peer.receive();
+      const sas = request.getVerification(); if (!(sas instanceof C.Sas)) throw new Error("Missing unit SAS.");
+      const accepted = sas.accept(); if (accepted) await value.peer.out(accepted);
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "ack") { arrived.resolve(); await release.promise; } };
+      // Processing native accept produces a native key output, but HTTP ACK is held before normal flush observes it.
+      const receive = value.owner.receive(), interrupted = expect(receive).rejects.toThrow();
+      await arrived.promise;
+      await expect(value.owner.transition({ ...value.current, generation: 2 })).rejects.toThrow("Unclassifiable first-observed transition output");
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      release.resolve(); await interrupted;
+      expect(value.wire.sent.filter(entry => entry.request.kind === "retire")).toEqual([]);
+    } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
   });
 
 });
