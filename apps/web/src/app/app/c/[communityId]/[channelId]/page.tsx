@@ -49,6 +49,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
               channel={channel}
               communityId={view.id}
               canManagePermissions={has(view.authority, Permission.ManageRoles)}
+              categories={view.categories}
             />
           )}
         </div>

@@ -4,6 +4,7 @@
 import { refresh } from "next/cache";
 import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
+import * as categories from "@/server/categories";
 import * as communities from "@/server/communities";
 import { toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
@@ -37,6 +38,11 @@ export const listChannelOverrides = async (channelId: string) =>
   run((u) => communities.listChannelOverrides(u, channelId), false);
 export const setChannelOverride = async (channelId: string, roleId: string, allow: number, deny: number) =>
   run((u) => communities.setChannelOverride(u, channelId, roleId, allow, deny));
+export const createCategory = async (communityId: string, name: string) => run((u) => categories.createCategory(u, communityId, name));
+export const renameCategory = async (categoryId: string, name: string) => run((u) => categories.renameCategory(u, categoryId, name));
+export const deleteCategory = async (categoryId: string) => run((u) => categories.deleteCategory(u, categoryId));
+export const setChannelCategory = async (channelId: string, categoryId: string | null) =>
+  run((u) => categories.setChannelCategory(u, channelId, categoryId));
 export const deleteChannel = async (channelId: string) => run((u) => communities.deleteChannel(u, channelId));
 
 export const createInvite = async (communityId: string, options: { expiresInHours: number | null; maxUses: number | null }) =>

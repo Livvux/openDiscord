@@ -106,6 +106,21 @@ export const memberRole = pgTable(
   ],
 );
 
+/** A named group of channels in the sidebar. Deleting it keeps its channels (uncategorised). */
+export const category = pgTable(
+  "category",
+  {
+    id: id(),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => community.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: integer("position").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("category_community_idx").on(t.communityId)],
+);
+
 export const channel = pgTable(
   "channel",
   {
@@ -117,10 +132,11 @@ export const channel = pgTable(
     topic: text("topic"),
     /** Voice channels have no messages; their room lives in LiveKit. */
     kind: text("kind", { enum: ["text", "voice"] }).notNull().default("text"),
+    categoryId: uuid("category_id").references(() => category.id, { onDelete: "set null" }),
     position: integer("position").notNull().default(0),
     createdAt: createdAt(),
   },
-  (t) => [index("channel_community_idx").on(t.communityId)],
+  (t) => [index("channel_community_idx").on(t.communityId), index("channel_category_idx").on(t.categoryId)],
 );
 
 /** Per-channel allow/deny bits for one role (src/server/permissions.ts `channelAuthority`). */
