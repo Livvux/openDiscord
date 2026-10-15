@@ -1,15 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
-import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, session } from "@/db/schema";
-import { voiceCallMember, voiceControlMailbox, voicePrekey } from "@/db/voice-schema";
+import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, role, session } from "@/db/schema";
+import { voiceCallMember, voiceControlMailbox, voicePrekey, voiceSignature } from "@/db/voice-schema";
 import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport } from "@/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "@/lib/voice/owner-guard";
 import { voiceControlParty, VOICE_CONTROL_EVENT, type VoiceOwnerControl } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
+import { Permission } from "@/server/permissions";
 import { registerDmDevice } from "@/server/direct-messages";
 import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, leaveVoiceControl } from "@/server/voice-control";
 import { testUsers } from "./helpers";
@@ -18,11 +19,12 @@ import { PublicServicePeer } from "./fixtures/voice-service-peer";
 // Internal real PostgreSQL service only. The sole fake is Node's absent browser Web Lock manager.
 const users = testUsers();
 const owners = new Set<VoiceCryptoOwner>();
+const barriers = new Set<() => void>();
 type Dispatch = Parameters<VoiceOwnerTransport>[0];
 type Endpoint = { userId: string; sessionId: string; anchorDeviceId: string; anchorSecret: string; secret: string; snapshot: VoiceSnapshot; owner: VoiceCryptoOwner; fence: ReturnType<typeof vi.fn<(reason: string) => void>>; lifetime: AbortController; calls: Dispatch[]; before?: (input: Dispatch) => Promise<void>; after?: (input: Dispatch, response: unknown) => Promise<void> };
 const auth = (e: Endpoint) => ({ userId: e.userId, sessionId: e.sessionId, memberId: e.snapshot.memberId, secret: e.secret });
 const binding = (e: Endpoint) => ({ callId: e.snapshot.callId, memberId: e.snapshot.memberId, joinNonce: e.snapshot.joinNonce, expectedGeneration: e.snapshot.generation });
-function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); barriers.add(resolve); return { promise, resolve }; }
 function locks() {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
@@ -95,6 +97,11 @@ async function verify(a: Endpoint, b: Endpoint) {
   await a.owner.admit(b.snapshot.memberId); await b.owner.admit(a.snapshot.memberId);
 }
 async function verifyPublicPeer(a: Endpoint, b: Endpoint, peer: PublicServicePeer) {
+  const decimals = new Map<string, number[]>(), original = C.Sas.prototype.emojiIndex;
+  const observation = vi.spyOn(C.Sas.prototype, "emojiIndex").mockImplementation(function(this: C.Sas) {
+    const values = this.decimals(); if (values) decimals.set(this.userId.toString(), Array.from(values));
+    return original.call(this);
+  });
   await peer.query();
   const handle = await a.owner.requestVerification(b.snapshot.memberId); await peer.receive();
   const ownMember = a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!;
@@ -106,7 +113,8 @@ async function verifyPublicPeer(a: Endpoint, b: Endpoint, peer: PublicServicePee
   await a.owner.receive(); await peer.receive(); await a.owner.receive();
   const nativeState = await state(a, b);
   expect(nativeState.emojiIndices).toHaveLength(7); expect(nativeState.emojiIndices).toEqual(Array.from(sas.emojiIndex()!));
-  expect(sas.decimals()).toHaveLength(3);
+  expect(decimals.size).toBe(2); expect([...decimals.values()][0]).toHaveLength(3);
+  expect([...decimals.values()][0]).toEqual([...decimals.values()][1]); observation.mockRestore();
   await a.owner.verificationStep(handle, "confirm");
   for (const output of await sas.confirm()) await peer.out(output);
   for (let round = 0; round < 3; round++) { await a.owner.receive(); await peer.receive(); }
@@ -125,7 +133,7 @@ function material(a: Endpoint, b: Endpoint, epochId: string): VoiceOwnerControl 
   return { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: a.snapshot.callId, generation: a.snapshot.generation, epochId, sender, recipient, publisher: sender, audience: [sender, recipient].sort((x, y) => x.memberId.localeCompare(y.memberId)), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 9).toString("base64") };
 }
 async function dmBaseline() { return Promise.all([db.select().from(dmIdentity), db.select().from(dmKey), db.select().from(dmMailbox), db.select().from(dmMessage), db.select().from(dmSignature)]); }
-afterEach(async () => { for (const owner of owners) await owner.close(); owners.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { for (const release of barriers) release(); barriers.clear(); for (const owner of owners) await owner.close(); owners.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 afterAll(() => users.cleanup());
 
 describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice service", () => {
@@ -182,6 +190,31 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(await b.owner.receive()).toEqual([]);
   }, 30_000);
 
+  it("returns truthful signature refusal for genuine pending SAS output without remote storage or losing the current peer", async () => {
+    const [a, b, c] = await fixture(3); await verify(a, c);
+    const entered = deferred(), release = deferred(); let paused = false;
+    const responses: { input: Dispatch; response: unknown }[] = [];
+    a.before = async input => {
+      if (input.request.kind === "signatures" && Object.hasOwn(input.request.body, b.snapshot.voiceUserId) && !paused) { paused = true; entered.resolve(); await release.promise; }
+    };
+    a.after = async (input, response) => { if (input.request.kind === "signatures") responses.push({ input, response }); };
+    const verification = verify(a, b), outcome = verification.then(() => undefined, error => error as unknown);
+    await entered.promise;
+    const before = await db.select().from(voiceSignature);
+    await leaveVoiceControl(auth(b), binding(b)); a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
+    await a.owner.transition(a.snapshot);
+    const fresh = responses.find(item => item.input.binding.expectedGeneration === a.snapshot.generation);
+    if (!fresh || fresh.input.request.kind !== "signatures") throw new Error("Missing actual pending signature re-dispatch.");
+    const expected: Record<string, { errcode: string; error: string }> = {};
+    for (const key of Object.keys(fresh.input.request.body[b.snapshot.voiceUserId] as Record<string, unknown>)) expected[key] = { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." };
+    expect(Object.keys(expected).length).toBeGreaterThan(0);
+    expect(fresh.response).toEqual({ failures: { [b.snapshot.voiceUserId]: expected } });
+    expect(await db.select().from(voiceSignature)).toEqual(before.filter(row => row.targetMemberId !== b.snapshot.memberId));
+    release.resolve(); expect(await outcome).toBeInstanceOf(VoiceGenerationInterrupted);
+    await refresh([c]); const epoch = await context(a, c), control = material(a, c, epoch);
+    await a.owner.sendControl(control); expect(await c.owner.receive()).toEqual([control]);
+  }, 30_000);
+
   it("re-dispatches a genuine pending native claim into actual current-generation absence during transition", async () => {
     const [a, b, c] = await fixture(3); await verify(a, b); await verify(a, c); const epoch = await context(a, b);
     const entered = deferred(), release = deferred(); let paused = false;
@@ -230,8 +263,13 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
   });
 
-  it.each(["session", "anchor", "lease"] as const)("fences actual %s authority denial without enqueue or lease renewal", async loss => {
-    const [a, b] = await fixture();
+  it.each(["session", "anchor", "lease", "permission"] as const)("fences actual %s authority denial without enqueue or lease renewal", async loss => {
+    const [first, second] = await fixture();
+    const a = loss === "permission" ? second : first, b = loss === "permission" ? first : second;
+    if (loss === "permission") {
+      const [ch] = await db.select().from(channel).where(eq(channel.id, a.snapshot.channelId));
+      await db.update(role).set({ permissions: sql`${role.permissions} & ${~Permission.Connect}` }).where(and(eq(role.communityId, ch.communityId), eq(role.isDefault, true)));
+    }
     if (loss === "session") await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, a.sessionId));
     if (loss === "anchor") await db.update(dmDevice).set({ revokedAt: new Date() }).where(eq(dmDevice.id, a.anchorDeviceId));
     if (loss === "lease") await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
