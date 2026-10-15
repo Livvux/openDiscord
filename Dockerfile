@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM node:25-alpine AS base
 RUN corepack enable
 WORKDIR /repo
 
@@ -13,7 +13,7 @@ RUN pnpm --filter web build
 FROM build AS migrate
 CMD ["pnpm", "--filter", "web", "db:migrate"]
 
-FROM node:22-alpine AS web
+FROM node:25-alpine AS web
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
