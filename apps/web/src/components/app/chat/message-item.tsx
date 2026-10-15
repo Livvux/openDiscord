@@ -2,6 +2,7 @@
 
 import { CornerUpLeftIcon, FileDownIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
@@ -312,6 +313,7 @@ export function MessageItem(props: MessageItemProps) {
             </Button>
           )}
           <ReportDialog messageId={message.id} />
+          {message.authorId !== currentUserId && !blocked && <Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} aria-label={`Message ${message.authorName} privately`} className="rounded px-2 py-1 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Message</Link>}
           {message.authorId !== currentUserId && !blocked && (
             <Button variant="ghost" size="icon-sm" aria-label={`Block ${message.authorName}`} onClick={onBlock} disabled={pending}>
               <UserXIcon />

@@ -19,6 +19,7 @@
   "dependencies": {
     "@base-ui/react": "^1.9.0",
     "@better-auth/passkey": "1.7.7",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.9.0",
     "aws4fetch": "^1.0.20",
     "better-auth": "1.7.7",
     "class-variance-authority": "^0.7.1",

@@ -4,7 +4,7 @@ import { and, asc, count, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { member, user, userBlock } from "@/db/schema";
+import { dmConversation, member, user, userBlock } from "@/db/schema";
 import { enforceCap } from "./limits";
 import { invalid, notFound } from "./errors";
 import { parse } from "./validation";
@@ -21,7 +21,7 @@ export interface BlockedUser {
 export async function blockUser(actorId: string, rawTargetId: unknown): Promise<void> {
   const targetId = parse(userId, rawTargetId);
   if (targetId === actorId) throw invalid("You can't block yourself.");
-  // Only people you share a community with: otherwise this would confirm arbitrary account ids.
+  // Shared membership or an existing private conversation prevents a global account directory.
   const shared = alias(member, "shared");
   const [target] = await db
     .select({ id: member.userId })
@@ -29,7 +29,9 @@ export async function blockUser(actorId: string, rawTargetId: unknown): Promise<
     .innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actorId)))
     .where(eq(member.userId, targetId))
     .limit(1);
-  if (!target) throw notFound("Account not found.");
+  const [firstId, secondId] = [actorId, targetId].sort();
+  const [conversation] = target ? [] : await db.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId))).limit(1);
+  if (!target && !conversation) throw notFound("Account not found.");
   const [{ total }] = await db.select({ total: count() }).from(userBlock).where(eq(userBlock.blockerId, actorId));
   enforceCap(total, MAX_BLOCKS, `You can block at most ${MAX_BLOCKS} people.`);
   await db.insert(userBlock).values({ blockerId: actorId, blockedId: targetId }).onConflictDoNothing();

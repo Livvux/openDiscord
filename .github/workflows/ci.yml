@@ -59,6 +59,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-traces, path: apps/web/test-results }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-screenshots
+          path: apps/web/test-results/**/*.png
+          retention-days: 7
+          if-no-files-found: ignore
 
   docker:
     runs-on: ubuntu-latest
