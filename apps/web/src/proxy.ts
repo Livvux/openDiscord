@@ -3,7 +3,7 @@
 //   page it started from);
 // - the operator's LiveKit server for voice, known only from runtime settings.
 // Inline scripts are Next.js bootstrap code; a nonce-based CSP would force every page dynamic.
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
 const dev = process.env.NODE_ENV !== "production";
 const TURNSTILE = "https://challenges.cloudflare.com";
@@ -35,7 +35,12 @@ export const CSP = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-export function proxy() {
+export function proxy(request: NextRequest) {
+  // This isolated SDK harness must never render on an ordinary deployment, even during streaming.
+  if (request.nextUrl.pathname.startsWith("/voice-worker-proof") &&
+      (process.env.GITHUB_ACTIONS !== "true" || process.env.OPENDISCORD_VOICE_PROOF !== "1")) {
+    return new NextResponse("Not found", { status: 404, headers: { "Content-Security-Policy": CSP, "Cache-Control": "no-store" } });
+  }
   const response = NextResponse.next();
   response.headers.set("Content-Security-Policy", CSP);
   return response;

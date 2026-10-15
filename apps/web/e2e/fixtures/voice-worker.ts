@@ -1,8 +1,9 @@
 import { BaseKeyProvider, Room, RoomEvent, Track, createKeyMaterialFromBuffer, type RemoteTrack } from "livekit-client";
 import { StrictVoiceWorker } from "../../src/lib/voice/strict-worker";
 
-type Scenario = "normal" | "unknown-identity" | "missing-key" | "wrong-key" | "tamper" | "plaintext-signaling";
-type Metrics = { encoded: number; decoded: number; changed: number; nonemptyEncoded: number; unmatched: number; encodeSetups: number; decodeSetups: number; scriptTransform: boolean; errors: string[]; framesAtFailure: number | null; energy: number; connected: boolean };
+export type Scenario = "normal" | "unknown-identity" | "missing-key" | "wrong-key" | "tamper" | "plaintext-signaling";
+export type Media = "audio" | "video";
+export type Metrics = { framesDecoded: number; videoWidth: number; codec: string; subscriptions: number; unsubscriptions: number; reconnecting: number; reconnected: number; workerUrl: string; encoded: number; decoded: number; changed: number; nonemptyEncoded: number; unmatched: number; encodeSetups: number; decodeSetups: number; scriptTransform: boolean; errors: string[]; framesAtFailure: number | null; energy: number; connected: boolean };
 type Frame = RTCEncodedAudioFrame | RTCEncodedVideoFrame;
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 
@@ -13,7 +14,10 @@ class Provider extends BaseKeyProvider {
   }
 }
 
-const metrics: Metrics = { encoded: 0, decoded: 0, changed: 0, nonemptyEncoded: 0, unmatched: 0, encodeSetups: 0, decodeSetups: 0, scriptTransform: false, errors: [], framesAtFailure: null, energy: 0, connected: false };
+let workerUrl = new URL("/voice-proof/worker.mjs", location.href);
+export function configureWorkerUrl(url: URL): void { workerUrl = url; metrics.workerUrl = url.href; }
+
+const metrics: Metrics = { framesDecoded: 0, videoWidth: 0, codec: "", subscriptions: 0, unsubscriptions: 0, reconnecting: 0, reconnected: 0, workerUrl: workerUrl.href, encoded: 0, decoded: 0, changed: 0, nonemptyEncoded: 0, unmatched: 0, encodeSetups: 0, decodeSetups: 0, scriptTransform: false, errors: [], framesAtFailure: null, energy: 0, connected: false };
 let sender: Room | undefined;
 let receiver: Room | undefined;
 let source: MediaStreamTrack | undefined;
@@ -21,6 +25,7 @@ let remote: RemoteTrack | undefined;
 let sendingWorker: StrictVoiceWorker | undefined;
 let receivingWorker: StrictVoiceWorker | undefined;
 let context: AudioContext | undefined;
+let animation: ReturnType<typeof setInterval> | undefined;
 
 /** Test-only observation/corruption around real native transform streams; no replacement cipher. */
 class ObservedWorker extends StrictVoiceWorker {
@@ -69,20 +74,21 @@ class ObservedWorker extends StrictVoiceWorker {
 }
 
 let currentScenario: Scenario = "normal";
-async function start(input: { url: string; senderToken: string; receiverToken: string; scenario: Scenario }): Promise<void> {
+async function start(input: { url: string; senderToken: string; receiverToken: string; scenario: Scenario; media?: Media }): Promise<void> {
   currentScenario = input.scenario;
   const failure = (reason: string) => {
     if (metrics.framesAtFailure === null) metrics.framesAtFailure = metrics.decoded;
     metrics.errors.push(reason);
     // Synchronously stop the source; terminate worker pipes before asynchronous SFU teardown.
     source?.stop();
+    clearInterval(animation);
     remote?.mediaStreamTrack.stop();
     void sender?.disconnect();
     void receiver?.disconnect();
   };
   const identities = ["sender", "receiver"];
-  sendingWorker = new ObservedWorker(new URL("/voice-proof/worker.mjs", location.href), identities, failure);
-  receivingWorker = new ObservedWorker(new URL("/voice-proof/worker.mjs", location.href), identities, failure);
+  sendingWorker = new ObservedWorker(workerUrl, identities, failure);
+  receivingWorker = new ObservedWorker(workerUrl, identities, failure);
   const senderKeys = new Provider(), receiverKeys = new Provider();
   const bytes = crypto.getRandomValues(new Uint8Array(32)).buffer;
   await senderKeys.install("sender", bytes);
@@ -98,26 +104,53 @@ async function start(input: { url: string; senderToken: string; receiverToken: s
     }).catch(() => undefined);
   });
   receiver.on(RoomEvent.TrackSubscribed, (track) => {
-    if (track.kind === Track.Kind.Audio) {
-      remote = track;
-      document.body.append(track.attach());
-    }
+    remote = track;
+    metrics.subscriptions++;
+    const element = track.attach();
+    if (element instanceof HTMLVideoElement) { element.muted = true; element.playsInline = true; }
+    document.body.append(element);
   });
+  receiver.on(RoomEvent.TrackUnsubscribed, (track) => {
+    metrics.unsubscriptions++;
+    track.detach().forEach((element) => element.remove());
+    if (remote === track) remote = undefined;
+  });
+  for (const room of [sender, receiver]) {
+    room.on(RoomEvent.Reconnecting, () => { metrics.reconnecting++; });
+    room.on(RoomEvent.Reconnected, () => { metrics.reconnected++; });
+  }
   if (input.scenario !== "plaintext-signaling") await sender.setE2EEEnabled(true);
   await receiver.setE2EEEnabled(true);
   await receiver.connect(input.url, input.receiverToken, { autoSubscribe: false });
   await receivingWorker.waitUntilEnabled("receiver");
   await sender.connect(input.url, input.senderToken, { autoSubscribe: false });
   if (input.scenario !== "plaintext-signaling") await sendingWorker.waitUntilEnabled("sender");
-  context = new AudioContext();
-  await context.resume();
-  const oscillator = context.createOscillator();
-  oscillator.frequency.value = 440;
-  const destination = context.createMediaStreamDestination();
-  oscillator.connect(destination);
-  oscillator.start();
-  source = destination.stream.getAudioTracks()[0];
-  const publication = await sender.localParticipant.publishTrack(source, { source: Track.Source.Microphone, dtx: false, red: false });
+  if (input.media === "video") {
+    const canvas = document.createElement("canvas");
+    canvas.width = 160; canvas.height = 90;
+    const drawing = canvas.getContext("2d");
+    if (!drawing) throw new Error("Canvas capture unavailable.");
+    let frame = 0;
+    const draw = () => {
+      drawing.fillStyle = "#14364b"; drawing.fillRect(0, 0, 160, 90);
+      drawing.fillStyle = "#ffb54a"; drawing.fillRect((frame++ * 7) % 140, 10, 20, 70);
+    };
+    draw();
+    animation = setInterval(draw, 1000 / 15);
+    source = canvas.captureStream(15).getVideoTracks()[0];
+  } else {
+    context = new AudioContext();
+    await context.resume();
+    const oscillator = context.createOscillator();
+    oscillator.frequency.value = 440;
+    const destination = context.createMediaStreamDestination();
+    oscillator.connect(destination);
+    oscillator.start();
+    source = destination.stream.getAudioTracks()[0];
+  }
+  const publication = await sender.localParticipant.publishTrack(source, input.media === "video"
+    ? { source: Track.Source.Camera, videoCodec: "vp8", simulcast: false }
+    : { source: Track.Source.Microphone, dtx: false, red: false });
   const nativeSender: unknown = publication.track ? Reflect.get(publication.track, "sender") : undefined;
   metrics.scriptTransform = nativeSender instanceof RTCRtpSender && !!Reflect.get(nativeSender, "transform");
   metrics.connected = true;
@@ -126,7 +159,14 @@ async function start(input: { url: string; senderToken: string; receiverToken: s
 async function snapshot(): Promise<Metrics> {
   const report = await remote?.getRTCStatsReport();
   if (remote?.receiver && Reflect.get(remote.receiver, "transform")) metrics.scriptTransform = true;
-  report?.forEach((entry) => { if (entry.type === "inbound-rtp" && typeof entry.totalAudioEnergy === "number") metrics.energy = entry.totalAudioEnergy; });
+  report?.forEach((entry) => {
+    if (entry.type !== "inbound-rtp") return;
+    if (typeof entry.totalAudioEnergy === "number") metrics.energy = entry.totalAudioEnergy;
+    if (typeof entry.framesDecoded === "number") metrics.framesDecoded = entry.framesDecoded;
+    if (typeof entry.frameWidth === "number") metrics.videoWidth = entry.frameWidth;
+    const codec = report.get(entry.codecId);
+    if (typeof codec?.mimeType === "string") metrics.codec = codec.mimeType;
+  });
   return { ...metrics, errors: [...metrics.errors] };
 }
 
@@ -145,15 +185,45 @@ function unknown(): void {
 
 async function unknownState(): Promise<string> {
   let reason = "";
-  const worker = new StrictVoiceWorker(new URL("/voice-proof/worker.mjs", location.href), ["sender"], (value) => { reason = value; });
+  const worker = new StrictVoiceWorker(workerUrl, ["sender"], (value) => { reason = value; });
   const input = new TransformStream<Frame, Frame>(), output = new TransformStream<Frame, Frame>();
   worker.postMessage({ kind: "encode", data: { participantIdentity: "sender", trackId: "unknown-state", readableStream: input.readable, writableStream: output.writable, hasPacketTrailer: false } }, [input.readable, output.writable]);
   return reason;
 }
 
-declare global {
-  interface Window {
-    voiceProof: { start: typeof start; snapshot: typeof snapshot; downgrade: typeof downgrade; unknown: typeof unknown; unknownState: typeof unknownState };
+async function until(condition: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (!condition()) {
+    if (metrics.errors.length) throw new Error(metrics.errors.join("; "));
+    if (Date.now() >= deadline) throw new Error(`${label} timed out.`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
-window.voiceProof = { start, snapshot, downgrade, unknown, unknownState };
+
+async function resubscribe(): Promise<void> {
+  const participant = receiver?.remoteParticipants.get("sender");
+  const publication = participant ? [...participant.trackPublications.values()][0] : undefined;
+  if (!publication || !receivingWorker) throw new Error("No live subscription.");
+  const unsubscribed = metrics.unsubscriptions, subscribed = metrics.subscriptions;
+  publication.setSubscribed(false);
+  await until(() => metrics.unsubscriptions > unsubscribed, "Unsubscribe");
+  await receivingWorker.waitUntilEnabled("sender");
+  publication.setSubscribed(true);
+  await until(() => metrics.subscriptions > subscribed, "Resubscribe");
+}
+
+async function reconnect(side: "sender" | "receiver"): Promise<void> {
+  const room = side === "sender" ? sender : receiver;
+  if (!room) throw new Error("Room missing.");
+  const reconnecting = metrics.reconnecting, reconnected = metrics.reconnected;
+  // Installed SDK's explicit test API exercises its native full disconnect/rejoin path.
+  await room.simulateScenario("full-reconnect");
+  await until(() => metrics.reconnecting > reconnecting && metrics.reconnected > reconnected, "Full reconnect");
+}
+
+declare global {
+  interface Window {
+    voiceProof: { start: typeof start; snapshot: typeof snapshot; downgrade: typeof downgrade; unknown: typeof unknown; unknownState: typeof unknownState; resubscribe: typeof resubscribe; reconnect: typeof reconnect };
+  }
+}
+window.voiceProof = { start, snapshot, downgrade, unknown, unknownState, resubscribe, reconnect };
