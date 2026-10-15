@@ -225,6 +225,13 @@
       "when": 1792100779912,
       "tag": "0031_voice_lifecycle_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792106764933,
+      "tag": "0032_voice_sfu_room_ownership",
+      "breakpoints": true
     }
   ]
 }

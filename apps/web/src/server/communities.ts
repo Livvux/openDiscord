@@ -1,3 +1,4 @@
+import { voiceTransaction } from "./voice-sfu";
 import { randomBytes } from "node:crypto";
 import { and, asc, count, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -115,7 +116,7 @@ export async function renameCommunity(userId: string, rawId: unknown, rawName: u
 
 export async function deleteCommunity(userId: string, rawId: unknown) {
   const communityId = parse(uuid, rawId);
-  const voiceRooms = await db.transaction(async (tx) => {
+  const voiceRooms = await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx, "auth");
     await lockCommunity(tx, communityId);
     const { authority } = await requireMember(tx, communityId, userId);
@@ -128,12 +129,12 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
     return rooms;
   });
   await publish({ type: "community.deleted", communityId });
-  await Promise.all(voiceRooms.map((r) => closeVoiceRoom(r.id)));
+  for (const room of voiceRooms) await closeVoiceRoom(room.id);
 }
 
 export async function leaveCommunity(userId: string, rawId: unknown) {
   const communityId = parse(uuid, rawId);
-  await db.transaction(async tx => {
+  await voiceTransaction(async tx => {
     await lockVoiceLifecycle(tx);
     await lockCommunity(tx, communityId);
     const { authority } = await requireMember(tx, communityId, userId);
@@ -142,7 +143,7 @@ export async function leaveCommunity(userId: string, rawId: unknown) {
     await tx.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
   });
   await publish({ type: "member.removed", communityId, userId });
-  afterAccessChange(communityId);
+  await afterAccessChange(communityId);
 }
 
 // --- Channels ---------------------------------------------------------------
@@ -180,7 +181,7 @@ export async function updateChannel(userId: string, rawChannelId: unknown, rawNa
 export async function deleteChannel(userId: string, rawChannelId: unknown) {
   const channelId = parse(uuid, rawChannelId);
   const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx);
     await lockCommunity(tx, ch.communityId);
     await requireChannel(tx, channelId, userId, Permission.ManageChannels);
@@ -245,7 +246,7 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
   const allow = parse(overrideBits, rawAllow);
   const deny = parse(overrideBits, rawDeny);
   if (allow & deny) throw invalid("A permission can't be both allowed and denied.");
-  const communityId = await db.transaction(async (tx) => {
+  const communityId = await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx);
     // A channel's community never changes, so locking after the first read is safe; authority is re-read under the lock.
     const [ref] = await tx.select({ communityId: channel.communityId }).from(channel).where(eq(channel.id, channelId));
@@ -268,7 +269,7 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
     return ch.communityId;
   });
   await publish({ type: "channels.changed", communityId });
-  afterAccessChange(communityId);
+  await afterAccessChange(communityId);
 }
 
 // --- Invites ----------------------------------------------------------------

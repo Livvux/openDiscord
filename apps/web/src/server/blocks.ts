@@ -1,3 +1,4 @@
+import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateBlockedVoicePair } from "./voice-control";
 // Blocking is personal: the blocked person isn't told, keeps seeing the blocker's messages, and can
@@ -23,7 +24,7 @@ export interface BlockedUser {
 export async function blockUser(actorId: string, rawTargetId: unknown): Promise<void> {
   const targetId = parse(userId, rawTargetId);
   if (targetId === actorId) throw invalid("You can't block yourself.");
-  await db.transaction(async tx => {
+  await voiceTransaction(async tx => {
     await lockVoiceLifecycle(tx);
     // Shared membership or an existing private conversation prevents a global account directory.
     const shared = alias(member, "shared");

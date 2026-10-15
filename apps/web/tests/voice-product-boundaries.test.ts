@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
-import { afterAll, describe, expect, it, vi } from "vitest";
-import { AccessToken } from "livekit-server-sdk";
+import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { AccessToken, Room, RoomServiceClient } from "livekit-server-sdk";
 import { db } from "@/db";
 import { channel, session, member, role } from "@/db/schema";
 import { voiceCallMember } from "@/db/voice-schema";
@@ -14,6 +14,13 @@ import { blockUser } from "@/server/blocks";
 import { updateRole } from "@/server/moderation";
 import { testUsers } from "./helpers";
 
+// Public SDK mocks: this suite proves SQL/token boundaries, not live SFU acceptance.
+beforeEach(() => {
+  vi.spyOn(RoomServiceClient.prototype, "createRoom").mockImplementation(async options => new Room({ name: options.name }));
+  vi.spyOn(RoomServiceClient.prototype, "listParticipants").mockResolvedValue([]);
+  vi.spyOn(RoomServiceClient.prototype, "deleteRoom").mockResolvedValue();
+});
+afterEach(() => vi.restoreAllMocks());
 const users = testUsers();
 afterAll(() => users.cleanup());
 async function fixture() {

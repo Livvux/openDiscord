@@ -9,6 +9,7 @@ import { loadChannelAuthority, requireChannel } from "./access";
 import { AppError } from "./errors";
 import { has, Permission } from "./permissions";
 import { grantBoundVoiceMedia } from "./voice-control";
+import { consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
 import type { VoiceMediaSource } from "@/lib/voice/contracts";
 import { parse, uuid } from "./validation";
 
@@ -20,17 +21,16 @@ const apiSecret = process.env.LIVEKIT_API_SECRET;
 export const voiceEnabled = Boolean(url && apiKey && apiSecret);
 /**
  * Tokens can't be revoked, so they only need to live long enough to connect: once connected, LiveKit
- * refreshes the session itself, and removals end it. A short lifetime bounds re-joins with a stale token.
+ * refreshes the session itself. This app TTL does not bound refreshed reconnect tokens;
+ * generation ownership remains durable and retired rooms require recurring exact cleanup.
  */
 const TOKEN_TTL_SECONDS = 60;
-/** Reconcile again after a token issued just before an access change has certainly expired. */
-const RECHECK_AFTER_MS = (TOKEN_TTL_SECONDS + 5) * 1000;
 
 /** The server API can live on a private address (compose: http://livekit:7880); defaults to the public URL. */
 const apiUrl = process.env.LIVEKIT_API_URL || url?.replace(/^ws/, "http");
 
 function rooms(): RoomServiceClient {
-  return new RoomServiceClient(apiUrl!, apiKey!, apiSecret!);
+  return voiceRoomService() ?? new RoomServiceClient(apiUrl!, apiKey!, apiSecret!, { requestTimeout: 0.5, failover: false });
 }
 
 export interface VoiceJoin {
@@ -77,7 +77,16 @@ export async function createVoiceToken(userId: string, rawChannelId: unknown): P
  * A later revoke can race signing/delivery; generation-room/key lifecycle is required at activation. */
 export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) {
   if (!voiceEnabled) throw new AppError("not_found", "Voice isn't set up on this instance.");
-  const grant = await grantBoundVoiceMedia(rawAuth, binding);
+  const reserved = await grantBoundVoiceMedia(rawAuth, binding);
+  await createOwnedVoiceRoom(reserved.roomName);
+  let grant: Awaited<ReturnType<typeof grantBoundVoiceMedia>>;
+  try { grant = await grantBoundVoiceMedia(rawAuth, binding); }
+  catch (error) {
+    await retireOwnedVoiceRoom(reserved.roomName);
+    await consumeVoiceRooms();
+    throw error;
+  }
+  if (grant.roomName !== reserved.roomName) throw new AppError("conflict", "Voice membership changed.");
   const expiresAt = Date.parse(grant.expiresAt);
   const ttl = Math.min(TOKEN_TTL_SECONDS, Math.floor(expiresAt / 1000) - Math.ceil(Date.now() / 1000));
   if (ttl < 1) throw new AppError("forbidden", "This voice enrollment has ended.");
@@ -114,26 +123,35 @@ export async function listVoiceParticipants(userId: string, rawChannelId: unknow
  * people who lost Speak or Video can no longer publish those tracks. Best effort, so moderation never fails because LiveKit is down.
  */
 export async function reconcileVoice(communityId: string): Promise<void> {
+  await consumeVoiceRooms();
   if (!voiceEnabled) return;
   const voiceChannels = await db
     .select({ id: channel.id })
     .from(channel)
     .where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
   const client = rooms();
+  const deadline = performance.now() + 2500;
+  let requests = 0;
   for (const ch of voiceChannels) {
+    if (requests >= 4 || performance.now() + 500 > deadline) break;
+    requests++;
     const participants = await client.listParticipants(ch.id).catch((error: unknown) => {
-      console.error("[voice] could not list participants", ch.id, error);
+      void error;
+      console.warn("[voice] legacy room unavailable");
       return [];
     });
     for (const p of participants) {
+      if (requests >= 4 || performance.now() + 500 > deadline) break;
       const access = await loadChannelAuthority(db, ch.id, p.identity).catch(() => null);
       if (!access || !has(access.authority, Permission.Connect)) {
+        requests++;
         await client.removeParticipant(ch.id, p.identity).catch(() => {});
       } else {
         // Narrow what they may publish when Speak or Video was taken away; LiveKit unpublishes the rest.
         const allowed = publishSources(access.authority);
         const current = p.permission?.canPublishSources ?? [];
         if (current.some((source) => !allowed.includes(source)) || (allowed.length === 0 && p.permission?.canPublish)) {
+          requests++;
           await client
             .updateParticipant(ch.id, p.identity, {
               permission: { canSubscribe: true, canPublish: allowed.length > 0, canPublishSources: allowed, canPublishData: false },
@@ -150,13 +168,7 @@ export async function closeVoiceRoom(channelId: string): Promise<void> {
   if (voiceEnabled) await rooms().deleteRoom(channelId).catch(() => {});
 }
 
-/**
- * Fire-and-forget wrapper for mutations: log, never throw. Runs now and once more after the token
- * lifetime, which catches someone who fetched a token just before losing access and connected after.
- */
-export function afterAccessChange(communityId: string): void {
-  if (!voiceEnabled) return;
-  const run = () => void reconcileVoice(communityId).catch((error: unknown) => console.error("[voice] reconcile failed", error));
-  run();
-  setTimeout(run, RECHECK_AFTER_MS).unref?.();
+/** Awaited legacy exact-channel reconciliation; retired generation cleanup remains durable. */
+export async function afterAccessChange(communityId: string): Promise<void> {
+  await reconcileVoice(communityId).catch(() => console.warn("[voice] reconciliation deferred"));
 }

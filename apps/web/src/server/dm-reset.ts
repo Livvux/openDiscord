@@ -1,3 +1,4 @@
+import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { createHash } from "node:crypto";
@@ -31,7 +32,7 @@ export function dmResetState(actor: string, sessionId: string): Promise<DmResetS
 }
 /** Called only after route-level password and, when enabled, TOTP verification. */
 export async function resetDmIdentity(actor: string, sessionId: string, expected: { identity: string; twoFactorEnabled: boolean }): Promise<void> {
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx, "auth");
     // Account mutations consistently lock the user before any session rows.
     await tx.select({ id: user.id }).from(user).where(eq(user.id, actor)).for("update");
