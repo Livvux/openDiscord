@@ -1,7 +1,7 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { captcha, twoFactor } from "better-auth/plugins";
 import { db } from "@/db";
@@ -66,6 +66,17 @@ export const auth = betterAuth({
     },
   },
   advanced: { ipAddress: { trustedProxies } },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/change-email") return;
+      // Better Auth 1.7's sensitive-session middleware checks revocation, not freshness.
+      const current = await getAuthoritativeSessionFromCtx(ctx);
+      if (!current) throw new APIError("UNAUTHORIZED", { message: "Please sign in again." });
+      if (Date.now() - current.session.createdAt.getTime() >= 60 * 60_000) {
+        throw new APIError("FORBIDDEN", { message: "Sign in again before changing your email address." });
+      }
+    }),
+  },
   user: {
     changeEmail: {
       enabled: mailEnabled,
