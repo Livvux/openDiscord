@@ -28,7 +28,7 @@ describe("generation room ownership", () => {
     const create = vi.spyOn(RoomServiceClient.prototype, "createRoom").mockRejectedValue(new Error("SFU unavailable"));
     const sign = vi.spyOn(AccessToken.prototype, "toJwt");
     try {
-      await expect(createBoundVoiceToken(f.auth, f.binding)).rejects.toMatchObject({ code: "unavailable" });
+      await expect(createBoundVoiceToken(f.auth, f.binding)).rejects.toMatchObject({ code: "conflict" });
       expect(create).toHaveBeenCalledWith({ name: `voice:${f.snapshot.channelId}:${f.snapshot.callId}:${f.snapshot.generation}` });
       expect(sign).not.toHaveBeenCalled();
     } finally { create.mockRestore(); sign.mockRestore(); }
