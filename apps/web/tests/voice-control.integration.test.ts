@@ -92,11 +92,12 @@ const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "s
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
-  it("rechecks lease time after an observed non-Voice user row-lock wait", async () => {
+  it.each(["lease", "session"] as const)("rechecks %s time after an observed non-Voice user row-lock wait", async (deadline) => {
     const { endpoints: [a] } = await fixture(1);
     const writer = await db.$client.connect();
     const start = Date.now();
-    await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(start + 10_000) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    if (deadline === "lease") await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(start + 10_000) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    else await db.update(session).set({ expiresAt: new Date(start + 10_000) }).where(eq(session.id, a.sessionId));
     let pending: Promise<unknown> | undefined;
     try {
       await writer.query("BEGIN");
@@ -116,8 +117,8 @@ describe("voice-only scope, immutable public state and replay", () => {
       await writer.query("COMMIT");
       expect(await pending).toMatchObject({ error: { code: "forbidden" } });
       const [member] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
-      expect(member.state).toBe("left");
-      expect(member.leaseExpiresAt.getTime()).toBeLessThanOrEqual(start + 20_000);
+      if (deadline === "lease") expect(member.state).toBe("left");
+      expect(member.leaseExpiresAt.getTime()).toBeLessThanOrEqual(deadline === "lease" ? start + 20_000 : new Date(a.snapshot.leaseExpiresAt).getTime());
       expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(0);
     } finally {
       await writer.query("ROLLBACK");
