@@ -1,6 +1,7 @@
 "use client";
 
 import { PencilIcon, Trash2Icon } from "lucide-react";
+import Image from "next/image";
 import { useId, useState, useTransition } from "react";
 import { deleteMessage, editMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
@@ -66,10 +67,37 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
         {editing ? (
           <EditForm initial={message.content} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
-          <p className="break-words whitespace-pre-wrap text-zinc-300">
-            {message.content}
-            {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
-          </p>
+          (message.content || message.editedAt) && (
+            <p className="break-words whitespace-pre-wrap text-zinc-300">
+              {message.content}
+              {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
+            </p>
+          )
+        )}
+        {message.attachments.length > 0 && (
+          <ul aria-label="Images" className="mt-1 flex flex-wrap gap-2">
+            {message.attachments.map((a, i) => (
+              <li key={a.id}>
+                <a
+                  href={`/api/attachments/${a.id}`}
+                  target="_blank"
+                  rel="noopener"
+                  className="block overflow-hidden rounded-lg ring-1 ring-white/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {/* Served through the access-checked route; the optimizer must not cache it publicly. */}
+                  <Image
+                    src={`/api/attachments/${a.id}`}
+                    alt={`Image ${i + 1} from ${message.authorName}`}
+                    width={a.width}
+                    height={a.height}
+                    unoptimized
+                    loading="lazy"
+                    className="h-auto max-h-80 w-auto max-w-[min(100%,28rem)] bg-white/5 object-contain"
+                  />
+                </a>
+              </li>
+            ))}
+          </ul>
         )}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
@@ -127,11 +155,14 @@ function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pen
   );
 }
 
-export function PendingItem({ content }: { content: string }) {
+export function PendingItem({ content, images }: { content: string; images: number }) {
   return (
     <li className="flex gap-3 px-5 py-0.5 opacity-60" aria-label="Sending">
       <div className="w-8 shrink-0" />
-      <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">{content}</p>
+      <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
+        {content}
+        {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 image" : `${images} images`}…</span>}
+      </p>
     </li>
   );
 }

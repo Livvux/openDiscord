@@ -144,6 +144,8 @@ describe("instance administration", () => {
     await expect(db.delete(user).where(eq(user.id, root.userId))).rejects.toThrow();
   });
   it("serializes concurrent demotions and preserves the last administrator", async () => {
+    // The last-admin rule is instance-wide; a developer database may already have its own admins.
+    const others = (await db.select().from(instanceAdmin)).filter((a) => !ids.includes(a.userId)).length;
     await admin.setInstanceAdmin(root, owner, true, "Second administrator");
     const second = await makeSession(owner);
     const outcomes = await Promise.allSettled([
@@ -151,8 +153,9 @@ describe("instance administration", () => {
       admin.setInstanceAdmin(second, root.userId, false, "Concurrent demotion two"),
     ]);
     expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const admins = await db.select().from(instanceAdmin);
+    const admins = (await db.select().from(instanceAdmin)).filter((a) => ids.includes(a.userId));
     expect(admins).toHaveLength(1);
+    if (others) return;
     const remaining = admins[0].userId === root.userId ? root : second;
     await expect(admin.setInstanceAdmin(remaining, remaining.userId, false, "Remove last admin")).rejects.toThrow(/last instance administrator/);
   });

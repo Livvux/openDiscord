@@ -2,6 +2,7 @@ import { and, count, desc, eq, gt, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLog, channel, message, user } from "@/db/schema";
 import { requireChannel } from "./access";
+import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
 import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
@@ -19,6 +20,7 @@ export interface MessageView {
   content: string;
   createdAt: string;
   editedAt: string | null;
+  attachments: AttachmentView[];
 }
 
 const viewColumns = {
@@ -31,8 +33,13 @@ const viewColumns = {
   editedAt: message.editedAt,
 };
 
-function toView(row: { createdAt: Date; editedAt: Date | null } & Omit<MessageView, "createdAt" | "editedAt">): MessageView {
-  return { ...row, createdAt: row.createdAt.toISOString(), editedAt: row.editedAt?.toISOString() ?? null };
+type MessageRow = { createdAt: Date; editedAt: Date | null } & Omit<MessageView, "createdAt" | "editedAt" | "attachments">;
+function toView(row: MessageRow, attachments: AttachmentView[] = []): MessageView {
+  return { ...row, createdAt: row.createdAt.toISOString(), editedAt: row.editedAt?.toISOString() ?? null, attachments };
+}
+async function toViews(rows: MessageRow[]): Promise<MessageView[]> {
+  const byMessage = await attachmentsFor(rows.map((r) => r.id));
+  return rows.map((r) => toView(r, byMessage.get(r.id)));
 }
 
 export interface MessagePage {
@@ -53,7 +60,7 @@ export async function listMessages(userId: string, rawChannelId: unknown, rawBef
     .where(before ? and(eq(message.channelId, channelId), lt(message.id, before)) : eq(message.channelId, channelId))
     .orderBy(desc(message.id))
     .limit(PAGE_SIZE + 1);
-  return { messages: rows.slice(0, PAGE_SIZE).reverse().map(toView), hasMore: rows.length > PAGE_SIZE };
+  return { messages: await toViews(rows.slice(0, PAGE_SIZE).reverse()), hasMore: rows.length > PAGE_SIZE };
 }
 
 /**
@@ -69,12 +76,14 @@ export async function getMessageForBroadcast(messageId: string): Promise<{ commu
     .where(eq(message.id, messageId));
   if (!row) return null;
   const { communityId, ...view } = row;
-  return { communityId, message: toView(view) };
+  return { communityId, message: (await toViews([view]))[0] };
 }
 
-export async function sendMessage(userId: string, rawChannelId: unknown, rawContent: unknown): Promise<MessageView> {
+export async function sendMessage(userId: string, rawChannelId: unknown, rawContent: unknown, rawAttachments: unknown = []): Promise<MessageView> {
   const channelId = parse(uuid, rawChannelId);
-  const content = parse(messageContent, rawContent);
+  const ids = parse(attachmentIds, rawAttachments);
+  // A message with images may have no text.
+  const content = ids.length > 0 && typeof rawContent === "string" && !rawContent.trim() ? "" : parse(messageContent, rawContent);
   const { channel: ch } = await requireChannel(db, channelId, userId, Permission.SendMessages);
 
   const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);
@@ -84,10 +93,14 @@ export async function sendMessage(userId: string, rawChannelId: unknown, rawCont
     .where(and(eq(message.authorId, userId), gt(message.createdAt, since)));
   if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "You're sending messages too quickly. Wait a moment.");
 
-  const [row] = await db.insert(message).values({ channelId, authorId: userId, content }).returning();
+  const row = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(message).values({ channelId, authorId: userId, content }).returning();
+    await linkAttachments(tx, userId, channelId, created.id, ids);
+    return created;
+  });
   const [author] = await db.select({ name: user.name }).from(user).where(eq(user.id, userId));
   await publish({ type: "message.created", communityId: ch.communityId, channelId, messageId: row.id });
-  return toView({ ...row, authorName: author.name });
+  return (await toViews([{ ...row, authorName: author.name }]))[0];
 }
 
 async function loadOwnedMessage(rawMessageId: unknown) {
@@ -129,4 +142,6 @@ export async function deleteMessage(userId: string, rawMessageId: unknown) {
     }
   });
   await publish({ type: "message.deleted", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
+  // Free its images now; other deletions (channel, community, account) are caught by the periodic sweep.
+  void sweepAttachments().catch((error: unknown) => console.error("[media] sweep failed", error));
 }

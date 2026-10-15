@@ -168,3 +168,31 @@ export const auditLog = pgTable(
   },
   (t) => [index("audit_log_community_idx").on(t.communityId, t.id)],
 );
+
+/**
+ * Image stored in object storage (R2/S3). Uploaded first, then linked to a message on send.
+ * Deleting the message, channel, community or author unlinks it; unlinked objects are swept
+ * from storage (src/server/media.ts), and only linked attachments are ever served.
+ */
+export const attachment = pgTable(
+  "attachment",
+  {
+    id: id(),
+    messageId: uuid("message_id").references(() => message.id, { onDelete: "set null" }),
+    channelId: uuid("channel_id").references(() => channel.id, { onDelete: "set null" }),
+    uploaderId: text("uploader_id").references(() => user.id, { onDelete: "set null" }),
+    /** Set once when sent; a removed message's images can never be re-attached. */
+    linkedAt: timestamp("linked_at", { withTimezone: true }),
+    key: text("key").notNull().unique(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("attachment_message_idx").on(t.messageId),
+    index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null`),
+    index("attachment_uploader_idx").on(t.uploaderId, t.createdAt),
+  ],
+);

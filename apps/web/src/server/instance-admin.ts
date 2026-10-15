@@ -1,9 +1,10 @@
-import { and, count, desc, eq, gt, ilike, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { abuseReport, channel, community, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userSuspension } from "@/db/schema";
 import type { Db } from "./access";
 import { AppError, forbidden, notFound } from "./errors";
+import { sendMail } from "@/lib/mail";
 import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "./instance-policy";
 import { requiredReason } from "./reports";
 import { publish } from "./realtime";
@@ -33,16 +34,33 @@ async function mutate<T>(actor: AdminActor, fn: (tx: Db) => Promise<T>) {
   });
 }
 
-export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "", rawStatus: unknown = "open") {
+export const USER_FILTERS = ["all", "pending", "active", "rejected", "suspended", "admins"] as const;
+export type UserFilter = (typeof USER_FILTERS)[number];
+const userFilterWhere: Record<UserFilter, SQL | undefined> = {
+  all: undefined,
+  pending: and(eq(user.approvalStatus, "pending"), isNull(userSuspension.userId)),
+  active: and(eq(user.approvalStatus, "approved"), isNull(userSuspension.userId)),
+  rejected: eq(user.approvalStatus, "rejected"),
+  suspended: isNotNull(userSuspension.userId),
+  admins: isNotNull(instanceAdmin.userId),
+};
+
+export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "", rawStatus: unknown = "open", rawFilter: unknown = "all") {
   await requireInstanceAdmin(actor);
   const search = parse(z.string().trim().max(100), rawSearch);
   const status = parse(z.enum(["open", "dismissed", "removed"]), rawStatus);
+  const filter = parse(z.enum(USER_FILTERS), rawFilter);
   const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
-  const [users, communities, reports, logs, admins, settings] = await Promise.all([
-    db.select({ id: user.id, name: user.name, email: user.email, twoFactorEnabled: user.twoFactorEnabled,
-      suspendedAt: userSuspension.createdAt, suspensionReason: userSuspension.reason, adminId: instanceAdmin.userId })
+  const [users, pending, communities, reports, logs, admins, settings, [stats]] = await Promise.all([
+    db.select({ id: user.id, name: user.name, email: user.email, twoFactorEnabled: user.twoFactorEnabled, createdAt: user.createdAt,
+      approvalStatus: user.approvalStatus, suspendedAt: userSuspension.createdAt, suspensionReason: userSuspension.reason, adminId: instanceAdmin.userId })
       .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id)).leftJoin(instanceAdmin, eq(instanceAdmin.userId, user.id))
-      .where(search ? or(ilike(user.name, pattern), ilike(user.email, pattern)) : undefined).orderBy(desc(user.createdAt), user.id).limit(50),
+      .where(and(search ? or(ilike(user.name, pattern), ilike(user.email, pattern)) : undefined, userFilterWhere[filter]))
+      .orderBy(desc(user.createdAt), user.id).limit(50),
+    // The approval queue is oldest first: fair, and nobody waits forever at the bottom.
+    db.select({ id: user.id, name: user.name, email: user.email, emailVerified: user.emailVerified, createdAt: user.createdAt })
+      .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id))
+      .where(and(eq(user.approvalStatus, "pending"), isNull(userSuspension.userId))).orderBy(user.createdAt, user.id).limit(100),
     db.select({ id: community.id, name: community.name, ownerId: community.ownerId, ownerEmail: user.email,
       suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason })
       .from(community).innerJoin(user, eq(user.id, community.ownerId))
@@ -56,8 +74,15 @@ export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "",
       .from(instanceAuditLog).leftJoin(user, eq(user.id, instanceAuditLog.actorId)).orderBy(desc(instanceAuditLog.id)).limit(100),
     db.select({ id: user.id, name: user.name, email: user.email }).from(instanceAdmin).innerJoin(user, eq(user.id, instanceAdmin.userId)),
     getInstanceSettings(),
+    db.select({
+      users: count(),
+      pending: sql<number>`count(*) filter (where ${user.approvalStatus} = 'pending' and ${userSuspension.userId} is null)`.mapWith(Number),
+      suspended: count(userSuspension.userId),
+      openReports: sql<number>`(select count(*) from ${abuseReport} where ${abuseReport.status} = 'open')`.mapWith(Number),
+      communities: sql<number>`(select count(*) from ${community})`.mapWith(Number),
+    }).from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id)),
   ]);
-  return { users, communities, reports, logs, admins, settings };
+  return { users, pending, communities, reports, logs, admins, settings, stats, filter };
 }
 export type AdminDashboard = Awaited<ReturnType<typeof adminDashboard>>;
 
@@ -137,6 +162,8 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
     if (grant) {
       await assertActiveUser(id, tx);
       await tx.insert(instanceAdmin).values({ userId: id }).onConflictDoNothing();
+      // Keeps access if the rights are removed again while Closed Alpha is on.
+      await tx.update(user).set({ approvalStatus: "approved" }).where(eq(user.id, id));
     } else {
       const [{ total }] = await tx.select({ total: count() }).from(instanceAdmin);
       if (total <= 1 && await isInstanceAdmin(id, tx)) throw forbidden("The last instance administrator cannot be removed.");
@@ -156,6 +183,37 @@ export async function updateInstanceSettings(actor: AdminActor, input: unknown, 
   await mutate(actor, async (tx) => {
     await tx.insert(instanceSettings).values(settings).onConflictDoUpdate({ target: instanceSettings.id, set: settings });
     await audit(tx, actor, "instance.settings.update", "instance", `${reason} ${JSON.stringify(settings)}`);
+  });
+}
+
+/** Closed Alpha decision for one account. Approval reopens rejected accounts; rejection only applies to pending ones. */
+export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision: unknown, rawReason: unknown) {
+  const targetId = parse(z.string().min(1).max(128), rawId);
+  const decision = parse(z.enum(["approved", "rejected"]), rawDecision);
+  const reason = parse(requiredReason, rawReason);
+  const target = await mutate(actor, async (tx) => {
+    const [row] = await tx.select({ id: user.id, email: user.email, status: user.approvalStatus }).from(user).where(eq(user.id, targetId)).for("update");
+    if (!row) throw notFound("Account not found.");
+    if (row.status === decision) throw new AppError("conflict", `This account is already ${decision}.`);
+    if (decision === "rejected" && row.status !== "pending") throw new AppError("conflict", "Only pending accounts can be rejected. Suspend active accounts instead.");
+    await tx.update(user).set({ approvalStatus: decision }).where(eq(user.id, targetId));
+    if (decision === "rejected") await tx.delete(session).where(eq(session.userId, targetId));
+    await audit(tx, actor, decision === "approved" ? "user.approve" : "user.reject", targetId, reason);
+    return row;
+  });
+  if (decision === "approved") {
+    const url = new URL("/sign-in", process.env.BETTER_AUTH_URL ?? "http://localhost:3000");
+    // The decision is committed; a mail outage must not turn it into an error.
+    await sendMail(target.email, "Your openDiscord account is approved", `You're in. Sign in to start using openDiscord:\n${url}`)
+      .catch((error: unknown) => console.error("[admin] approval email failed", error));
+  }
+}
+export async function setClosedAlpha(actor: AdminActor, rawEnabled: unknown, rawReason: unknown) {
+  const closedAlpha = parse(z.boolean(), rawEnabled);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    await tx.insert(instanceSettings).values({ closedAlpha }).onConflictDoUpdate({ target: instanceSettings.id, set: { closedAlpha } });
+    await audit(tx, actor, closedAlpha ? "instance.closed_alpha.enable" : "instance.closed_alpha.disable", "instance", reason);
   });
 }
 

@@ -29,7 +29,8 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 ## Trust boundaries
 
 1. Browser ↔ Caddy (internet, TLS).
-2. Caddy ↔ web (Docker network). `web` trusts `X-Forwarded-For` from Caddy for rate limiting; `web` is
+2. Caddy ↔ web (Docker network). `web` trusts `X-Forwarded-For` from Caddy for rate limiting (Caddy
+   overwrites it with the client IP, honouring `Cf-Connecting-Ip` only from `TRUSTED_PROXIES`); `web` is
    not published on a host port, so clients can't spoof it. **Operators who expose `web` directly
    must strip `X-Forwarded-For` at their own proxy.**
 3. web ↔ Postgres (Docker network, password auth, not exposed).
@@ -39,7 +40,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 
 | # | Threat (STRIDE) | Mitigation | Status |
 | --- | --- | --- | --- |
-| T1 | Spoofing: credential stuffing, brute force | Better Auth per-IP rate limits on sign-in/sign-up; min. password length 10; optional TOTP; passkeys | ✅ (limits are per process: D4) |
+| T1 | Spoofing: credential stuffing, brute force | Better Auth per-IP rate limits on sign-in/sign-up; min. password length 10; optional TOTP; passkeys | ✅ (shared across replicas: D4) |
 | T2 | Spoofing: session theft | HttpOnly, Secure, SameSite cookies; HSTS; sessions revocable in settings; all sessions revoked on password reset | ✅ |
 | T3 | Spoofing: phishing via open redirect after sign-in | `safeNextPath` parses like a browser and rejects `//`, `\`, control characters | ✅ tested |
 | T4 | Tampering: CSRF on mutations | Server Actions enforce same-origin; Better Auth checks `Origin`; no state-changing GET routes | ✅ |
@@ -61,7 +62,8 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T20 | Info disclosure: operator or database compromise | TLS, DB not exposed, TOTP secrets encrypted; message content is plaintext in the DB | 🟡 E2EE for DMs P1; disk encryption is the operator's job |
 | T21 | Supply chain: vulnerable dependency | Lockfile-frozen builds, `pnpm audit` in CI, Dependabot | ✅ |
 | T22 | SSRF | The server makes no requests to user-supplied URLs (no link previews or webhooks yet) | ✅ n/a; required review before link previews/webhooks |
-| T23 | Malicious uploads | Uploads don't exist yet | n/a; see ROADMAP attachments criteria |
+| T23 | Malicious uploads | Images only; type decided by the decoder, not the client; re-encoded to WebP (no EXIF/GPS, no polyglots, no SVG); size checked before the body is read; pixel and frame caps; per-user upload rate and pending-upload caps; private bucket; served with `nosniff`, `Content-Security-Policy: sandbox` and membership checks | ✅ images (no malware scanning; ClamAV P1) |
+| T24 | Spam sign-ups / account farming | Cloudflare Turnstile verified server-side on sign-up (when configured); 5 sign-ups per 10 min per IP; optional Closed Alpha: new accounts need admin approval before any session is issued | ✅ (shared across replicas: D4) |
 | T24 | Account enumeration | Password reset answers identically for unknown emails. Sign-up reveals that an email is taken (accepted trade-off for usability) | 🟡 |
 | T25 | Child safety, grooming, harassment | Blocking, reporting, age attestation, DM restrictions | ❌ P1, required before public launch of the official instance |
 
@@ -69,7 +71,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 
 - `script-src 'unsafe-inline'`: a nonce-based CSP would force every page to render dynamically. XSS
   defence relies on React escaping and on never rendering user HTML. Revisit before rich text or embeds.
-- Rate limits and stream caps are per process. With several replicas, use shared storage (D4).
+- The mutation burst limit and stream caps are per process (auth limits are shared). With several replicas, share them too (D4).
 - Not-found pages inside streamed routes return HTTP 200 (D12); no data is rendered.
 
 ## Verification

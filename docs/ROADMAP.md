@@ -72,7 +72,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ❌ | P1 |
 | Threads | ❌ | P2 |
-| Attachments | ❌ | **P1**: local volume or S3-compatible storage, size/type validation, EXIF stripping, optional ClamAV |
+| Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P1 |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ❌ | P1: Postgres full-text search, membership-scoped |
 | Notification preferences | ❌ | P1 (depends on mentions and unread state) |
@@ -94,11 +94,11 @@ They are deliberately outside the text MVP: they bring an SFU, TURN and UDP port
 | Threat model | ✅ | [THREAT-MODEL.md](THREAT-MODEL.md) |
 | Authentication and recovery | ✅ | Password (min 10), email verification and reset when SMTP is set, sessions revoked on reset |
 | Passkeys and TOTP 2FA | ✅ | Better Auth plugins; tested with a virtual authenticator and RFC 6238 codes |
-| Rate limiting, anti-spam | 🟡 | Auth endpoints (Better Auth), messages (5 per 5 s per user), 30 mutations per 10 s per user, caps on communities/channels/roles/invites, 8 live streams per user. Limits other than messages are per process (shared store P1); per-community join limits P1 |
+| Rate limiting, anti-spam | 🟡 | Auth endpoints (Better Auth), messages (5 per 5 s per user), 30 mutations per 10 s per user, caps on communities/channels/roles/invites, 8 live streams per user. Auth limits are shared in Postgres; the mutation burst limit and stream caps are per process (shared store P1); per-community join limits P1 |
 | Anti-raid | ❌ | P1: join-rate limits per community, invite pause, minimum account age option |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
-| Upload security | n/a | No uploads yet (see Attachments) |
+| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | 🟡 | Env secrets; rotation procedure documented. Rotating `BETTER_AUTH_SECRET` invalidates sessions and TOTP secrets: multi-key rotation P2 |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |

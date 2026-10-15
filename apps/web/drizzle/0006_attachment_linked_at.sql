@@ -1,0 +1,1 @@
+ALTER TABLE "attachment" ADD COLUMN "linked_at" timestamp with time zone;

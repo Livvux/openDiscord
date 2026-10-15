@@ -25,11 +25,28 @@ The one-shot `migrate` service applies database migrations before `web` starts, 
 Without SMTP, accounts work without email verification and password-reset links are written to the
 `web` log (`docker compose logs web`). Set `SMTP_URL` and `MAIL_FROM` for real email.
 
+Optional integrations (see `.env.example`):
+
+- **Anti-spam on sign-up:** set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` from a Cloudflare
+  Turnstile widget whose hostnames include your `DOMAIN`. Every sign-up then needs a token verified
+  server-side. With the CLI: `cf turnstile widgets create --body '{"name":"opendiscord","mode":"managed","domains":["chat.example.org"]}'`.
+- **Image attachments:** set `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+  (any S3-compatible store works). Keep the bucket private: images are only served through the app,
+  which checks channel membership. With the `cf` CLI: `cf r2 buckets create --name opendiscord-media`,
+  then an account token (`cf accounts tokens create`) with *Workers R2 Storage Bucket Item Write*
+  scoped to that bucket. The access key ID is the token ID; the secret is the SHA-256 hex of the token value.
+
 ## Security notes
 
 - `web` is not published on a host port; only Caddy is. Keep it that way: rate limiting trusts the
-  `X-Forwarded-For` header that Caddy sets. If you use another reverse proxy, make sure it overwrites
-  (not appends to) `X-Forwarded-For` and that `web` is unreachable from outside.
+  `X-Forwarded-For` header that Caddy sets. Caddy overwrites it with the one client IP it resolved.
+  If you use another reverse proxy, make sure it overwrites (not appends to) `X-Forwarded-For` and
+  that `web` is unreachable from outside.
+- **Behind Cloudflare (proxied DNS):** set `TRUSTED_PROXIES` to Cloudflare's ranges, otherwise every
+  visitor looks like a Cloudflare edge IP and shares one rate limit. Only those peers may supply
+  `Cf-Connecting-Ip`; anyone reaching the server directly can't spoof it:
+  `TRUSTED_PROXIES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | tr '\n' ' ')"`.
+  Cloudflare changes these ranges rarely; refresh them when it announces changes.
 - If you put a CDN such as Cloudflare in front, it terminates TLS and can see traffic; tell your users.
 - `BETTER_AUTH_SECRET` signs sessions and encrypts TOTP secrets. Rotating it signs everyone out and
   invalidates enrolled authenticator apps (users must set 2FA up again). Rotate it if it leaks.

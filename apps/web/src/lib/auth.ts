@@ -3,12 +3,12 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { twoFactor } from "better-auth/plugins";
+import { captcha, twoFactor } from "better-auth/plugins";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { AppError } from "@/server/errors";
 import { ownedCommunityNames, unlinkFromAuditLog } from "@/server/account";
-import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
+import { authRateLimitStore } from "@/server/rate-limit-store";
+import { AccountBlocked, assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
 
 const NAME_MAX = 64;
@@ -20,6 +20,12 @@ function checkName(name: unknown) {
   if (typeof name === "string" && (name.trim().length === 0 || name.length > NAME_MAX)) {
     throw new APIError("BAD_REQUEST", { message: `Display names need 1–${NAME_MAX} characters.` });
   }
+}
+
+// Turnstile is optional for self-hosters; when configured, every sign-up needs a verified token.
+const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+if (process.env.NODE_ENV === "production" && !turnstileSecret) {
+  console.warn("[auth] TURNSTILE_SECRET_KEY is not set: sign-ups are not protected by Turnstile.");
 }
 
 // Reads BETTER_AUTH_SECRET and BETTER_AUTH_URL from the environment.
@@ -42,7 +48,19 @@ export const auth = betterAuth({
       await sendMail(user.email, "Verify your openDiscord account", `Confirm your email address:\n${url}`);
     },
   },
+  // Better Auth's per-IP limiter (on in production) plus a stricter window for account creation.
+  // Shared in Postgres so limits hold across web replicas; keys are HMACs, never raw IPs (docs/DECISIONS.md D4).
+  rateLimit: {
+    customStorage: authRateLimitStore,
+    customRules: {
+      "/sign-up/email": { window: 600, max: 5 },
+    },
+  },
   user: {
+    additionalFields: {
+      // Closed Alpha gate. Only the database hook and instance admins change it; clients can't set it.
+      approvalStatus: { type: ["approved", "pending", "rejected"], defaultValue: "approved", input: false, required: true },
+    },
     deleteUser: {
       enabled: true,
       beforeDelete: async (user) => {
@@ -63,9 +81,12 @@ export const auth = betterAuth({
     user: {
       create: { before: async (user) => {
         checkName(user.name);
-        if (!(await getInstanceSettings()).registrationOpen) {
+        const settings = await getInstanceSettings();
+        if (!settings.registrationOpen) {
           throw new APIError("FORBIDDEN", { message: "Registration is closed on this instance." });
         }
+        // Set in the same insert, so an account can never exist ungated while Closed Alpha is on.
+        return { data: { ...user, approvalStatus: settings.closedAlpha ? "pending" : "approved" } };
       } },
       update: { before: async (user) => checkName(user.name) },
     },
@@ -73,7 +94,9 @@ export const auth = betterAuth({
       // Privacy: IPs are used in memory for rate limiting but never stored with the session.
       create: { before: async (session) => {
         try { await assertActiveUser(session.userId); } catch (error) {
-          if (error instanceof AppError) throw new APIError("FORBIDDEN", { message: "This account is suspended." });
+          if (error instanceof AccountBlocked) {
+            throw new APIError("FORBIDDEN", { message: error.message, code: `ACCOUNT_${error.state.toUpperCase()}` });
+          }
           throw error;
         }
         return { data: { ...session, ipAddress: null } };
@@ -83,6 +106,9 @@ export const auth = betterAuth({
   plugins: [
     // TOTP only becomes active after the first code is verified, so a mis-scanned QR can't lock anyone out.
     twoFactor({ issuer: APP_NAME }),
+    ...(turnstileSecret
+      ? [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret, endpoints: ["/sign-up/email"] })]
+      : []),
     passkey({ rpID: publicUrl.hostname, rpName: APP_NAME, origin: publicUrl.origin }),
     // Must stay last: applies Set-Cookie from server actions.
     nextCookies(),

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
@@ -17,12 +17,21 @@ export const userSuspension = pgTable("user_suspension", {
 export const instanceSettings = pgTable("instance_settings", {
   id: text("id").primaryKey().default("instance"),
   registrationOpen: boolean("registration_open").notNull().default(true),
+  /** New accounts start as pending and need an instance admin's approval. */
+  closedAlpha: boolean("closed_alpha").notNull().default(false),
   inviteMode: text("invite_mode", { enum: ["members", "admins", "disabled"] }).notNull().default("members"),
   ownedCommunities: integer("owned_communities").notNull().default(25),
   channelsPerCommunity: integer("channels_per_community").notNull().default(200),
   rolesPerCommunity: integer("roles_per_community").notNull().default(100),
   activeInvitesPerCommunity: integer("active_invites_per_community").notNull().default(100),
 }, (t) => [check("instance_settings_singleton", sql`${t.id} = 'instance'`)]);
+
+/** Better Auth rate-limit windows. `key` is an HMAC of "IP + path", so no IP address is stored. */
+export const authRateLimit = pgTable("auth_rate_limit", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull(),
+  windowStart: bigint("window_start", { mode: "number" }).notNull(),
+}, (t) => [index("auth_rate_limit_window_idx").on(t.windowStart)]);
 
 // Targets deliberately aren't cascading FKs: moderation evidence survives content/account deletion.
 // Message bodies are never copied into reports or the audit log.

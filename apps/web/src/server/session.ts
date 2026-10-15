@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "@/lib/auth";
-import { assertActiveUser } from "./instance-policy";
+import { AccountBlocked, assertActiveUser } from "./instance-policy";
 import { AppError } from "./errors";
 
 export interface SessionUser {
@@ -24,7 +24,7 @@ async function readUser(source: Headers): Promise<SessionUser | null> {
 export const requirePageUser = cache(async (): Promise<SessionUser> => {
   let user: SessionUser | null;
   try { user = await readUser(await headers()); } catch (error) {
-    if (error instanceof AppError && error.code === "forbidden") redirect("/sign-in?error=suspended");
+    if (error instanceof AccountBlocked) redirect(`/sign-in?error=${error.state}`);
     throw error;
   }
   if (!user) redirect("/sign-in");

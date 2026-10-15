@@ -25,9 +25,11 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Display name | Shown next to messages and in member lists | Members of shared communities | Until changed or deleted |
 | Password hash | Authentication | Nobody (server only) | Until changed or deleted |
 | Sessions: creation/expiry time, user agent | Keep you signed in; "signed-in devices" list | The person | Until expiry (7 days by default) or sign-out; expired rows are purged by a P1 job |
-| IP addresses | Rate limiting in memory | Nobody | **Not stored** |
+| IP addresses | Rate limiting | Nobody | **Not stored.** Sign-in/sign-up limits keep a keyed hash (HMAC) of "IP + endpoint" and a counter for at most a day; it can't be turned back into an IP without the server secret |
 | Communities, memberships, roles | Running the community | Members | Until the community is deleted or you leave |
 | Messages | Conversation | Members of the community | Until deleted by author, moderator, community deletion or account deletion |
+| Images in messages | Conversation | Members of the community (served through the app, never public) | Re-encoded without EXIF/GPS on upload. Unreachable as soon as the message, channel, community or account is deleted; removed from storage within about an hour |
+| Account approval status (Closed Alpha) | Access control | The person (on sign-in) and instance administrators | Until account deletion |
 | Bans | Moderation | Moderators with ban permission | Until unbanned, community deleted or the banned account deleted |
 | Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |
 | Instance administrators, suspensions and settings | Instance governance and abuse prevention | Instance administrators; users see their own access restrictions | Until revoked; suspension ends when lifted or the account is deleted |
@@ -35,8 +37,12 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; no automated retention job yet. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
-There are no analytics, tracking pixels, advertising identifiers, third-party fonts or third-party
-scripts. The Content Security Policy blocks requests to other origins.
+There are no analytics, tracking pixels, advertising identifiers or third-party fonts. The Content
+Security Policy blocks requests to other origins, with one optional exception: if the operator enables
+Cloudflare Turnstile, the sign-up page loads Cloudflare's challenge script, and Cloudflare processes
+the visitor's IP address and browser signals to tell people from bots. No other page loads it. If
+the operator enables image attachments on Cloudflare R2, images are stored with Cloudflare as a
+processor; visitors never contact R2 directly.
 
 ## Your rights (GDPR)
 
