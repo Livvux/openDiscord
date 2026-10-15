@@ -115,6 +115,7 @@ export class VoiceCryptoOwner {
   }
   close(reason = "closed"): Promise<void> { this.stop(reason); return this.cleanupNative(); }
   private binding(): VoiceBinding { return { callId: this.snapshot.callId, memberId: this.snapshot.memberId, joinNonce: this.snapshot.joinNonce, expectedGeneration: this.snapshot.generation }; }
+  private matchesBinding(binding: VoiceBinding): boolean { return binding.callId === this.snapshot.callId && binding.memberId === this.snapshot.memberId && binding.joinNonce === this.snapshot.joinNonce && binding.expectedGeneration === this.snapshot.generation; }
   private peer(memberId: string): VoiceMember {
     const peer = this.snapshot.members.find(member => member.memberId === memberId);
     if (!peer) throw new Error("Unknown current voice member.");
@@ -126,15 +127,22 @@ export class VoiceCryptoOwner {
     return device;
   }
   private async exchange(request: VoiceCryptoRequest, allowTransition = false): Promise<unknown> {
-    this.assertCurrent(allowTransition);
-    const revision = this.revision;
+    const context = await this.serial(() => Object.freeze({ binding: Object.freeze(this.binding()), revision: this.revision, request: Object.freeze(voiceCryptoSchema.parse(request)) }), allowTransition);
+    let outcome: { ok: true; result: unknown } | { ok: false; error: unknown };
     try {
-      const result = await this.options.transport({ binding: this.binding(), request: voiceCryptoSchema.parse(request), signal: this.abort.signal });
-      this.assertCurrent(allowTransition);
-      if (revision !== this.revision) throw new VoiceGenerationInterrupted();
-      return result;
-    } catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("transport-or-schema-failure"); throw error; }
+      outcome = { ok: true, result: await this.options.transport({ binding: context.binding, request: context.request, signal: this.abort.signal }) };
+    } catch (error) { outcome = { ok: false, error }; }
+    return this.serial(() => {
+      // Sync/ACK/bootstrap outcomes obey the same context fence as native request attempts.
+      if (context.revision !== this.revision || !this.matchesBinding(context.binding)) throw new VoiceGenerationInterrupted();
+      if (!outcome.ok) {
+        if (!(outcome.error instanceof VoiceGenerationInterrupted)) this.stop("transport-or-schema-failure");
+        throw outcome.error;
+      }
+      return outcome.result;
+    }, true);
   }
+
   private async observe(request: NativeRequest, allowTransition = false): Promise<Entry | undefined> {
     if (!(request instanceof C.KeysUploadRequest || request instanceof C.KeysQueryRequest || request instanceof C.KeysClaimRequest || request instanceof C.SignatureUploadRequest || request instanceof C.ToDeviceRequest)) throw new Error("Unsupported native voice output.");
     if (new TextEncoder().encode(request.body).length > VOICE_LIMITS.bootstrapBytes) throw new Error("Native request size exceeded.");
@@ -205,7 +213,7 @@ export class VoiceCryptoOwner {
         const { entry, attempt } = prepared;
         // Resolve both success and failure in the native executor. A superseded HTTP outcome
         // cannot complete native work or apply the fatal policy to the retained current owner.
-        if (attempt.revision !== this.revision || attempt.binding.callId !== this.snapshot.callId || attempt.binding.memberId !== this.snapshot.memberId || attempt.binding.joinNonce !== this.snapshot.joinNonce || attempt.binding.expectedGeneration !== this.snapshot.generation || (entry && (entry.activeAttempt !== attempt || entry.attempts.get(attempt.key) !== attempt || entry.state === "completed" || entry.state === "completing"))) throw new VoiceGenerationInterrupted();
+        if (attempt.revision !== this.revision || !this.matchesBinding(attempt.binding) || (entry && (entry.activeAttempt !== attempt || entry.attempts.get(attempt.key) !== attempt || entry.state === "completed" || entry.state === "completing"))) throw new VoiceGenerationInterrupted();
         if (!outcome.ok) throw outcome.error;
         let nativeResponse = outcome.result;
         if (request instanceof C.ToDeviceRequest) {
@@ -347,6 +355,7 @@ export class VoiceCryptoOwner {
     const revision = this.revision;
     const rawBatch = await this.exchange({ kind: "sync" });
     const batch = await this.serial(() => {
+      if (revision !== this.revision) throw new VoiceGenerationInterrupted();
       const parsed = syncSchema.parse(rawBatch), serializedEvents: string[] = [];
       let batchBytes = 2;
       for (const rawEvent of parsed.events) {
