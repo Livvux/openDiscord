@@ -168,6 +168,21 @@ describe("voice-only scope, immutable public state and replay", () => {
     await expect(crypto(a, { kind: "upload", body: { one_time_keys: { "signed_curve25519:oneMore": keyContent("m") } } })).rejects.toThrow("lifetime");
     await expect(crypto(a, { kind: "upload", body: { one_time_keys: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`signed_curve25519:over${i}`, keyContent("n")])) } })).rejects.toThrow("Too many");
   });
+  it("queries fresh identities and signatures for repeated identical bodies and explicit request IDs", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    await upload(a);
+    for (const requestId of [undefined, randomUUID()]) {
+      const request = { kind: "query", body: { device_keys: { [b.snapshot.voiceUserId]: [] } }, ...(requestId ? { requestId } : {}) };
+      const before = await crypto(a, request);
+      if (!requestId) expect(JSON.stringify(before)).not.toContain(b.snapshot.voiceDeviceId);
+      await upload(b);
+      const updated = await crypto(a, request);
+      expect(JSON.stringify(updated)).toContain(b.snapshot.voiceDeviceId);
+      await db.insert(voiceSignature).values({ signerMemberId: a.snapshot.memberId, targetMemberId: b.snapshot.memberId, keyId: b.snapshot.voiceDeviceId, signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: "n".repeat(86) } }).onConflictDoUpdate({ target: [voiceSignature.signerMemberId, voiceSignature.targetMemberId, voiceSignature.keyId], set: { signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: "n".repeat(86) } } });
+      expect(JSON.stringify(await crypto(a, request))).toContain("n".repeat(86));
+    }
+    expect(await db.$count(voiceControlReceipt, eq(voiceControlReceipt.senderMemberId, a.snapshot.memberId))).toBe(1);
+  });
   it("filters embedded/stored signatures to the querying and target voice identities", async () => {
     const { endpoints: [a, b, c] } = await fixture(3); await upload(a); await upload(b); await upload(c);
     const bKeys = keys(b);

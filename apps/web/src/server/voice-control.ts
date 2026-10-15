@@ -138,7 +138,7 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
     if (!call || call.status === "closed") {
       [call] = await tx.insert(voiceCall).values({ channelId: ch.id }).returning();
     }
-    const [{ id }] = await tx.select({ id: sql<string>`uuidv7()` });
+    const { rows: [{ id }] } = await tx.execute<{ id: string }>(sql`select uuidv7() as id`);
     const [own] = await tx.insert(voiceCallMember).values({ id, callId: call.id, userId: auth.userId, anchorDeviceId: auth.anchorDeviceId, sessionId: auth.sessionId, joinNonce: data.joinNonce, voiceUserId: namespace(id), voiceDeviceId: data.voiceDeviceId, enrollmentSecretHash: digest(data.enrollmentSecret), leaseExpiresAt: new Date(now.getTime() + L.leaseMs) }).returning();
     if (current.length) {
       call.generation++;
@@ -315,7 +315,8 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
     }
     const requestDigest = digest(canonical({ callId: call.id, memberId: own.id, generation: call.generation, request }));
     const requestId = "requestId" in request && request.requestId ? request.requestId : `${request.kind}:${requestDigest}`;
-    const [receipt] = await tx.select().from(voiceControlReceipt).where(and(eq(voiceControlReceipt.senderMemberId, own.id), eq(voiceControlReceipt.requestId, requestId)));
+    // Queries read mutable public key/signature state; they must never replay a cached response.
+    const [receipt] = request.kind === "query" ? [] : await tx.select().from(voiceControlReceipt).where(and(eq(voiceControlReceipt.senderMemberId, own.id), eq(voiceControlReceipt.requestId, requestId)));
     if (receipt) {
       if (receipt.digest !== requestDigest) throw conflict("A voice transaction ID cannot be reused for different work.");
       if (receipt.expiresAt <= now) throw conflict("This voice transaction retry window has ended. Rejoin if native work cannot continue.");
@@ -434,7 +435,7 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
         }
       }
     }
-    await storeReceipt(tx, own, requestId, requestDigest, response, now);
+    if (request.kind !== "query") await storeReceipt(tx, own, requestId, requestDigest, response, now);
     return response;
   });
   if (result instanceof AppError) throw result;
