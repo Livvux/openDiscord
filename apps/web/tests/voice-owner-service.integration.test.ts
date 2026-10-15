@@ -26,7 +26,7 @@ function locks() {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
 }
-async function fixture(count = 2) {
+async function fixture(count = 2, nativeOwners = count) {
   locks();
   const accounts = [];
   for (let i = 0; i < count; i++) {
@@ -46,7 +46,7 @@ async function fixture(count = 2) {
     endpoints.push({ ...account, secret, snapshot, calls: [], fence: vi.fn(), lifetime: new AbortController() } as Endpoint);
   }
   for (const endpoint of endpoints) endpoint.snapshot = await heartbeatVoiceControl(auth(endpoint), binding(endpoint));
-  for (const endpoint of endpoints) {
+  for (const endpoint of endpoints.slice(0, nativeOwners)) {
     endpoint.owner = await VoiceCryptoOwner.create({ accountId: endpoint.userId, guard: await acquireVoiceOwnerGuard(endpoint.userId), snapshot: endpoint.snapshot, lifetime: { signal: endpoint.lifetime.signal, assertCurrent() {} }, onFence: endpoint.fence, transport: async input => {
       endpoint.calls.push({ binding: structuredClone(input.binding), request: structuredClone(input.request), signal: input.signal });
       await endpoint.before?.(input);
@@ -137,6 +137,21 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     // A revision fence keeps the owner alive and cannot itself grant new admission.
     expect(await b.owner.receive()).toEqual([]);
   }, 30_000);
+
+  it("processes genuine native query device absence without invented keys or a busy loop", async () => {
+    const [a, unbootstrapped] = await fixture(2, 1);
+    const responses: unknown[] = [];
+    a.after = async (input, response) => { if (input.request.kind === "query") responses.push(response); };
+    await a.owner.query([unbootstrapped.snapshot.memberId]);
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({ device_keys: { [unbootstrapped.snapshot.voiceUserId]: {} }, failures: {} });
+    const before = a.calls.length;
+    await a.owner.flush();
+    expect(a.calls.length - before).toBeLessThanOrEqual(4);
+    await expect(a.owner.requestVerification(unbootstrapped.snapshot.memberId)).rejects.toThrow("Missing current native voice device");
+    expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure");
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+  });
 
   it.each(["session", "anchor", "lease"] as const)("fences actual %s authority denial without enqueue or lease renewal", async loss => {
     const [a, b] = await fixture();
