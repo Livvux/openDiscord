@@ -265,20 +265,26 @@ export async function verifyPair(a: EphemeralVoice, b: EphemeralVoice): Promise<
   const [request, outgoing] = (await a.device(b)).requestVerification([C.VerificationMethod.SasV1]);
   const flow = request.flowId;
   a.registerFlow(b.binding.user, flow); await a.out(outgoing); await b.sync();
-  const accepted = b.verification(a, flow).acceptWithMethods([C.VerificationMethod.SasV1]);
+  const receiverRequest = b.verification(a, flow);
+  const accepted = receiverRequest.acceptWithMethods([C.VerificationMethod.SasV1]);
   if (!accepted) throw new Error("Native SAS acceptance missing.");
   await b.out(accepted); await a.sync();
-  const started = await a.verification(b, flow).startSas();
+  const started = await request.startSas();
   if (!started) throw new Error("Native SAS start missing.");
   await a.out(started[1]); await b.sync();
-  const sasAccept = b.sas(a, flow).accept(); if (sasAccept) await b.out(sasAccept);
+  const senderSas = started[0], receiverSas = b.sas(a, flow);
+  const sasAccept = receiverSas.accept(); if (sasAccept) await b.out(sasAccept);
   await a.sync(); await b.sync(); await a.sync();
-  const left = a.sas(b, flow).decimals(), right = b.sas(a, flow).decimals();
+  for (const [sas, own, peer] of [[senderSas, a.binding, b.binding], [receiverSas, b.binding, a.binding]] as const) {
+    if (sas.flowId !== flow || sas.userId.toString() !== own.user || sas.deviceId.toString() !== own.device || sas.otherUserId.toString() !== peer.user || sas.otherDeviceId.toString() !== peer.device) throw new Error("Native SAS binding mismatch.");
+  }
+  const left = senderSas.decimals(), right = receiverSas.decimals();
   if (!left || !right || Array.from(left).join() !== Array.from(right).join()) throw new Error("Independent SAS comparison failed.");
-  for (const item of await a.sas(b, flow).confirm()) await a.out(item);
-  for (const item of await b.sas(a, flow).confirm()) await b.out(item);
+  for (const item of await senderSas.confirm()) await a.out(item);
+  for (const item of await receiverSas.confirm()) await b.out(item);
   await a.sync(); await b.sync(); await a.sync(); await b.sync();
-  if (!a.verification(b, flow).isDone() || !b.verification(a, flow).isDone()) throw new Error("Native SAS not complete.");
+  // Completed flows can leave the SDK lookup; retain the original native handles to inspect completion.
+  if (!request.isDone() || !receiverRequest.isDone() || !senderSas.isDone() || !receiverSas.isDone()) throw new Error("Native SAS not complete.");
   await a.query([a, b]); await b.query([a, b]);
   if (!(await a.device(b)).isVerified() || !(await b.device(a)).isVerified()) throw new Error("Native trust did not settle.");
 }
