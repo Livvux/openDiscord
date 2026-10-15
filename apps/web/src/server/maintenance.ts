@@ -1,6 +1,6 @@
 import { and, eq, isNotNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { abuseReport, applicationRateLimit, auditLog, authRateLimit, instanceAuditLog, session, streamLease, verification } from "@/db/schema";
+import { abuseReport, banAppeal, applicationRateLimit, auditLog, authRateLimit, instanceAuditLog, session, streamLease, verification } from "@/db/schema";
 import { SESSION_DEVICE_LABELS, sessionDeviceLabel } from "@/lib/session-device";
 
 const DAY_MS = 86_400_000;
@@ -27,6 +27,7 @@ export async function runMaintenance({ apply = false, now = new Date(), batchSiz
     { name: "streamLeases", table: streamLease, key: streamLease.id, condition: lte(streamLease.expiresAt, now) },
     { name: "communityAudit", table: auditLog, key: auditLog.id, condition: lt(auditLog.createdAt, auditCutoff) },
     { name: "instanceAudit", table: instanceAuditLog, key: instanceAuditLog.id, condition: lt(instanceAuditLog.createdAt, auditCutoff) },
+    { name: "resolvedAppeals", table: banAppeal, key: banAppeal.id, condition: lt(banAppeal.resolvedAt, auditCutoff) },
     { name: "resolvedReports", table: abuseReport, key: abuseReport.id, condition: and(ne(abuseReport.status, "open"), lt(abuseReport.resolvedAt, auditCutoff))! },
   ];
   const counts: Record<string, number> = {};

@@ -84,7 +84,7 @@ backups when those expire.
 The operator must schedule `pnpm maintenance --apply` (or invoke the script directly as described in
 SELF-HOSTING.md). Without `--apply`, it only reports aggregate counts. Each run removes expired sessions
 and verification records, rate-limit windows older than one day, expired connection leases, audit logs
-older than 180 days, and reports resolved more than 180 days ago. It also replaces legacy raw session
+older than 180 days, and reports and ban appeals resolved more than 180 days ago. It also replaces legacy raw session
 user agents with coarse browser/platform labels and removes legacy session IP fields. Active sessions,
 open reports, accounts and messages are not deleted. Batch limits bound each run; a nonempty `limited`
 list means more work remains for the next run. New sessions and updates containing device metadata also minimize it; existing raw metadata is scrubbed by maintenance.

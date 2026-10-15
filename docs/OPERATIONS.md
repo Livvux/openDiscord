@@ -25,3 +25,27 @@ Run this rehearsal through CI. It requires `age`, Docker access to the disposabl
 Required automated gates include lint, typecheck, migrations, integration tests, encrypted restore rehearsal, production build and Playwright checks of both public probes on desktop and mobile. Integration tests cover a migrated database, an empty database, a stalled connection and a locked schema, followed by recovery. Keep CI success separate from deployment and external monitoring acceptance.
 
 For an operational handover, record deployment revision, external health/readiness checks, maintenance scheduling and last successful execution, last encrypted off-host backup, alert delivery and an isolated restore date. Do not call scheduling or off-host backup delivery complete solely because the scripts or this document exist.
+
+## Encrypted production recovery bundles
+
+`scripts/production-backup.sh` is a Linux operator job for the Dokploy installation. It captures a
+PostgreSQL custom dump, private object-storage media and recovery configuration (including secrets).
+Plaintext is held only in a restrictive `/dev/shm` temporary directory, removed on exit, and streamed
+through `age` before upload to a dedicated private bucket. The uploader holds only the public age
+recipient; the separate recovery identity is in the operator's 1Password vault. Backup credentials
+are bucket-scoped and live outside Git in `/etc/opendiscord-backup/rclone.conf` (mode 600).
+
+Set `OPENDISCORD_DB_CONTAINER`, `OPENDISCORD_WEB_CONTAINER`, `OPENDISCORD_COMPOSE_DIR` and
+`OPENDISCORD_VOICE_COMPOSE_DIR` to the verified deployed resources. Run only with an outer deadline:
+`timeout --kill-after=30s 1800 scripts/production-backup.sh`, or systemd `TimeoutStartSec=1800` and
+`KillMode=control-group`. The dump has a 30-second lock-wait timeout. The script checks RAM/storage
+budgets, verifies every archived attachment reference exists in the copied media, and compares a full
+readback SHA-256 of the encrypted off-host object before updating `/var/backups/opendiscord/last-success`.
+A concurrent attachment deletion makes the run fail rather than accepting an incomplete bundle.
+
+The dedicated bucket retains daily recovery bundles for 30 days. The 1 GiB aggregate budget fails
+closed and needs an operator capacity review if reached; there is no automatic unlimited growth.
+Monitor both failed jobs and backup freshness. A verified ciphertext upload is not yet an isolated
+production-data restore; record the recovery rehearsal separately. Never restore a recovery bundle
+into the live database as a test. Local-volume attachments require extending this S3-oriented job
+before changing the production storage backend.

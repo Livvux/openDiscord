@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { abuseReport, auditLog, community, instanceAuditLog, session, verification } from "@/db/schema";
+import { abuseReport, auditLog, banAppeal, community, instanceAuditLog, session, verification } from "@/db/schema";
 import { AUDIT_RETENTION_DAYS, runMaintenance } from "@/server/maintenance";
 import { testUsers } from "./helpers";
 
@@ -55,6 +55,10 @@ describe("operator retention maintenance", () => {
       { communityId: group.id, reason: "Recently resolved old report", status: "removed", createdAt: older, resolvedAt: now },
     ]).returning();
     reportIds.push(...reports.map((r) => r.id));
+    const appeals = await db.insert(banAppeal).values([
+      { communityId: group.id, userId, banId: randomUUID(), content: "Pending appeal must survive", createdAt: older },
+      { communityId: group.id, userId, banId: randomUUID(), content: "Old resolved appeal", createdAt: older, resolvedAt: older, resolution: "uphold" },
+    ]).returning();
 
     const dryRun = await runMaintenance({ now });
     expect(dryRun.apply).toBe(false);
@@ -77,6 +81,8 @@ describe("operator retention maintenance", () => {
     expect(await db.select().from(abuseReport).where(eq(abuseReport.id, reports[0].id))).toHaveLength(1);
     expect(await db.select().from(abuseReport).where(eq(abuseReport.id, reports[1].id))).toHaveLength(0);
     expect(await db.select().from(abuseReport).where(eq(abuseReport.id, reports[2].id))).toHaveLength(1);
+    expect(await db.select().from(banAppeal).where(eq(banAppeal.id, appeals[0].id))).toHaveLength(1);
+    expect(await db.select().from(banAppeal).where(eq(banAppeal.id, appeals[1].id))).toHaveLength(0);
     expect((await runMaintenance({ apply: true, now })).counts.sessions).toBe(0);
   });
 
