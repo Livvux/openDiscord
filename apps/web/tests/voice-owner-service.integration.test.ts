@@ -191,6 +191,34 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(await b.owner.receive()).toEqual([]);
   }, 30_000);
 
+  for (const operation of ["sync", "ack"] as const) it(`retains current owners when a stale ${operation} transport rejects after a completed fence`, async () => {
+    const [a, b, c] = await fixture(3); await verify(a, b); const epoch = await context(a, b);
+    const positive = material(a, b, epoch); await a.owner.sendControl(positive); expect(await b.owner.receive()).toEqual([positive]);
+    const entered = deferred(), release = deferred(); let paused = false;
+    if (operation === "sync") b.before = async input => {
+      if (input.request.kind === "sync" && !paused) { paused = true; entered.resolve(); await release.promise; }
+    };
+    else {
+      b.after = async input => {
+        if (input.request.kind === "ack" && !paused) { paused = true; entered.resolve(); await release.promise; throw new Error("Test old ack response network failure."); }
+      };
+      await a.owner.sendControl(material(a, b, epoch));
+    }
+    const receiving = b.owner.receive(), outcome = receiving.then(value => ({ value }), error => ({ error: error as unknown }));
+    await entered.promise;
+    if (operation === "sync") {
+      await leaveVoiceControl(auth(c), binding(c));
+      b.snapshot = await heartbeatVoiceControl(auth(b), binding(b)); await b.owner.transition(b.snapshot);
+    } else await b.owner.setControlContext(randomUUID(), [a.snapshot.memberId, b.snapshot.memberId]);
+    release.resolve(); expect(await outcome).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
+    b.before = undefined; b.after = undefined;
+    expect(b.fence).not.toHaveBeenCalledWith("transport-or-schema-failure");
+    if (operation === "sync") await refresh([a]);
+    const currentEpoch = await context(a, b), forward = material(a, b, currentEpoch);
+    await a.owner.sendControl(forward); expect(await b.owner.receive()).toEqual([forward]);
+    const reverse = material(b, a, currentEpoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
+  }, 30_000);
+
   it("returns truthful signature refusal for genuine pending SAS output without remote storage or losing the current peer", async () => {
     const [a, b, c] = await fixture(3); await verify(a, c);
     const entered = deferred(), release = deferred(); let paused = false;
