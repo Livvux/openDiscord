@@ -539,7 +539,8 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
       const device_keys: Json = {}, master_keys: Json = {}, self_signing_keys: Json = {}, user_signing_keys: Json = {};
       for (const matrixId of Object.keys(record(body.device_keys))) {
         const target = await currentTarget(tx, call.id, matrixId);
-        if (!target) continue;
+        // Explicit absence removes a previously known native device; omission leaves it cached.
+        if (!target) { device_keys[matrixId] = {}; continue; }
         const identity = await identityFor(tx, target.id);
         const signatures = await tx.select().from(voiceSignature).where(and(eq(voiceSignature.targetMemberId, target.id), or(eq(voiceSignature.signerMemberId, target.id), eq(voiceSignature.signerMemberId, own.id))));
         const attach = (keyId: string, value: Json): Json => {
