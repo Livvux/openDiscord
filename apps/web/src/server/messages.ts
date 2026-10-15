@@ -3,7 +3,7 @@ import { assetsForMessages, validateCommunityAssetRefs } from "./community-asset
 import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLog, channel, integration, message, reaction, user, userBlock } from "@/db/schema";
+import { auditLog, channel, integration, message, publicPost, reaction, user, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel } from "./access";
 import { enforceAutomod } from "./automod";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
@@ -14,6 +14,8 @@ import { consume } from "./limits";
 import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
 import { messageContent, parse, uuid } from "./validation";
+
+import { checkPublicPost, publicText, snapshotPublicPost } from "./public-channels";
 
 export const PAGE_SIZE = 50;
 /** Sliding-window limit per author across all channels; counted in Postgres so it holds across replicas. */
@@ -170,6 +172,7 @@ export async function sendMessage(
   rawAttachments: unknown = [],
   rawReplyToId: unknown = null,
   rawThreadId: unknown = null,
+  publicGeneration: unknown = null,
 ): Promise<MessageView> {
   const channelId = parse(uuid, rawChannelId);
   const replyToId = rawReplyToId ? parse(uuid, rawReplyToId) : null;
@@ -196,8 +199,10 @@ export async function sendMessage(
   const { row, mentioned } = await db.transaction(async (tx) => {
     await lockCommunity(tx, ch.communityId);
     await requireChannel(tx, channelId, userId, Permission.SendMessages);
+    const publication = await checkPublicPost(tx, channelId, publicGeneration, content, ids, replyToId, threadId);
     await validateCommunityAssetRefs(tx, ch.communityId, content);
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
+    if (publication) await snapshotPublicPost(tx, created);
     await linkAttachments(tx, userId, channelId, created.id, ids);
     return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
   });
@@ -217,7 +222,7 @@ async function loadOwnedMessage(rawMessageId: unknown) {
   return row;
 }
 
-export async function editMessage(userId: string, rawMessageId: unknown, rawContent: unknown) {
+export async function editMessage(userId: string, rawMessageId: unknown, rawContent: unknown, publicGeneration: unknown = null) {
   const content = parse(messageContent, rawContent);
   const row = await loadOwnedMessage(rawMessageId);
   // Muted members (no SendMessages) can't rewrite their history either.
@@ -230,8 +235,10 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   await db.transaction(async (tx) => {
     await lockCommunity(tx, row.communityId);
     await requireChannel(tx, row.message.channelId, userId, Permission.SendMessages);
+    const publication = await checkPublicPost(tx, row.message.channelId, publicGeneration, content);
     await validateCommunityAssetRefs(tx, row.communityId, content);
     await tx.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));
+    if (publication) await tx.update(publicPost).set({ content: publicText(content), editedAt: new Date() }).where(eq(publicPost.messageId, row.message.id));
     await syncMentions(tx, row.communityId, row.message.id, userId, content);
   });
   await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });

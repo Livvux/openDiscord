@@ -10,6 +10,7 @@ import * as communities from "@/server/communities";
 import * as integrations from "@/server/integrations";
 import { toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
+import * as publicChannels from "@/server/public-channels";
 import * as messages from "@/server/messages";
 import * as moderation from "@/server/moderation";
 import * as presence from "@/server/presence";
@@ -34,6 +35,9 @@ export const leaveCommunity = async (id: string) => run((u) => communities.leave
 
 export const createChannel = async (communityId: string, name: string, kind: "text" | "voice" = "text") =>
   run((u) => communities.createChannel(u, communityId, name, kind));
+export const createPublicChannel = async (communityId: string, input: { name: string; communityTitle: string; acknowledge: boolean }) =>
+  run((u) => publicChannels.createPublicChannel(u, communityId, input));
+export const unpublishChannel = async (channelId: string) => run((u) => publicChannels.unpublishChannel(u, channelId));
 export const updateChannel = async (channelId: string, name: string, topic: string) =>
   run((u) => communities.updateChannel(u, channelId, name, topic));
 export const listChannelOverrides = async (channelId: string) =>
@@ -59,14 +63,15 @@ export const sendMessage = async (
   attachmentIds: string[] = [],
   replyToId: string | null = null,
   threadId: string | null = null,
-) => run((u) => messages.sendMessage(u, channelId, content, attachmentIds, replyToId, threadId), false);
+  publicGeneration: string | null = null,
+) => run((u) => messages.sendMessage(u, channelId, content, attachmentIds, replyToId, threadId, publicGeneration), false);
 export const toggleReaction = async (messageId: string, emoji: string) => run((u) => messages.toggleReaction(u, messageId, emoji), false);
 export const setPinned = async (messageId: string, pinned: boolean) => run((u) => messages.setPinned(u, messageId, pinned), false);
 export const searchMessages = async (communityId: string, query: string, before?: string) =>
   run((u) => messages.searchMessages(u, communityId, query, before), false);
 export const listPinned = async (channelId: string) => run((u) => messages.listPinned(u, channelId), false);
-export const editMessage = async (messageId: string, content: string) =>
-  run((u) => messages.editMessage(u, messageId, content), false);
+export const editMessage = async (messageId: string, content: string, publicGeneration: string | null = null) =>
+  run((u) => messages.editMessage(u, messageId, content, publicGeneration), false);
 export const deleteMessage = async (messageId: string) => run((u) => messages.deleteMessage(u, messageId), false);
 
 // Fires often while reading, so it neither refreshes the router nor counts toward the mutation burst limit.
