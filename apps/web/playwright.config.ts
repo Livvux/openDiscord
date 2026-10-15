@@ -32,6 +32,10 @@ export default defineConfig({
     env: {
       PORT: String(port),
       BETTER_AUTH_URL: `http://localhost:${port}`,
+      // Exercise the native versioned-key deployment in browser auth/2FA flows on disposable CI data.
+      BETTER_AUTH_SECRETS: process.env.BETTER_AUTH_SECRETS ?? (process.env.CI
+        ? "2:ci-primary-encryption-key-not-for-production-2026,1:ci-previous-encryption-key-not-for-production-2026"
+        : ""),
       // Cloudflare's public Turnstile test keys: the widget always passes and the server accepts its dummy token.
       TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
       TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
