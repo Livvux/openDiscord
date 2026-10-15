@@ -143,7 +143,7 @@ describe("voice-only scope, immutable public state and replay", () => {
     await expect(crypto(a, { ...retire, requestId: request.requestId })).rejects.toMatchObject({ code: "conflict" });
     for (const kind of ["send", "retire", "signatures"]) {
       const body = kind === "signatures" ? {} : { messages: {} };
-      await expect(crypto(a, { ...request, kind, ...(kind === "signatures" ? { eventType: undefined } : {}), requestId: randomUUID(), body })).rejects.toMatchObject({ code: "invalid" });
+      await expect(crypto(a, kind === "signatures" ? { kind, body } : { ...request, kind, requestId: randomUUID(), body })).rejects.toMatchObject({ code: "invalid" });
     }
     for (const kind of ["send", "retire"]) {
       await expect(crypto(a, { ...request, kind, requestId: randomUUID(), body: { messages: { ...request.body.messages, [unknown]: { [randomUUID()]: {} } } } })).rejects.toMatchObject({ code: "invalid" });
