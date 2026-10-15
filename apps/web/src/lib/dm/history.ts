@@ -19,14 +19,16 @@ export const recoverySnapshotSchema = archiveSchema.extend({ secrets: z.unknown(
 export type HistoryEntry = z.infer<typeof historyEntrySchema>;
 export type HistoryArchive = z.infer<typeof archiveSchema>;
 export type RecoverySnapshot = z.infer<typeof recoverySnapshotSchema>;
+const outgoingSchema = z.object({ id: z.uuid(), target: z.uuid(), snapshot: recoverySnapshotSchema, attempts: z.number().int().min(0).max(8), attemptedAt: z.number().nonnegative() }).strict();
+export type PendingTransfer = z.infer<typeof outgoingSchema>;
 
 /** Encrypted local copies, with unlocking information in the same origin. No endpoint-compromise protection is claimed. */
 export class HistoryStore {
   private constructor(private database: IDBDatabase, private C: typeof Matrix) {}
   static async open(userId: string, deviceId: string, C: typeof Matrix): Promise<HistoryStore> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(`opendiscord-dm-history-${userId}-${deviceId}`, 3);
-      request.onupgradeneeded = () => { for (const name of ["encrypted", "seen", "imports"]) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" }); };
+      const request = indexedDB.open(`opendiscord-dm-history-${userId}-${deviceId}`, 4);
+      request.onupgradeneeded = () => { for (const name of ["encrypted", "seen", "imports", "outgoing"]) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" }); };
       request.onerror = () => reject(new Error("Encrypted history storage is unavailable."));
       request.onsuccess = () => resolve(new HistoryStore(request.result, C));
     });
@@ -72,6 +74,42 @@ export class HistoryStore {
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(new Error("Archive was not saved. Remove an old local archive or free browser storage."));
       transaction.onerror = () => reject(new Error("Cannot persist encrypted history."));
+    });
+  }
+  async outgoing(): Promise<PendingTransfer[]> {
+    const rows: unknown[] = await new Promise((resolve, reject) => {
+      const request = this.database.transaction("outgoing", "readonly").objectStore("outgoing").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(new Error("Cannot read pending encrypted transfers."));
+    });
+    return rows.map((row) => outgoingSchema.parse(this.decode(row).value));
+  }
+  async saveOutgoing(value: PendingTransfer): Promise<void> {
+    const data = outgoingSchema.parse(value);
+    const bytes = new TextEncoder().encode(JSON.stringify(data));
+    if (bytes.length > 310_000) throw new Error("Use a recovery file for this larger archive.");
+    const encrypted = this.C.Attachment.encrypt(bytes);
+    const row = { id: data.id, ciphertext: encrypted.encryptedData, information: encrypted.mediaEncryptionInfo };
+    encrypted.free();
+    return new Promise((resolve, reject) => {
+      const transaction = this.database.transaction("outgoing", "readwrite");
+      const store = transaction.objectStore("outgoing");
+      const existing = store.get(data.id);
+      existing.onsuccess = () => {
+        const count = store.count();
+        count.onsuccess = () => { if (!existing.result && count.result >= 3) transaction.abort(); else store.put(row); };
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(new Error("At most three encrypted transfers can await delivery. Retry or cancel an existing transfer."));
+      transaction.onerror = () => reject(new Error("Cannot persist encrypted transfer."));
+    });
+  }
+  async removeOutgoing(id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const transaction = this.database.transaction("outgoing", "readwrite");
+      transaction.objectStore("outgoing").delete(id);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(new Error("Cannot update encrypted transfer status."));
     });
   }
   /** SDK Megolm authenticates content, not transport event IDs. Pin each signed transaction once. */

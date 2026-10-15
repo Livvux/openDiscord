@@ -38,7 +38,14 @@ origin. This protects neither against a compromised browser nor against code run
 A new browser enrolls a distinct device. Verify it against an existing trusted device using SAS and
 choose **Share identity and history**, or open a previously downloaded private recovery file.
 Device sharing uses an authenticated, encrypted Olm event and is limited to verified devices on the
-same account. Large snapshots use the encrypted backup path instead.
+same account. Each transfer is saved in an encrypted local outbox before sending. The receiver sends
+an authenticated receipt only after committing the archive to browser storage. Until that receipt
+arrives, the sender retries with a fresh Olm message and the same transfer ID, including after reload;
+this recovers a consumed Olm delivery if the receiver crashed or ran out of storage. Import tombstones
+prevent duplicate archive writes. Three transfers may remain pending, with eight automatic attempts
+and a backoff capped at one minute. The interface shows pending or paused delivery and permits retry
+or cancellation. Cancellation stops future retries; it cannot recall a delivery already sent. The
+sender's browser must be open to retry. Large snapshots use the encrypted backup path instead.
 
 **Create encrypted recovery backup** exports the SDK's cross-signing secrets together with a bounded
 history archive. The archive contains the most recent **200 messages loaded and authenticated by this
@@ -104,8 +111,9 @@ participants' local browser copies cannot be remotely erased.
 ## Operational limits and evidence
 
 Limits: ten active devices, 500 conversations initiated within the account's checked conversation
-cap, 4,000-character messages, 24,000-character message ciphertext, 2,000 pending events per device,
-40 device deliveries per crypto operation, 100 available one-time prekeys and 100,000 lifetime prekey
+cap, 4,000-character messages, 24,000-character message ciphertext, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
+events),
+8 KB per peer device event, 40 device deliveries per crypto operation, 100 available one-time prekeys and 100,000 lifetime prekey
 or transaction entries per device. Enroll a replacement device when a lifetime limit is reached.
 Target account/device counts and signing payload sizes are checked before database locks. A short
 global database transaction lock serializes claims, receipts and mailbox sequence commits. This is a

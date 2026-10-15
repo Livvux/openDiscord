@@ -2,7 +2,7 @@
 
 import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
-import { archiveSchema, HistoryStore, historyEntrySchema, MAX_HISTORY_COPIES, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type RecoverySnapshot } from "./history";
+import { archiveSchema, HistoryStore, historyEntrySchema, MAX_HISTORY_COPIES, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
 
 type SDK = typeof Matrix;
@@ -12,6 +12,7 @@ export type TrustedDevice = { userId: string; id: string; verified: boolean; fin
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
 const metadataSchema = z.object({ id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/), storeKey: z.string().min(32) });
 const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(2), origin: z.url(), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
+const receiptSchema = z.object({ id: z.uuid(), recipient: z.uuid() }).strict();
 const transferSchema = recoverySnapshotSchema.extend({ recipient: z.uuid(), transferId: z.uuid() }).strict();
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 const clients = new Map<string, Promise<PrivateMessaging>>();
@@ -58,6 +59,7 @@ export async function enrollNewDmDevice(userId: string): Promise<void> {
 
 /** One serialized owner per IndexedDB crypto store. Private material never enters server rendering. */
 export class PrivateMessaging {
+  private closed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private users = new Set<string>();
   private rosters = new Map<string, string>();
@@ -89,6 +91,7 @@ export class PrivateMessaging {
       }).catch(reject);
     });
     let opened: Matrix.OlmMachine | undefined;
+    let history: HistoryStore | undefined;
     try {
       const C = await import("@matrix-org/matrix-sdk-crypto-wasm");
       await C.initAsync();
@@ -97,6 +100,7 @@ export class PrivateMessaging {
       const client = new PrivateMessaging(userId, C, metadata, machine);
       client.releaseLock = release;
       client.historyStore = await HistoryStore.open(userId, metadata.id, C);
+      history = client.historyStore;
       client.verifiedHistory = new Map((await client.historyStore.cached()).map((entry) => [entry.envelope.id, entry]));
       client.recoveredArchives = await client.historyStore.archives();
       await dmFetch("/api/dm", { action: "register", input: { id: metadata.id, secret: metadata.secret, name: "Web browser" } });
@@ -107,9 +111,9 @@ export class PrivateMessaging {
       window.addEventListener("pagehide", () => client.close(), { once: true });
       window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
       return client;
-    } catch (error) { opened?.close(); release?.(); throw error; }
+    } catch (error) { history?.close(); opened?.close(); release?.(); throw error; }
   }
-  close(): void { this.historyStore?.close(); this.machine.close(); this.releaseLock?.(); this.releaseLock = undefined; clients.delete(this.userId); }
+  close(): void { if (this.closed) return; this.closed = true; this.historyStore?.close(); this.machine.close(); this.releaseLock?.(); this.releaseLock = undefined; clients.delete(this.userId); }
   private async outgoing(request: Outgoing): Promise<void> {
     const C = this.C;
     const body: unknown = JSON.parse(request.body);
@@ -155,17 +159,27 @@ export class PrivateMessaging {
       for (const processed of events) {
         if (!(processed instanceof this.C.DecryptedToDeviceEvent) || !processed.encryptionInfo.isSenderVerified()) continue;
         const event = z.object({ sender: z.string(), type: z.string(), content: z.unknown() }).parse(JSON.parse(processed.rawEvent));
-        if (event.type !== "app.opendiscord.device-transfer" || event.sender !== matrixUser(this.userId)) continue;
+        if (event.sender !== matrixUser(this.userId)) continue;
+        if (event.type === "app.opendiscord.history-receipt") {
+          const receipt = receiptSchema.parse(event.content);
+          const pending = (await this.historyStore.outgoing()).find((item) => item.id === receipt.id);
+          if (receipt.recipient === this.deviceId && pending?.target === processed.encryptionInfo.senderDevice?.toString()) await this.historyStore.removeOutgoing(receipt.id);
+          continue;
+        }
+        if (event.type !== "app.opendiscord.device-transfer") continue;
         const { recipient, transferId, ...snapshot } = transferSchema.parse(event.content);
         if (recipient !== this.deviceId || snapshot.userId !== this.userId || transferId !== snapshot.id) throw new Error("Device transfer identity mismatch.");
         const senderId = processed.encryptionInfo.senderDevice;
         const source = senderId ? await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), senderId) : undefined;
         if (!source?.isVerified() || snapshot.sourceDevice !== senderId?.toString() || snapshot.sourceFingerprint !== source.ed25519Key?.toBase64()) throw new Error("Device transfer source mismatch.");
         await this.importArchive(snapshot);
+        await this.sendToOwnDevice(snapshot.sourceDevice, "app.opendiscord.history-receipt", { id: snapshot.id, recipient: snapshot.sourceDevice });
       }
-      // OlmMachine persisted its state before this point; retry delivery after a lost acknowledgment is safe.
+      // Native Olm delivery can be consumed before application storage commits.
+      // Own-device archive senders therefore retain an outbox until an authenticated storage receipt.
       if (sync.cursor !== "0") await this.crypto({ kind: "ack", cursor: sync.cursor });
       await this.flush();
+      await this.deliverPending();
     });
   }
   async devices(userId: string): Promise<TrustedDevice[]> {
@@ -331,18 +345,43 @@ export class PrivateMessaging {
       await this.importArchive(snapshot);
     });
   }
+  private async sendToOwnDevice(targetDeviceId: string, type: string, content: unknown): Promise<void> {
+    const device = await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), new this.C.DeviceId(targetDeviceId));
+    if (!device?.isVerified() || device.isDeleted()) throw new Error("Verify your other device before transferring recovery information.");
+    const claim = await this.machine.getMissingSessions([new this.C.UserId(matrixUser(this.userId))]);
+    if (claim) await this.outgoing(claim);
+    const encrypted = await device.encryptToDeviceEvent(type, content, this.C.CollectStrategy.onlyTrustedDevices());
+    await this.crypto({ kind: "send", requestId: crypto.randomUUID(), eventType: "m.room.encrypted", body: { messages: { [matrixUser(this.userId)]: { [targetDeviceId]: JSON.parse(encrypted) } } } });
+  }
+  private async deliverPending(): Promise<void> {
+    for (const pending of await this.historyStore.outgoing()) {
+      if (pending.attempts >= 8 || Date.now() - pending.attemptedAt < Math.min(60_000, 5000 * 2 ** pending.attempts)) continue;
+      await this.historyStore.saveOutgoing({ ...pending, attempts: pending.attempts + 1, attemptedAt: Date.now() });
+      await this.sendToOwnDevice(pending.target, "app.opendiscord.device-transfer", { ...pending.snapshot, recipient: pending.target, transferId: pending.id });
+    }
+  }
+  pendingTransfers(): Promise<Pick<PendingTransfer, "id" | "target" | "attempts">[]> {
+    return this.serial(async () => (await this.historyStore.outgoing()).map(({ id, target, attempts }) => ({ id, target, attempts })));
+  }
+  retryTransfer(id: string): Promise<void> {
+    return this.serial(async () => {
+      const pending = (await this.historyStore.outgoing()).find((item) => item.id === id);
+      if (!pending) throw new Error("Pending transfer not found.");
+      await this.historyStore.saveOutgoing({ ...pending, attempts: 0, attemptedAt: 0 });
+      await this.deliverPending();
+    });
+  }
+  cancelTransfer(id: string): Promise<void> { return this.serial(() => this.historyStore.removeOutgoing(id)); }
   async shareHistory(targetDeviceId: string): Promise<void> {
     return this.serial(async () => {
       await this.query([this.userId]);
-      const claim = await this.machine.getMissingSessions([new this.C.UserId(matrixUser(this.userId))]);
-      if (claim) await this.outgoing(claim);
       const device = await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), new this.C.DeviceId(targetDeviceId));
-      if (!device?.isVerified() || device.isDeleted()) throw new Error("Verify your other device before sharing identity and history.");
+      if (!device?.isVerified() || device.isDeleted() || targetDeviceId === this.deviceId) throw new Error("Choose another verified device on your account.");
       const transferId = crypto.randomUUID();
-      const content = { ...await this.snapshot(transferId), recipient: targetDeviceId, transferId };
-      if (new TextEncoder().encode(JSON.stringify(content)).length > 300_000) throw new Error("Use an encrypted recovery file for this larger history.");
-      const encrypted = await device.encryptToDeviceEvent("app.opendiscord.device-transfer", content, this.C.CollectStrategy.onlyTrustedDevices());
-      await this.crypto({ kind: "send", requestId: transferId, eventType: "m.room.encrypted", body: { messages: { [matrixUser(this.userId)]: { [targetDeviceId]: JSON.parse(encrypted) } } } });
+      const snapshot = await this.snapshot(transferId);
+      if (new TextEncoder().encode(JSON.stringify(snapshot)).length > 300_000) throw new Error("Use an encrypted recovery file for this larger history.");
+      await this.historyStore.saveOutgoing({ id: transferId, target: targetDeviceId, snapshot, attempts: 0, attemptedAt: 0 });
+      await this.deliverPending();
     });
   }
 }

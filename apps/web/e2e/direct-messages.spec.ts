@@ -25,7 +25,7 @@ async function verify(a: Page, b: Page) {
 }
 
 test("real SAS, ciphertext transport, offline delivery, persistent history and recovery", async ({ browser }, info) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const alice = await newUserPage(browser);
   let bob = await newUserPage(browser);
   const errors: string[] = [];
@@ -104,6 +104,32 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await restored.reload();
   await restored.getByRole("region", { name: "Recovered history archives" }).locator("summary").click();
   await expect(restored.getByRole("region", { name: "Recovered history archives" }).getByText(first, { exact: true })).toBeVisible();
+  // Abort the first archive transaction after Olm has consumed its delivery. A fresh
+  // encrypted retry must recover it, including after the sending browser reloads.
+  await restored.evaluate(() => {
+    const original = IDBObjectStore.prototype.add;
+    IDBObjectStore.prototype.add = function (value: unknown, key?: IDBValidKey) {
+      const request = original.call(this, value, key);
+      if (this.name === "imports") {
+        IDBObjectStore.prototype.add = original;
+        document.documentElement.dataset.archiveCommitAborted = "true";
+        this.transaction.abort();
+      }
+      return request;
+    };
+  });
+  await expect(alice.getByRole("button", { name: "Share identity and history", exact: true })).toBeVisible({ timeout: 30_000 });
+  await alice.getByRole("button", { name: "Share identity and history", exact: true }).click();
+  await expect.poll(() => restored.evaluate(() => document.documentElement.dataset.archiveCommitAborted)).toBe("true");
+  await expect(alice.getByText("1 encrypted transfer(s) awaiting storage confirmation.", { exact: true })).toBeVisible();
+  await alice.reload();
+  await openConversation(alice, "Private Bob");
+  await alice.getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await expect(alice.getByText("1 encrypted transfer(s) awaiting storage confirmation.", { exact: true })).toBeVisible();
+  await expect(restored.getByRole("region", { name: "Recovered history archives" }).locator("summary")).toHaveCount(2, { timeout: 45_000 });
+  await expect(alice.getByText("No pending encrypted transfers.", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await restored.reload();
+  await expect(restored.getByRole("region", { name: "Recovered history archives" }).locator("summary")).toHaveCount(2);
   await expectNoA11yViolations(restored);
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
 
