@@ -161,7 +161,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
 | Unread state, @mentions, notifications | ✅ | Unread markers per channel and community; mentions notify only members who can read the channel; opt-in desktop notifications |
 | Blocking, anti-raid, invite controls | ✅ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
-| Production readiness | ❌ | Lint, types, unit/integration, build, Playwright and Docker build green; deployment smoke-tested |
+| Production readiness | ✅ | Lint, types, unit/integration, build, Playwright, `pnpm audit` and Docker build green; full Compose stack smoke-tested locally (fresh migrations, TLS, sign-up, export, SSE through Caddy); HSTS sent by the app behind any proxy. Rolling the release out to opendiscord.app is an operator step |
 
 ### P1 — core Discord replacement
 
