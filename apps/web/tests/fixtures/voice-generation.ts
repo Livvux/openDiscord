@@ -185,8 +185,8 @@ export class GenerationDispatcher {
         if (outgoing instanceof C.ToDeviceRequest) cancel.push(outgoing);
       }
     }
-    const requests = [...cancel, ...(await this.owner.machine.outgoingRequests()).filter((r) => r instanceof C.ToDeviceRequest)];
-    if (this.pending) requests.unshift(this.pending.request);
+    const requests: NativeRequest[] = [...cancel, ...(await this.owner.machine.outgoingRequests()).filter((r) => r instanceof C.ToDeviceRequest)];
+    if (this.pending?.request instanceof C.ToDeviceRequest) requests.unshift(this.pending.request);
     const seen = new Set<string>();
     for (const request of requests) {
       if (!request.id || seen.has(request.id)) continue;
