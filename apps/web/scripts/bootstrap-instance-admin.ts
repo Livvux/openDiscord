@@ -18,6 +18,7 @@ async function main() {
       const [suspended] = await tx.select({ id: userSuspension.userId }).from(userSuspension).where(eq(userSuspension.userId, target.id));
       if (suspended) throw new Error("A suspended account cannot become an administrator.");
       await tx.insert(instanceAdmin).values({ userId: target.id });
+      await tx.update(user).set({ approvalStatus: "approved" }).where(eq(user.id, target.id));
       await tx.insert(instanceAuditLog).values({ actorId: target.id, action: "admin.bootstrap", targetId: target.id, reason: `Operator bootstrap: ${reason.trim()}` });
     });
     console.log("First instance administrator assigned to the existing account. Sign in and open /app/admin.");

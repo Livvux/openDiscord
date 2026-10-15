@@ -4,9 +4,13 @@ const dev = process.env.NODE_ENV !== "production";
 
 // Inline scripts are Next.js bootstrap code; a nonce-based CSP would force every page dynamic.
 // Everything else is restricted to this origin: no third-party scripts, fonts, images or beacons.
+// Exception: Cloudflare Turnstile (anti-spam) on sign-up. It must be allowed app-wide because client-side
+// navigation to /sign-up keeps the CSP of the page it started from; only the sign-up form loads it.
+const TURNSTILE = "https://challenges.cloudflare.com";
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""} ${TURNSTILE}`,
+  `frame-src 'self' ${TURNSTILE}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self'",
