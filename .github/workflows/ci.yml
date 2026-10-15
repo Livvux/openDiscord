@@ -37,6 +37,8 @@ jobs:
         run: node scripts/check-dependency-licenses.mjs
       - name: Dependency audit (production dependencies)
         run: pnpm audit --prod --audit-level=high
+      - name: Operator alert state regression checks
+        run: python3 scripts/test-operator-monitor.py
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm db:migrate
