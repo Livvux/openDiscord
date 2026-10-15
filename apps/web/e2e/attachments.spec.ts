@@ -3,7 +3,7 @@ import { createCommunity, createInviteLink, joinAsNewUser, newUserPage, signUp }
 
 test.describe("attachments", () => {
   test.skip(({ isMobile }) => isMobile, "desktop flow");
-  test.skip(!process.env.R2_ENDPOINT, "needs S3-compatible storage (R2_* settings)");
+  test.skip(!process.env.R2_ENDPOINT && !process.env.ATTACHMENT_DIR, "needs private attachment storage");
 
   test("files are sent and downloaded; images are shown inline", async ({ browser }) => {
     const owner = await newUserPage(browser);

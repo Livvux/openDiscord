@@ -20,6 +20,7 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
     env:
+      ATTACHMENT_DIR: /tmp/opendiscord-ci-attachments
       DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/opendiscord
       BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
       BETTER_AUTH_URL: http://localhost:3000

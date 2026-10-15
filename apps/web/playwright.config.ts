@@ -40,6 +40,7 @@ export default defineConfig({
       LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY ?? "devkey",
       LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET ?? "secret",
       // S3-compatible storage for attachment tests (e.g. a local MinIO); those specs skip without it.
+      ATTACHMENT_DIR: process.env.ATTACHMENT_DIR ?? "",
       R2_ENDPOINT: process.env.R2_ENDPOINT ?? "",
       R2_BUCKET: process.env.R2_BUCKET ?? "",
       R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID ?? "",
