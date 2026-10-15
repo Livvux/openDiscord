@@ -68,7 +68,7 @@ describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
     const uploader = await users.create("Library contributor");
     await acceptInvite(uploader, await createInvite(manager, communityId, { maxUses: null, expiresInHours: null }));
     const role = await createRole(manager, communityId, "Image manager", ["ManageCommunity"]);
-    await setMemberRole(manager, role.id, uploader, true);
+    await setMemberRole(manager, role, uploader, true);
     const asset = await upload("owned_library", "emoji", uploader);
     await db.delete(user).where(eq(user.id, uploader));
     const [row] = await db.select().from(attachment).where(eq(attachment.assetId, asset.id));
