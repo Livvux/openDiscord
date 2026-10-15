@@ -37,12 +37,13 @@ const participant = (id: string) => `v1:${id}`;
 const namespace = (id: string) => `@voice_${id}:${VOICE_DOMAIN}`;
 // Voice-only order: advisory -> sorted community -> sorted call -> user/session/anchor SHARE.
 // Never acquire DM or mutate guarded auth tables after entering this scope.
-async function accountSession(tx: Tx, userId: string, sessionId: string, now: Date) {
+async function accountSession(tx: Tx, userId: string, sessionId: string, cutoff?: Date) {
   const [account] = await tx.select({ id: user.id }).from(user).where(eq(user.id, userId)).for("share");
   const [current] = await tx.select({ id: session.id, expiresAt: session.expiresAt }).from(session)
     .where(and(eq(session.id, sessionId), eq(session.userId, userId))).for("share");
-  if (!account || !current || current.expiresAt <= now) throw forbidden("This account session is unavailable.");
+  if (!account || !current || current.expiresAt <= (cutoff ?? new Date())) throw forbidden("This account session is unavailable.");
   await assertActiveUser(userId, tx);
+  return current;
 }
 async function anchorFor(tx: Tx, userId: string, anchorId: string) {
   const [anchor] = await tx.select({ id: dmDevice.id, secretHash: dmDevice.secretHash }).from(dmDevice)
@@ -50,8 +51,8 @@ async function anchorFor(tx: Tx, userId: string, anchorId: string) {
   if (!anchor) throw forbidden("This enrollment anchor is unavailable.");
   return anchor;
 }
-async function joinAuth(tx: Tx, auth: VoiceJoinAuth, now: Date) {
-  await accountSession(tx, auth.userId, auth.sessionId, now);
+async function joinAuth(tx: Tx, auth: VoiceJoinAuth) {
+  await accountSession(tx, auth.userId, auth.sessionId);
   const anchor = await anchorFor(tx, auth.userId, auth.anchorDeviceId);
   if (!matchesSecret(anchor.secretHash, auth.anchorSecret)) throw forbidden("This enrollment anchor is unavailable.");
 }
@@ -79,22 +80,29 @@ async function markLeft(tx: Tx, call: Call, rows: Member[], reason: string, now:
   if (!remaining.length) { call.status = "closed"; call.closedAt = now; }
   return rows.map((m) => ({ callId: call.id, memberId: m.id, participantIdentity: participant(m.id), reason }));
 }
-async function expireAndRevalidate(tx: Tx, call: Call, now: Date): Promise<VoiceRemoval[]> {
+async function expireAndRevalidate(tx: Tx, call: Call, cutoff?: Date): Promise<VoiceRemoval[]> {
   const stale: Member[] = [];
+  const locked: { member: Member; sessionExpiresAt: Date }[] = [];
   for (const m of await liveMembers(tx, call.id)) {
-    let valid = m.leaseExpiresAt > now;
+    let valid = true;
     if (valid) {
       try {
-        await accountSession(tx, m.userId, m.sessionId, now);
+        const currentSession = await accountSession(tx, m.userId, m.sessionId, cutoff);
         await anchorFor(tx, m.userId, m.anchorDeviceId);
         const access = await loadChannelAuthority(tx, call.channelId, m.userId);
         valid = !!access && access.channel.kind === "voice" && has(access.authority, Permission.Connect);
+        if (valid) locked.push({ member: m, sessionExpiresAt: currentSession.expiresAt });
       } catch (error) {
         if (!(error instanceof AppError)) throw error;
         valid = false;
       }
     }
     if (!valid) stale.push(m);
+  }
+  // Every blocking authority lock is held before one final freshness decision for all peers.
+  const now = cutoff ?? new Date();
+  for (const { member, sessionExpiresAt } of locked) {
+    if (member.leaseExpiresAt <= now || sessionExpiresAt <= now) stale.push(member);
   }
   const effects = await markLeft(tx, call, stale, "authorization-or-lease-expired", now);
   await closeEmptyVoiceCall(tx, call, now);
@@ -112,15 +120,18 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
   await consume(`voice-control-join:${auth.userId}`, 30, 60_000);
   const result = await db.transaction(async (tx): Promise<VoiceSnapshot | AppError> => {
     await lockVoice(tx);
-    const now = new Date();
+    let now = new Date();
     const [ch] = await tx.select().from(channel).where(eq(channel.id, data.channelId));
     if (!ch) throw notFound("Voice channel not found.");
     await lockCommunity(tx, ch.communityId);
     let [call] = await tx.select().from(voiceCall).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCall.status, "active"))).for("update");
-    await joinAuth(tx, auth, now);
+    await joinAuth(tx, auth);
     const access = await requireChannel(tx, ch.id, auth.userId, Permission.Connect);
     if (access.channel.kind !== "voice") throw invalid("This is not a voice channel.");
-    const removals = call ? await expireAndRevalidate(tx, call, now) : [];
+    const removals = call ? await expireAndRevalidate(tx, call) : [];
+    // Peer locks may have waited after the first session check. Recheck once all are held.
+    now = new Date();
+    await joinAuth(tx, auth);
     const [previous] = await tx.select({ member: voiceCallMember, call: voiceCall }).from(voiceCallMember)
       .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCallMember.joinNonce, data.joinNonce)));
     if (previous) {
@@ -156,15 +167,17 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
 type Access = { call: Call; own: Member; now: Date; removals: VoiceRemoval[] };
 async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding, allowLeft = false): Promise<Access | AppError> {
   await lockVoice(tx);
-  const now = new Date();
+  let now = new Date();
   const [ref] = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, binding.callId));
   if (!ref) throw notFound("Voice enrollment not found.");
   await lockCommunity(tx, ref.communityId);
   const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, binding.callId)).for("update");
-  await accountSession(tx, auth.userId, auth.sessionId, now);
+  await accountSession(tx, auth.userId, auth.sessionId);
   const [own] = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.id, binding.memberId), eq(voiceCallMember.callId, call.id), eq(voiceCallMember.userId, auth.userId), eq(voiceCallMember.sessionId, auth.sessionId)));
   if (!own || auth.memberId !== own.id || own.joinNonce !== binding.joinNonce || !matchesSecret(own.enrollmentSecretHash, auth.secret)) throw forbidden("This voice enrollment is unavailable.");
-  const removals = await expireAndRevalidate(tx, call, now);
+  const removals = await expireAndRevalidate(tx, call);
+  now = new Date();
+  await accountSession(tx, auth.userId, auth.sessionId);
   const [current] = await tx.select().from(voiceCallMember).where(eq(voiceCallMember.id, own.id));
   if (allowLeft && current.state === "left") return { call, own: current, now, removals };
   if (current.state === "left" || current.leaseExpiresAt <= now || call.status !== "active") return forbidden("This voice enrollment has ended.");
