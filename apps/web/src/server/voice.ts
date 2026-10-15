@@ -9,7 +9,7 @@ import { loadChannelAuthority, requireChannel } from "./access";
 import { AppError } from "./errors";
 import { has, Permission } from "./permissions";
 import { grantBoundVoiceMedia } from "./voice-control";
-import { consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
+import { assertOwnedVoiceRoomActive, consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
 import type { VoiceMediaSource } from "@/lib/voice/contracts";
 import { parse, uuid } from "./validation";
 
@@ -88,6 +88,7 @@ export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) 
     throw error;
   }
   if (grant.roomName !== reserved.roomName) throw new AppError("conflict", "Voice membership changed.");
+  await assertOwnedVoiceRoomActive(grant.roomName);
   const expiresAt = Date.parse(grant.expiresAt);
   const ttl = Math.min(TOKEN_TTL_SECONDS, Math.floor(expiresAt / 1000) - Math.ceil(Date.now() / 1000));
   if (ttl < 1) throw new AppError("forbidden", "This voice enrollment has ended.");

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { AccessToken, Room, RoomServiceClient, ServerError } from "livekit-server-sdk";
+import { AccessToken, ParticipantInfo, Room, RoomServiceClient, ServerError } from "livekit-server-sdk";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { channel, session, member } from "@/db/schema";
@@ -302,4 +302,19 @@ it("rechecks session expiry after the observed real PostgreSQL SHARE wait before
     vi.useRealTimers();
     barrier.release();
   }
+});
+
+
+it("never signs after its own final grant consumer terminally retires an unexpected SFU roster", async () => {
+  const f = await fixture();
+  vi.mocked(RoomServiceClient.prototype.createRoom).mockImplementation(async options => {
+    await due(options.name);
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockResolvedValue([new ParticipantInfo({ identity: "unowned-participant" })]);
+    return new Room({ name: options.name });
+  });
+  const sign = vi.spyOn(AccessToken.prototype, "toJwt");
+  await expect(createBoundVoiceToken(f.auth, f.binding)).rejects.toMatchObject({ code: "forbidden" });
+  expect(sign).not.toHaveBeenCalled();
+  const [row] = await db.select().from(voiceSfuRoom).where(eq(voiceSfuRoom.callId, f.snapshot.callId));
+  expect(row.status).toBe("retired");
 });

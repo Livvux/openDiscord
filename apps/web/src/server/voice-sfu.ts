@@ -91,10 +91,15 @@ async function roomAuthority(name: string) {
   });
 }
 
-/** Explicit server creation follows reservation COMMIT; caller revalidates enrollment again before JWT. */
-export async function createOwnedVoiceRoom(name: string): Promise<void> {
+/** Final locked check also observes retirement performed by the preceding postcommit consumer. */
+export async function assertOwnedVoiceRoomActive(name: string): Promise<void> {
   const authority = await roomAuthority(name);
   if (!authority || authority.owned.status !== "active") throw forbidden("This voice room has ended.");
+}
+
+/** Explicit server creation follows reservation COMMIT; caller revalidates enrollment again before JWT. */
+export async function createOwnedVoiceRoom(name: string): Promise<void> {
+  await assertOwnedVoiceRoomActive(name);
   const client = voiceRoomService();
   try {
     if (!client) throw new Error("unavailable");
