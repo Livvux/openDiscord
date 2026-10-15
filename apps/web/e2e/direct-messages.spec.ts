@@ -28,6 +28,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   test.setTimeout(300_000);
   const alice = await newUserPage(browser);
   let bob = await newUserPage(browser);
+  for (const context of [alice.context(), bob.context()]) { context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(30_000); }
   const errors: string[] = [];
   const wire: string[] = [];
   for (const page of [alice, bob]) {
@@ -84,6 +85,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   const recoveryFile = await (await download).path();
   expect(recoveryFile).toBeTruthy();
   const restored = await newUserPage(browser);
+  restored.context().setDefaultTimeout(15_000); restored.context().setDefaultNavigationTimeout(30_000);
   restored.on("pageerror", (e) => errors.push(e.message));
   await restored.goto("/sign-in");
   await restored.getByLabel("Email", { exact: true }).fill(email);
@@ -138,6 +140,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
 
   const charlie = await newUserPage(browser);
+  charlie.context().setDefaultTimeout(15_000); charlie.context().setDefaultNavigationTimeout(30_000);
   await signUp(charlie, "Private Charlie");
   await charlie.goto(invite);
   await charlie.getByRole("button", { name: "Accept invite", exact: true }).click();
