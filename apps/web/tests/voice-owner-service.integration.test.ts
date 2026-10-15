@@ -70,6 +70,7 @@ async function refresh(endpoints: Endpoint[]) {
 }
 async function state(e: Endpoint, peer?: Endpoint) { const value = (await e.owner.verificationStates()).find(s => !peer || s.peer.memberId === peer.snapshot.memberId); if (!value) throw new Error("Missing real owner SAS state."); return value; }
 async function verify(a: Endpoint, b: Endpoint) {
+  await b.owner.query([a.snapshot.memberId, b.snapshot.memberId]);
   const decimals = new Map<string, number[]>();
   const emojiIndex = C.Sas.prototype.emojiIndex;
   const observation = vi.spyOn(C.Sas.prototype, "emojiIndex").mockImplementation(function(this: C.Sas) {
@@ -278,7 +279,10 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     await expect(a.owner.requestVerification(b.snapshot.memberId)).rejects.toMatchObject({ code: "forbidden" });
     expect(a.fence).toHaveBeenCalled(); await expect(a.owner.flush()).rejects.toThrow("closed");
     const [after] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
-    expect(after.leaseExpiresAt.getTime()).toBeLessThanOrEqual(before.leaseExpiresAt.getTime());
+    if (loss === "lease") {
+      expect(after.state).toBe("left"); expect(after.leaseExpiresAt).toEqual(after.leftAt);
+      expect(after.leaseExpiresAt.getTime()).toBeLessThanOrEqual(Date.now());
+    } else expect(after.leaseExpiresAt.getTime()).toBeLessThanOrEqual(before.leaseExpiresAt.getTime());
     expect(await db.$count(voiceControlMailbox)).toBe(count);
   });
 
