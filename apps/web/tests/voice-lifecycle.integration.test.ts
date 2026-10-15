@@ -2,15 +2,15 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { abuseReport, channel, dmIdentity, instanceAdmin, instanceSettings, member, role, session, user } from "@/db/schema";
+import { abuseReport, channel, dmIdentity, instanceAdmin, instanceSettings, integration, member, role, session, user } from "@/db/schema";
 import { voiceCall, voiceCallMember } from "@/db/voice-schema";
 import { createCommunity, deleteChannel, deleteCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
 import { handleCryptoRequest, registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
-import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
+import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle, VOICE_MAINTENANCE_BATCH_SIZE } from "@/server/voice-control";
 import { banMember, createRole, deleteRole, kickMember, setMemberRole, updateRole } from "@/server/moderation";
 import { resetDmIdentity } from "@/server/dm-reset";
 import { revokeUserSessions, setUserSuspension, setCommunitySuspension, setApproval, setClosedAlpha, setInstanceAdmin, transferCommunity, resolveReport } from "@/server/instance-admin";
-import { createIntegration } from "@/server/integrations";
+import { createIntegration, revokeIntegration } from "@/server/integrations";
 import { blockUser, unblockUser } from "@/server/blocks";
 import { Permission } from "@/server/permissions";
 import { auth } from "@/lib/auth";
@@ -23,7 +23,8 @@ import { testUsers } from "./helpers";
 
 const users = testUsers();
 const adminIds: string[] = [];
-afterAll(async () => { if (adminIds.length) await db.delete(instanceAdmin).where(inArray(instanceAdmin.userId, adminIds)); await users.cleanup(); });
+const botIds: string[] = [];
+afterAll(async () => { if (adminIds.length) await db.delete(instanceAdmin).where(inArray(instanceAdmin.userId, adminIds)); await users.cleanup(); if (botIds.length) await db.delete(user).where(inArray(user.id, botIds)); });
 async function fixture() {
   const userId = await users.create("Voice lifecycle cascade");
   const sessionId = randomUUID(), anchorDeviceId = randomUUID(), anchorSecret = randomBytes(32).toString("hex");
@@ -90,12 +91,15 @@ describe("atomic product mutation invalidation", () => {
   });
   it("closes only calls containing both blocked accounts and unblock cannot revive them", async () => {
     const f = await fixture(), p = await peer(f), unrelated = await fixture();
+    await db.insert(member).values({ communityId: unrelated.communityId, userId: p.userId });
+    const singleParty = await joinVoiceControl(enrollmentAuth(p), { channelId: unrelated.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
     await blockUser(f.userId, p.userId);
     const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
     expect(call.status).toBe("closed");
     expect(await state(f.snapshot.memberId)).toBe("left");
     expect(await state(p.snapshot.memberId)).toBe("left");
     expect(await state(unrelated.snapshot.memberId)).toBe("waiting");
+    expect(await state(singleParty.memberId)).toBe("waiting");
     await unblockUser(f.userId, p.userId);
     expect(await state(p.snapshot.memberId)).toBe("left");
   });
@@ -246,6 +250,30 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
           { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.request", body: { messages: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: { from_device: f.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } },
         ];
         for (const request of requests) await expect(handleVoiceCrypto(survivorAuth, { ...priorBinding, request })).rejects.toMatchObject({ code: "conflict" });
+      } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }
+    });
+  }
+
+  for (const mutation of scopedMutations) {
+    it(`${mutation.name} serializes a fresh join against the actual post-mutation authority`, async () => {
+      const f = await fixture(), p = await peer(f), barrier = await db.$client.connect();
+      let pending: Promise<unknown> | undefined;
+      try {
+        await barrier.query("begin"); await barrier.query("select pg_advisory_xact_lock(810030)");
+        pending = mutation.run(f, p);
+        const mutationOutcome = pending.then(() => null, (error: unknown) => error);
+        await voiceWaiters(1);
+        const joining = joinVoiceControl(enrollmentAuth(p), { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+        const joined = joining.then(value => ({ value }), (error: unknown) => ({ error }));
+        await voiceWaiters(2);
+        await barrier.query("commit");
+        expect(await mutationOutcome).toBeNull();
+        const result = await joined;
+        if (mutation.name === "source override" || mutation.name === "default role loss") {
+          expect(result).toHaveProperty("value");
+          if ("value" in result) expect(result.value.memberId).not.toBe(p.snapshot.memberId);
+        } else expect(result).toHaveProperty("error");
+        expect(await state(p.snapshot.memberId)).toBe("left");
       } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }
     });
   }
@@ -450,4 +478,76 @@ describe("actual mixed DM operations versus native user cascade", () => {
       }
     }, 12000);
   }
+});
+
+describe("native multi-user reverse-call cascade order", () => {
+  it("serializes two actual native user deletes whose enrollment insertion orders oppose", async () => {
+    const first = await fixture(), p = await peer(first), second = await fixture(), q = await peer(second);
+    await db.insert(member).values([{ communityId: first.communityId, userId: q.userId }, { communityId: second.communityId, userId: p.userId }]);
+    const qFirst = await joinVoiceControl(enrollmentAuth(q), { channelId: first.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const pSecond = await joinVoiceControl(enrollmentAuth(p), { channelId: second.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const applicationName = `voice-reverse-${randomUUID()}`;
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2, application_name: applicationName, statement_timeout: 6000, lock_timeout: 5000 });
+    const native = drizzleAdapter(drizzle(pool, { schema }), { provider: "pg", schema })(auth.options);
+    const barrier = await db.$client.connect();
+    let pending: Promise<unknown>[] = [];
+    try {
+      await barrier.query("begin"); await barrier.query("select pg_advisory_xact_lock(810030)");
+      pending = [p.userId, q.userId].map(id => native.delete({ model: "user", where: [{ field: "id", value: id }] }).then(() => null, (error: unknown) => error));
+      const deadline = Date.now() + 4000;
+      let overlap = false;
+      while (Date.now() < deadline) {
+        const { rows } = await db.$client.query<{ count: number }>("select count(*)::int as count from pg_locks l join pg_stat_activity a using(pid) where a.application_name = $1 and l.locktype = 'advisory' and l.classid = 0 and l.objid in (810025,810030) and not l.granted", [applicationName]);
+        if (rows[0].count === 2) { overlap = true; break; }
+      }
+      expect(overlap).toBe(true);
+      await barrier.query("commit");
+      expect(await Promise.all(pending)).toEqual([null, null]);
+      for (const snapshot of [qFirst, pSecond]) {
+        const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, snapshot.callId));
+        expect(call.generation).toBe(snapshot.generation + 2);
+        expect(await state(snapshot.memberId)).toBeUndefined();
+      }
+      expect(await state(first.snapshot.memberId)).toBe("waiting"); expect(await state(second.snapshot.memberId)).toBe("waiting");
+    } finally { await barrier.query("rollback"); await Promise.all(pending); barrier.release(); await pool.end(); }
+  }, 12000);
+});
+
+describe("integration membership and expiry boundaries", () => {
+  it("revokes scoped bot enrollments without exempting future bot session anchors", async () => {
+    const f = await fixture(), created = await createIntegration(f.userId, f.communityId, { kind: "bot", name: "Lifecycle bot" });
+    const [bot] = await db.select().from(integration).where(eq(integration.id, created.id));
+    botIds.push(bot.userId);
+    const sessionId = randomUUID(), anchorDeviceId = randomUUID(), anchorSecret = randomBytes(32).toString("hex");
+    await db.insert(session).values({ id: sessionId, userId: bot.userId, token: randomUUID(), expiresAt: new Date(Date.now() + 3_600_000) });
+    await registerDmDevice(bot.userId, sessionId, { id: anchorDeviceId, secret: anchorSecret, name: "Future bot anchor" });
+    const enrollment = await joinVoiceControl({ userId: bot.userId, sessionId, anchorDeviceId, anchorSecret }, { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    await revokeIntegration(f.userId, created.id);
+    expect(await state(enrollment.memberId)).toBe("left"); expect(await state(f.snapshot.memberId)).toBe("waiting");
+    await deleteCommunity(f.userId, f.communityId);
+    expect(await db.$count(user, eq(user.id, bot.userId))).toBe(0);
+  });
+  it("an expired own session denial does not claim reaping; independent sweep commits it", async () => {
+    const f = await fixture();
+    await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, f.sessionId));
+    await expect(heartbeatVoiceControl({ userId: f.userId, sessionId: f.sessionId, memberId: f.snapshot.memberId, secret: f.secret }, { callId: f.snapshot.callId, memberId: f.snapshot.memberId, joinNonce: f.snapshot.joinNonce, expectedGeneration: f.snapshot.generation })).rejects.toMatchObject({ code: "forbidden" });
+    expect(await state(f.snapshot.memberId)).toBe("waiting");
+    const result = await sweepVoiceLifecycle({ apply: true, now: new Date(), batchSize: 1000, maxBatches: 1 });
+    expect(result.closedCallIds).toContain(f.snapshot.callId);
+    expect(await state(f.snapshot.memberId)).toBe("left");
+  });
+});
+
+describe("short maintenance Voice critical sections", () => {
+  it("caps each transaction at eight calls even when retention batch size is1000", async () => {
+    const f = await fixture();
+    const channels = await db.insert(channel).values(Array.from({ length: VOICE_MAINTENANCE_BATCH_SIZE + 1 }, (_, index) => ({ communityId: f.communityId, name: `bounded-${index}`, kind: "voice" as const }))).returning();
+    await db.insert(voiceCall).values(channels.map(ch => ({ channelId: ch.id })));
+    const options = { apply: true, now: new Date("2002-01-01T00:00:00Z"), batchSize: 1000, maxBatches: 1 };
+    const first = await sweepVoiceLifecycle(options);
+    expect(first.scanned).toBe(8); expect(first.closedCallIds).toHaveLength(8); expect(first.limited).toBe(true);
+    const next = await sweepVoiceLifecycle(options);
+    expect(next.scanned).toBe(1); expect(next.closedCallIds).toHaveLength(1); expect(next.limited).toBe(false);
+    expect(await state(f.snapshot.memberId)).toBe("waiting");
+  });
 });

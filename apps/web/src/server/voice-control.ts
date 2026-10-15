@@ -284,16 +284,19 @@ const voiceRepairEligible = (now: Date) => sql`(
       and (m.lease_expires_at <= ${now} or s.id is null or s.expires_at <= ${now} or d.id is null or d.revoked_at is not null)
   )
 )`;
+// Keep global auth/DM coupling bounded independently of retention batch defaults.
+export const VOICE_MAINTENANCE_BATCH_SIZE = 8;
 /** Separate DB-only Voice batches; eligibility and keyset prevent healthy-prefix starvation. */
 export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }: { apply: boolean; now: Date; batchSize: number; maxBatches: number }) {
   if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
+  const voiceBatchSize = Math.min(batchSize, VOICE_MAINTENANCE_BATCH_SIZE);
   let cursor: string | undefined, scanned = 0, closed = 0, removed = 0;
   const closedCallIds: string[] = [];
   for (let batch = 0; batch < maxBatches; batch++) {
     const result = await db.transaction(async tx => {
       await lockVoice(tx);
       const calls = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId))
-        .where(and(eq(voiceCall.status, "active"), voiceRepairEligible(now), cursor ? gt(voiceCall.id, cursor) : undefined)).orderBy(asc(voiceCall.id)).limit(batchSize);
+        .where(and(eq(voiceCall.status, "active"), voiceRepairEligible(now), cursor ? gt(voiceCall.id, cursor) : undefined)).orderBy(asc(voiceCall.id)).limit(voiceBatchSize);
       for (const id of [...new Set(calls.map(c => c.communityId))].sort()) await lockCommunity(tx, id);
       let closed = 0, removed = 0;
       const closedCallIds: string[] = [];
@@ -308,7 +311,7 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
     scanned += result.calls.length; closed += result.closed; removed += result.removed;
     closedCallIds.push(...result.closedCallIds);
     cursor = result.calls.at(-1)?.call.id;
-    if (result.calls.length < batchSize) return { scanned, closed, removed, closedCallIds, limited: false };
+    if (result.calls.length < voiceBatchSize) return { scanned, closed, removed, closedCallIds, limited: false };
   }
   return { scanned, closed, removed, closedCallIds, limited: true };
 }
