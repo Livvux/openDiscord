@@ -1,0 +1,134 @@
+import type { Metadata } from "next";
+import { Suspense } from "react";
+import { MobileNavToggle } from "@/components/app/mobile-nav";
+import { BanList, DangerZone, InviteList, RenameCommunity } from "@/components/app/settings/community-admin";
+import { MembersManager } from "@/components/app/settings/members-manager";
+import { RolesEditor } from "@/components/app/settings/roles-editor";
+import { listInvites } from "@/server/communities";
+import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
+import { loadCommunityView } from "@/server/pages";
+import { has, Permission } from "@/server/permissions";
+import { requirePageUser } from "@/server/session";
+
+export const metadata: Metadata = { title: "Community settings" };
+
+const AUDIT_LABELS: Record<string, string> = {
+  "member.kick": "kicked",
+  "member.ban": "banned",
+  "member.unban": "unbanned",
+  "message.delete": "deleted a message by",
+  "role.create": "created a role",
+  "role.update": "updated a role",
+  "role.delete": "deleted role",
+  "role.assign": "gave a role to",
+  "role.unassign": "removed a role from",
+  "channel.delete": "deleted channel",
+};
+
+/** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
+function auditTarget(e: AuditEntry): string | null {
+  if (e.action === "role.delete" || e.action === "channel.delete") return e.targetId;
+  if (e.action === "role.create" || e.action === "role.update") return null;
+  return e.targetName ?? "a deleted user";
+}
+
+export default function CommunitySettingsPage({ params }: PageProps<"/app/c/[communityId]/settings">) {
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <header className="flex h-12 items-center gap-2 border-b px-3">
+        <MobileNavToggle />
+        <h1 className="font-semibold">Community settings</h1>
+      </header>
+      <Suspense fallback={<p className="p-6 text-muted-foreground">Loading…</p>}>
+        <Settings params={params} />
+      </Suspense>
+    </main>
+  );
+}
+
+function Section({ id, title, description, children }: { id: string; title: string; description?: string; children: React.ReactNode }) {
+  return (
+    <section aria-labelledby={id} className="space-y-3 border-b py-6 last:border-0">
+      <div>
+        <h2 id={id} className="text-lg font-semibold">{title}</h2>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/settings">, "params">) {
+  const { communityId } = await params;
+  const user = await requirePageUser();
+  const view = await loadCommunityView(user.id, communityId);
+  const a = view.authority;
+  const [members, roles, invites, bans, audit] = await Promise.all([
+    listMembers(user.id, view.id),
+    listRoles(user.id, view.id),
+    has(a, Permission.ManageCommunity) ? listInvites(user.id, view.id) : null,
+    has(a, Permission.BanMembers) ? listBans(user.id, view.id) : null,
+    has(a, Permission.ViewAuditLog) ? listAuditLog(user.id, view.id) : null,
+  ]);
+  const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
+
+  return (
+    <div className="mx-auto max-w-3xl px-6">
+      {has(a, Permission.ManageCommunity) && (
+        <Section id="overview" title="Overview">
+          <RenameCommunity communityId={view.id} name={view.name} />
+        </Section>
+      )}
+      <Section
+        id="members"
+        title={`Members (${members.length})`}
+        description={canModerateMembers ? "You can moderate members ranked below your highest role." : undefined}
+      >
+        <MembersManager communityId={view.id} currentUserId={user.id} authority={a} members={members} roles={roles} />
+      </Section>
+      {has(a, Permission.ManageRoles) && (
+        <Section
+          id="roles"
+          title="Roles"
+          description="Roles grant permissions. Higher roles outrank lower ones; you can only manage roles below your own."
+        >
+          <RolesEditor communityId={view.id} authority={a} roles={roles} />
+        </Section>
+      )}
+      {invites && (
+        <Section id="invites" title="Active invites">
+          <InviteList invites={invites} />
+        </Section>
+      )}
+      {bans && (
+        <Section id="bans" title="Bans">
+          <BanList communityId={view.id} bans={bans} />
+        </Section>
+      )}
+      {audit && (
+        <Section id="audit" title="Audit log" description="The last 100 moderation actions. Message contents are never logged.">
+          {audit.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nothing yet.</p>
+          ) : (
+            <ol className="divide-y rounded-lg border text-sm">
+              {audit.map((e) => (
+                <li key={e.id} className="flex flex-wrap gap-x-1 px-3 py-2">
+                  <span className="font-medium">{e.actorName ?? "Deleted user"}</span>
+                  <span>{AUDIT_LABELS[e.action] ?? e.action}</span>
+                  {auditTarget(e) && <span className="font-medium">{auditTarget(e)}</span>}
+                  {e.reason && <span className="text-muted-foreground">— {e.reason}</span>}
+                  <time dateTime={e.createdAt.toISOString()} className="ml-auto text-xs text-muted-foreground" suppressHydrationWarning>
+                    {e.createdAt.toLocaleString()}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Section>
+      )}
+      <Section id="danger" title={view.isOwner ? "Delete community" : "Leave community"}>
+        <DangerZone communityId={view.id} name={view.name} isOwner={view.isOwner} />
+      </Section>
+    </div>
+  );
+}
