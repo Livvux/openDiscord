@@ -1,7 +1,7 @@
 import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLog, channel, message, reaction, user, userBlock } from "@/db/schema";
+import { auditLog, channel, integration, message, reaction, user, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, requireChannel } from "./access";
 import { enforceAutomod } from "./automod";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
@@ -22,6 +22,8 @@ export interface MessageView {
   channelId: string;
   authorId: string;
   authorName: string;
+  /** Posted by a bot or webhook. */
+  authorBot: boolean;
   content: string;
   createdAt: string;
   editedAt: string | null;
@@ -41,6 +43,7 @@ const viewColumns = {
   channelId: message.channelId,
   authorId: message.authorId,
   authorName: user.name,
+  authorBot: sql<boolean>`exists (select 1 from ${integration} where ${integration.userId} = ${message.authorId})`,
   content: message.content,
   createdAt: message.createdAt,
   editedAt: message.editedAt,
@@ -49,7 +52,7 @@ const viewColumns = {
   threadId: message.threadId,
 };
 
-interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "content" | "threadId"> {
+interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "authorBot" | "content" | "threadId"> {
   createdAt: Date;
   editedAt: Date | null;
   replyToId: string | null;
@@ -181,10 +184,9 @@ export async function sendMessage(
     await linkAttachments(tx, userId, channelId, created.id, ids);
     return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
   });
-  const [author] = await db.select({ name: user.name }).from(user).where(eq(user.id, userId));
   await publish({ type: "message.created", communityId: ch.communityId, channelId, messageId: row.id });
   await notifyMentions(mentioned, ch.communityId, channelId, row.id);
-  return (await toViews([{ ...row, authorName: author.name }]))[0];
+  return (await getMessageForBroadcast(row.id))!.message;
 }
 
 async function loadOwnedMessage(rawMessageId: unknown) {

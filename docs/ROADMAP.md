@@ -138,8 +138,8 @@ encrypted (the SFU relays DTLS-SRTP).
 
 | Requirement | Status | Notes / priority |
 | --- | --- | --- |
-| Documented public API | ❌ | P2: versioned REST API with tokens; OpenAPI |
-| Bots and integrations | ❌ | P2: bot accounts with scoped permissions, incoming webhooks |
+| Documented public API | ✅ | `/api/v1` for bot tokens with OpenAPI 3.1 ([API.md](API.md)) |
+| Bots and integrations | ✅ | Bot accounts as role-scoped members; incoming webhooks per channel; hashed tokens; audited |
 | Contribution guidelines | ✅ | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Automated tests, reproducible builds | ✅ | CI: lint, types, audit, unit/integration, build, Playwright; lockfile-frozen Docker build |
 
@@ -178,8 +178,8 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P2 — important improvements
 
-~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, bot accounts,
-incoming webhooks and a versioned public API (OpenAPI), Web Push notifications (VAPID, no third-party
+~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, ~~bot accounts,
+incoming webhooks and a versioned public API (OpenAPI)~~ ✅, Web Push notifications (VAPID, no third-party
 service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).
 

@@ -184,6 +184,7 @@ export function MessageItem(props: MessageItemProps) {
         {!grouped && (
           <p className="flex items-baseline gap-2">
             <span className={`font-medium ${nameColor(message.authorId)}`}>{message.authorName}</span>
+            {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
             <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-[11px] text-zinc-400" suppressHydrationWarning>
               {dateTimeFormat.format(created)}
             </time>

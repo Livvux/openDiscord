@@ -141,6 +141,13 @@
       "when": 1792073918333,
       "tag": "0019_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792074787305,
+      "tag": "0020_integrations",
+      "breakpoints": true
     }
   ]
 }
