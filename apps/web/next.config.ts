@@ -23,6 +23,8 @@ const csp = [
 
 const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
+  // Also behind proxies that don't add it (e.g. Traefik on Dokploy); browsers ignore it over plain HTTP.
+  { key: "Strict-Transport-Security", value: "max-age=31536000" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },

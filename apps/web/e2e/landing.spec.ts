@@ -22,3 +22,10 @@ test("landing page renders without errors and links to sign-up", async ({ page }
   await expect(page).toHaveURL(/\/sign-up$/);
   expect(errors).toEqual([]);
 });
+
+test("sends the security headers on every page, with or without a TLS proxy in front", async ({ request }) => {
+  const headers = (await request.get("/")).headers();
+  expect(headers["strict-transport-security"]).toBe("max-age=31536000");
+  expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+  expect(headers["x-content-type-options"]).toBe("nosniff");
+});
