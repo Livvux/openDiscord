@@ -16,8 +16,8 @@ export function RailLink({ communityId, name, initial }: RailLinkProps) {
   const href = `/app/c/${communityId}`;
   const active = usePathname().startsWith(href);
   const report = useReportCommunityUnread();
-  // A fresh server render is authoritative again.
-  useEffect(() => report?.(communityId, initial), [report, communityId, initial.unread, initial.mentions]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Every server render (navigation, refresh) brings a new `initial` object and is authoritative again.
+  useEffect(() => report?.(communityId, initial), [report, communityId, initial]);
   const { unread, mentions } = useCommunityUnread(communityId, initial);
   const initials = name
     .split(/\s+/)

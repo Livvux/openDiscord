@@ -12,7 +12,7 @@ import { requireUser } from "@/server/session";
 
 const HEARTBEAT_MS = 25_000;
 const MAX_LIFETIME_MS = 10 * 60_000;
-const MAX_STREAMS_PER_USER = 4;
+const MAX_STREAMS_PER_USER = 8;
 const EXCERPT_LENGTH = 140;
 
 const openStreams = new Map<string, number>();

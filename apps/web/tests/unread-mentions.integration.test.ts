@@ -38,16 +38,19 @@ describe("mentions", () => {
     expect(page.messages.at(-1)?.mentions).toEqual([{ id: ann, name: "Ann 100%" }]);
   });
 
-  it("notifies the mentioned person on their own topic, and again only for mentions added by an edit", async () => {
+  it("notifies the mentioned person on their own topic, but never for edits", async () => {
     const received: HubEvent[] = [];
     const unsubscribe = hub.subscribe(userTopic(bob), (e) => received.push(e));
     await new Promise((r) => setTimeout(r, 300));
     const sent = await sendMessage(ann, generalId, `ping <@${bob}>`);
     await expect.poll(() => received.filter((e) => e.type === "mention.created").length).toBe(1);
     expect(received[0]).toMatchObject({ type: "mention.created", userId: bob, channelId: generalId, messageId: sent.id });
-    await editMessage(ann, sent.id, `ping <@${bob}> and <@${owner}>`);
+    // Editing a mention out and back in must not re-ping.
+    await editMessage(ann, sent.id, "ping");
+    await editMessage(ann, sent.id, `ping <@${bob}>`);
     await new Promise((r) => setTimeout(r, 300));
     expect(received.filter((e) => e.type === "mention.created")).toHaveLength(1);
+    expect((await listMessages(bob, generalId)).messages.find((m) => m.id === sent.id)?.mentions).toEqual([{ id: bob, name: "Bob" }]);
     unsubscribe();
   });
 
@@ -71,6 +74,13 @@ describe("unread state", () => {
 
     await markChannelRead(bob, channelId, second.id);
     expect(await channelState(bob, channelId)).toMatchObject({ unread: false, mentions: 0, lastReadId: second.id });
+  });
+
+  it("only accepts messages of the channel as read markers", async () => {
+    const channelId = await createChannel(owner, communityId, "markers");
+    await expect(markChannelRead(bob, channelId, "01ffffff-ffff-7fff-bfff-ffffffffffff")).rejects.toThrow("Message not found.");
+    const elsewhere = await sendMessage(bob, generalId, "elsewhere");
+    await expect(markChannelRead(bob, channelId, elsewhere.id)).rejects.toThrow("Message not found.");
   });
 
   it("never moves the read marker backwards", async () => {

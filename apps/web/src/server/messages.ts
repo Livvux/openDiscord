@@ -131,12 +131,12 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   // Muted members (no SendMessages) can't rewrite their history either.
   await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   if (row.message.authorId !== userId) throw forbidden("You can only edit your own messages.");
-  const mentioned = await db.transaction(async (tx) => {
+  // Edits update who is mentioned but never notify: otherwise editing a mention out and back in re-pings.
+  await db.transaction(async (tx) => {
     await tx.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));
-    return syncMentions(tx, row.communityId, row.message.id, userId, content);
+    await syncMentions(tx, row.communityId, row.message.id, userId, content);
   });
   await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
-  await notifyMentions(mentioned, row.communityId, row.message.channelId, row.message.id);
 }
 
 export async function deleteMessage(userId: string, rawMessageId: unknown) {

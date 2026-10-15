@@ -58,6 +58,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     const es = new EventSource("/api/me/events");
+    let connected = false;
+    // The stream reconnects every few minutes; mentions in the gap are only in the server counts.
+    es.addEventListener("ready", () => {
+      if (connected) router.refresh();
+      connected = true;
+    });
     es.addEventListener("mention", (e) => {
       const notice = JSON.parse((e as MessageEvent<string>).data) as MentionNotice;
       const channelPath = `/app/c/${notice.communityId}/${notice.channelId}`;
