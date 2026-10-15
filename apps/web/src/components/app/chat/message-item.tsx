@@ -1,6 +1,6 @@
 "use client";
 
-import { CornerUpLeftIcon, FileDownIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
+import { CornerUpLeftIcon, FileDownIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
@@ -79,10 +79,12 @@ interface MessageItemProps {
   replyBlocked: boolean;
   onDeleted: (id: string) => void;
   onReply: (message: MessageView) => void;
+  /** Channel messages only: open (or start) this message's thread. */
+  onOpenThread?: (message: MessageView) => void;
 }
 
 export function MessageItem(props: MessageItemProps) {
-  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply } = props;
+  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply, onOpenThread } = props;
   const [editing, setEditing] = useState(false);
   const [picking, setPicking] = useState(false);
   const reactButton = useRef<HTMLButtonElement>(null);
@@ -263,6 +265,17 @@ export function MessageItem(props: MessageItemProps) {
             })}
           </ul>
         )}
+        {message.thread && onOpenThread && (
+          <button
+            type="button"
+            onClick={() => onOpenThread(message)}
+            className="mt-1 flex items-center gap-1.5 rounded-md text-xs font-medium text-sky-300 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <MessagesSquareIcon aria-hidden className="size-3.5" />
+            {message.thread.count} {message.thread.count === 1 ? "reply" : "replies"}
+            <span className="font-normal text-zinc-400" suppressHydrationWarning>· last {timeFormat.format(new Date(message.thread.lastAt))}</span>
+          </button>
+        )}
         {picking && <ReactionPicker onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
@@ -271,6 +284,11 @@ export function MessageItem(props: MessageItemProps) {
           {canReact && (
             <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
               <CornerUpLeftIcon />
+            </Button>
+          )}
+          {canReact && onOpenThread && !message.thread && (
+            <Button variant="ghost" size="icon-sm" aria-label="Start a thread" onClick={() => onOpenThread(message)}>
+              <MessagesSquareIcon />
             </Button>
           )}
           {canReact && (

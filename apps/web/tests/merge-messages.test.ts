@@ -10,7 +10,7 @@ const m = (id: string, content = id): MessageView => ({
   content,
   createdAt: "2026-01-01T00:00:00.000Z",
   editedAt: null,
-  attachments: [], mentions: [], replyTo: null, reactions: [], pinned: false,
+  attachments: [], mentions: [], replyTo: null, reactions: [], pinned: false, threadId: null, thread: null,
 });
 
 describe("mergeMessages", () => {
