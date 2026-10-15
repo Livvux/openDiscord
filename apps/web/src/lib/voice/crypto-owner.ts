@@ -11,7 +11,15 @@ export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: s
 export type VoiceOwnerTransport = (input: Readonly<{ binding: VoiceBinding; request: VoiceCryptoRequest; signal: AbortSignal }>) => Promise<unknown>;
 export class VoiceGenerationInterrupted extends Error { constructor() { super("Voice generation interrupted."); } }
 export type VoiceOwnerOptions = { accountId: string; guard: VoiceOwnerGuard; snapshot: VoiceSnapshot; lifetime: { assertCurrent(): void; signal: AbortSignal }; transport: VoiceOwnerTransport; onFence(reason: string): void };
-const syncSchema = z.object({ cursor: z.string().regex(/^\d{1,15}$/), events: z.array(z.unknown()).max(VOICE_LIMITS.syncBatch), oneTimeKeys: z.record(z.string(), z.number().int().nonnegative()), unusedFallbackKeys: z.array(z.string()).max(1) }).strict();
+// Service stores {sender,type,content}; its 8192-byte limit already includes the original
+// send request. Canonical sender is 98 ASCII bytes, longest supported type 26, wrapper 34:
+// 158 bytes added around content. Reserve 256 rather than accepting unbounded response data.
+const VOICE_OWNER_SYNC_LIMITS = {
+  eventBytes: VOICE_LIMITS.requestBytes + 256,
+  batchBytes: VOICE_LIMITS.syncBatch * (VOICE_LIMITS.requestBytes + 256) + VOICE_LIMITS.syncBatch + 1,
+} as const;
+const syncSchema = z.object({ cursor: z.string().regex(/^\d{1,15}$/), events: z.array(z.unknown()).max(VOICE_LIMITS.syncBatch), oneTimeKeys: z.object({ signed_curve25519: z.number().int().min(0).max(VOICE_LIMITS.prekeys) }).strict(), unusedFallbackKeys: z.array(z.literal("signed_curve25519")).max(1) }).strict();
+const incomingEnvelopeSchema = z.object({ sender: z.string().min(1).max(98), type: z.string().min(1).max(100), content: z.record(z.string().max(256), z.unknown()) }).strict();
 const envelopeSchema = z.object({ sender: z.string(), type: z.string(), content: z.record(z.string(), z.unknown()) }).passthrough();
 const decryptedSchema = envelopeSchema.extend({ recipient: z.string(), recipient_keys: z.object({ ed25519: z.string() }), sender_device_keys: z.object({ user_id: z.string(), device_id: z.string(), keys: z.record(z.string(), z.string()) }), keys: z.object({ ed25519: z.string() }) });
 const deviceOutcomeSchema = z.object({ nativeResponse: z.object({}).strict(), disposition: z.discriminatedUnion("status", [z.object({ status: z.literal("processed-current"), enqueued: z.literal(1) }).strict(), z.object({ status: z.literal("processed-retired"), enqueued: z.literal(0) }).strict()]) }).strict();
@@ -329,10 +337,26 @@ export class VoiceCryptoOwner {
   async receive(): Promise<VoiceOwnerControl[]> {
     const revision = this.revision;
     const rawBatch = await this.exchange({ kind: "sync" });
-    const batch = await this.serial(() => syncSchema.parse(rawBatch));
+    const batch = await this.serial(() => {
+      const parsed = syncSchema.parse(rawBatch), serializedEvents: string[] = [];
+      let batchBytes = 2;
+      for (const rawEvent of parsed.events) {
+        const serialized = JSON.stringify(rawEvent);
+        if (serialized === undefined || serialized.length > VOICE_OWNER_SYNC_LIMITS.eventBytes) throw new Error("Voice sync event byte limit.");
+        const bytes = new TextEncoder().encode(serialized).length;
+        if (bytes > VOICE_OWNER_SYNC_LIMITS.eventBytes) throw new Error("Voice sync event byte limit.");
+        batchBytes += bytes + (serializedEvents.length ? 1 : 0);
+        if (batchBytes > VOICE_OWNER_SYNC_LIMITS.batchBytes) throw new Error("Voice sync batch byte limit.");
+        const event = incomingEnvelopeSchema.parse(JSON.parse(serialized)), schema = voiceEventSchema(event.type);
+        if (!schema || !this.snapshot.members.some(member => member.voiceUserId === event.sender && member.memberId !== this.snapshot.memberId)) throw new Error("Unsupported incoming voice envelope.");
+        schema.parse(event.content);
+        serializedEvents.push(serialized);
+      }
+      return { ...parsed, nativeEvents: `[${serializedEvents.join(",")}]` };
+    });
     const controls = await this.serial(async () => {
       if (revision !== this.revision) throw new VoiceGenerationInterrupted();
-      const processed = await this.machine.receiveSyncChanges(JSON.stringify(batch.events), new C.DeviceLists([], []), new Map(Object.entries(batch.oneTimeKeys)), new Set(batch.unusedFallbackKeys), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
+      const processed = await this.machine.receiveSyncChanges(batch.nativeEvents, new C.DeviceLists([], []), new Map(Object.entries(batch.oneTimeKeys)), new Set(batch.unusedFallbackKeys), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
       const accepted: VoiceOwnerControl[] = [];
       for (const item of processed) {
         if (item instanceof C.PlainTextToDeviceEvent) {

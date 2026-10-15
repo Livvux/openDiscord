@@ -154,6 +154,7 @@ describe("unreachable serial voice owner", () => {
       const arrived = deferred<void>(), release = deferred<void>(), sendReturned = deferred<void>();
       value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { arrived.resolve(); await release.promise; sendReturned.resolve(); } };
       const requested = value.owner.requestVerification(value.other.memberId);
+      const requestedFailure = expect(requested).rejects.toThrow("generation interrupted");
       await arrived.promise;
       const send = [...value.wire.sent].reverse().find(entry => entry.request.kind === "send")!;
       if (!("nativeRequestId" in send.request)) throw new Error("Missing native ID.");
@@ -166,7 +167,7 @@ describe("unreachable serial voice owner", () => {
       expect(value.onFence).toHaveBeenCalledWith("generation-transition");
       const retired = value.wire.sent.filter(entry => entry.request.kind === "retire");
       expect(retired.some(entry => "nativeRequestId" in entry.request && entry.request.nativeRequestId === id)).toBe(true);
-      await expect(requested).rejects.toThrow("generation interrupted");
+      await requestedFailure;
       expect(completions.filter(value => value === id)).toHaveLength(1);
       expect(retired.every(entry => entry.binding.expectedGeneration === 2)).toBe(true);
       value.wire.pause = undefined;
@@ -325,8 +326,10 @@ describe("unreachable serial voice owner", () => {
     // The public spy is a hard tripwire: RED must never send oversized data into native code.
     const nativeReceive = vi.spyOn(C.OlmMachine.prototype, "receiveSyncChanges").mockImplementation(async () => { throw new Error("Pre-native validation tripwire."); });
     try {
-      await expect(owner.receive()).rejects.toThrow();
+      const rejected = owner.receive();
+      await expect(rejected).rejects.toThrow();
       expect(nativeReceive).not.toHaveBeenCalled();
+      if (invalid === "event-bytes" || invalid === "event-utf8-bytes") await expect(rejected).rejects.toThrow("Voice sync event byte limit");
       expect(onFence).toHaveBeenCalledWith("native-or-schema-failure");
       await expect(owner.flush()).rejects.toThrow("closed");
       await owner.close();
