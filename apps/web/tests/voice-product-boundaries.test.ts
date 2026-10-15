@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { AccessToken } from "livekit-server-sdk";
 import { db } from "@/db";
 import { channel, session, member, role } from "@/db/schema";
 import { voiceCallMember } from "@/db/voice-schema";
@@ -124,6 +125,26 @@ describe("bound grant serialized against actual lifecycle mutations", () => {
     expect(Date.parse(grant.expiresAt)).toBeLessThanOrEqual(expiresAt.getTime());
     await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(voiceCallMember.id, f.snapshot.memberId));
     await expect(grantBoundVoiceMedia(f.auth, f.binding)).rejects.toMatchObject({ code: "forbidden" });
+  });
+  it("discards a genuine signed JWT when delayed SDK relative expiry exceeds grant freshness", async () => {
+    const f = await fixture(), sign = AccessToken.prototype.toJwt;
+    const delayed = vi.spyOn(AccessToken.prototype, "toJwt").mockImplementationOnce(async function (this: AccessToken) {
+      // Reproduce a synchronous pause before the SDK computes its relative exp; still sign with
+      // the installed real SDK. Only Date is faked after the database grant has committed.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 5000);
+      return sign.call(this);
+    });
+    try {
+      const rejected = await createBoundVoiceToken(f.auth, f.binding).then(() => false, (error: unknown) => {
+        expect(error).toMatchObject({ code: "forbidden" });
+        return true;
+      });
+      expect(rejected, "Delayed SDK expiry must not outlive the authenticated grant").toBe(true);
+    } finally {
+      vi.useRealTimers();
+      delayed.mockRestore();
+    }
   });
   it("keeps the product unreachable and all external SDK work outside control transactions", () => {
     expect(existsSync(new URL("../src/app/api/voice/control/route.ts", import.meta.url))).toBe(false);
