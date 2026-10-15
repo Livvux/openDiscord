@@ -334,3 +334,24 @@ it("shares four SDK requests across reservation cleanup, explicit creation and f
     expect(await db.$count(voiceSfuRoom, and(eq(voiceSfuRoom.channelId, channelId), eq(voiceSfuRoom.lastOutcome, "pending")))).toBeGreaterThanOrEqual(9);
   } finally { await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, channelId)); }
 });
+
+it("keeps one monotonic token deadline after time passes between explicit creation and cleanup", async () => {
+  const f = await fixture(), channelId = randomUUID(), callId = randomUUID();
+  let now = 0;
+  const starts: number[] = [];
+  try {
+    await db.insert(voiceSfuRoom).values(Array.from({ length: 12 }, (_, n) => ({ roomName: `voice:${channelId}:${callId}:${n + 1}`, channelId, callId, generation: n + 1, status: "retired" as const, retiredAt: new Date(0), lastAppTokenExpiry: new Date(0), nextAttemptAt: new Date(0) })));
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockImplementation(async () => { starts.push(now); now += 100; });
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockImplementation(async () => { starts.push(now); now += 100; return []; });
+    vi.mocked(RoomServiceClient.prototype.createRoom).mockImplementation(async options => {
+      starts.push(now);
+      // A synchronous process pause after SDK completion also spends the same monotonic budget.
+      now += 2000;
+      return new Room({ name: options.name });
+    });
+    await createBoundVoiceToken(f.auth, f.binding);
+    expect(starts.length).toBeGreaterThanOrEqual(1);
+    expect(starts.every(start => start + 500 <= 2500)).toBe(true);
+  } finally { await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, channelId)); }
+});
