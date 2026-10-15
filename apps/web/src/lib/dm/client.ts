@@ -2,6 +2,7 @@
 
 import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
+import { archiveSchema, HistoryStore, historyEntrySchema, MAX_HISTORY_COPIES, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
 
 type SDK = typeof Matrix;
@@ -10,9 +11,8 @@ type Metadata = { id: string; secret: string; storeKey: string };
 export type TrustedDevice = { userId: string; id: string; verified: boolean; fingerprint: string };
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
 const metadataSchema = z.object({ id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/), storeKey: z.string().min(32) });
-const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(1), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
-const snapshotSchema = z.object({ userId: z.string(), secrets: z.unknown(), roomKeys: z.string(), createdAt: z.string() }).strict();
-const transferSchema = snapshotSchema.extend({ recipient: z.uuid(), transferId: z.uuid() }).strict();
+const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(2), origin: z.url(), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
+const transferSchema = recoverySnapshotSchema.extend({ recipient: z.uuid(), transferId: z.uuid() }).strict();
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 const clients = new Map<string, Promise<PrivateMessaging>>();
 
@@ -61,6 +61,10 @@ export class PrivateMessaging {
   private queue: Promise<unknown> = Promise.resolve();
   private users = new Set<string>();
   private rosters = new Map<string, string>();
+  private historyStore!: HistoryStore;
+  private verifiedHistory = new Map<string, HistoryEntry>();
+  private recoveredArchives: HistoryArchive[] = [];
+  private pendingRecovery: RecoverySnapshot | null = null;
   private releaseLock: (() => void) | undefined;
   private constructor(readonly userId: string, private C: SDK, readonly metadata: Metadata, private machine: Matrix.OlmMachine) { this.users.add(userId); }
   get deviceId(): string { return this.metadata.id; }
@@ -92,6 +96,9 @@ export class PrivateMessaging {
       opened = machine;
       const client = new PrivateMessaging(userId, C, metadata, machine);
       client.releaseLock = release;
+      client.historyStore = await HistoryStore.open(userId, metadata.id, C);
+      client.verifiedHistory = new Map((await client.historyStore.cached()).map((entry) => [entry.envelope.id, entry]));
+      client.recoveredArchives = await client.historyStore.archives();
       await dmFetch("/api/dm", { action: "register", input: { id: metadata.id, secret: metadata.secret, name: "Web browser" } });
       await client.flush();
       await client.query([userId]);
@@ -102,7 +109,7 @@ export class PrivateMessaging {
       return client;
     } catch (error) { opened?.close(); release?.(); throw error; }
   }
-  close(): void { this.machine.close(); this.releaseLock?.(); this.releaseLock = undefined; clients.delete(this.userId); }
+  close(): void { this.historyStore?.close(); this.machine.close(); this.releaseLock?.(); this.releaseLock = undefined; clients.delete(this.userId); }
   private async outgoing(request: Outgoing): Promise<void> {
     const C = this.C;
     const body: unknown = JSON.parse(request.body);
@@ -149,9 +156,12 @@ export class PrivateMessaging {
         if (!(processed instanceof this.C.DecryptedToDeviceEvent) || !processed.encryptionInfo.isSenderVerified()) continue;
         const event = z.object({ sender: z.string(), type: z.string(), content: z.unknown() }).parse(JSON.parse(processed.rawEvent));
         if (event.type !== "app.opendiscord.device-transfer" || event.sender !== matrixUser(this.userId)) continue;
-        const content = transferSchema.parse(event.content);
-        if (content.recipient !== this.deviceId || content.userId !== this.userId) throw new Error("Device transfer identity mismatch.");
-        await this.importSnapshot({ userId: content.userId, createdAt: content.createdAt, secrets: content.secrets, roomKeys: content.roomKeys });
+        const { recipient, transferId, ...snapshot } = transferSchema.parse(event.content);
+        if (recipient !== this.deviceId || snapshot.userId !== this.userId || transferId !== snapshot.id) throw new Error("Device transfer identity mismatch.");
+        const senderId = processed.encryptionInfo.senderDevice;
+        const source = senderId ? await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), senderId) : undefined;
+        if (!source?.isVerified() || snapshot.sourceDevice !== senderId?.toString() || snapshot.sourceFingerprint !== source.ed25519Key?.toBase64()) throw new Error("Device transfer source mismatch.");
+        await this.importArchive(snapshot);
       }
       // OlmMachine persisted its state before this point; retry delivery after a lost acknowledgment is safe.
       if (sync.cursor !== "0") await this.crypto({ kind: "ack", cursor: sync.cursor });
@@ -227,6 +237,7 @@ export class PrivateMessaging {
   async decrypt(envelopes: DirectEnvelope[], conversation: string, peer: string): Promise<{ id: string; body: string | null; error?: string; own: boolean; createdAt: string; senderId: string }[]> {
     return this.serial(async () => {
       const result = [];
+      let historyChanged = false;
       for (const envelope of envelopes) {
         const base = { id: envelope.id, own: envelope.senderId === this.userId, createdAt: envelope.createdAt, senderId: envelope.senderId };
         try {
@@ -234,49 +245,90 @@ export class PrivateMessaging {
           const event = { type: "m.room.encrypted", event_id: `$${envelope.id}`, sender: matrixUser(envelope.senderId), origin_server_ts: new Date(envelope.createdAt).getTime(), content: envelope.content };
           const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
           if (decrypted.shieldState(true).color !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
-          if (!decrypted.senderDevice || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
+          if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device?.isVerified() && !(envelope.senderId === this.userId && decrypted.senderDevice.toString() === this.deviceId)) throw new Error("Verify the sender's device to read this message.");
           const plain = plainMessageSchema.parse(z.object({ content: z.unknown() }).parse(JSON.parse(decrypted.event)).content);
           if (plain.conversation !== conversation || plain.transaction !== envelope.transactionId) throw new Error("Message binding mismatch.");
+          const verified = historyEntrySchema.parse({ envelope, message: plain, verifiedAt: new Date().toISOString() });
+          await this.historyStore.acceptEvent(verified.envelope);
           result.push({ ...base, body: plain.body });
+          if (!this.verifiedHistory.has(envelope.id)) {
+            this.verifiedHistory.set(envelope.id, verified);
+            historyChanged = true;
+          }
         } catch { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup." }); }
+      }
+      if (historyChanged) {
+        this.verifiedHistory = new Map([...this.verifiedHistory.entries()].slice(-MAX_HISTORY_COPIES));
+        await this.historyStore.put("verified-cache", [...this.verifiedHistory.values()]);
       }
       return result;
     });
   }
-  private async snapshot() {
-    return { userId: this.userId, createdAt: new Date().toISOString(), secrets: (await this.machine.exportSecretsBundle()).to_json(), roomKeys: await this.machine.exportRoomKeys(() => true) };
+  private async snapshot(id: string): Promise<RecoverySnapshot> {
+    const identity = await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId)));
+    const source = await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), new this.C.DeviceId(this.deviceId));
+    if (!identity?.isVerified() || !source?.ed25519Key) throw new Error("Recover your identity before creating a recovery backup.");
+    return recoverySnapshotSchema.parse({ format: "opendiscord.e2ee-history", version: 2, id, origin: location.origin, userId: this.userId, sourceDevice: this.deviceId, sourceFingerprint: source.ed25519Key.toBase64(), masterKey: identity.masterKey, createdAt: new Date().toISOString(), secrets: (await this.machine.exportSecretsBundle()).to_json(), messages: [...this.verifiedHistory.values()] });
   }
-  private async importSnapshot(raw: unknown): Promise<void> {
-    const snapshot = snapshotSchema.parse(raw);
-    if (snapshot.userId !== this.userId) throw new Error("This recovery belongs to another account.");
-    const secrets = this.C.SecretsBundle.from_json(snapshot.secrets);
-    await this.machine.importSecretsBundle(secrets);
-    await this.machine.importExportedRoomKeys(snapshot.roomKeys, () => {});
-    await this.bootstrap();
+  private async importArchive(raw: unknown): Promise<void> {
+    const snapshot = recoverySnapshotSchema.parse(raw);
+    if (snapshot.userId !== this.userId || snapshot.origin !== location.origin) throw new Error("This recovery belongs to another account or instance.");
+    const { secrets, ...archive } = snapshot;
+    // Validate the SDK bundle before any persistent mutation, without importing it into the live store.
+    this.C.SecretsBundle.from_json(secrets).free();
+    await this.historyStore.put(snapshot.id, archiveSchema.parse(archive), true);
+    this.recoveredArchives = await this.historyStore.archives();
+    this.pendingRecovery = snapshot;
+  }
+  archives(): Promise<HistoryArchive[]> { return this.serial(async () => this.recoveredArchives); }
+  hasPendingIdentity(): boolean { return this.pendingRecovery !== null; }
+  removeArchive(id: string): Promise<void> { return this.serial(async () => { await this.historyStore.remove(id); this.recoveredArchives = this.recoveredArchives.filter((archive) => archive.id !== id); if (this.pendingRecovery?.id === id) this.pendingRecovery = null; }); }
+  restorePendingIdentity(): Promise<void> {
+    return this.serial(async () => {
+      const snapshot = this.pendingRecovery;
+      if (!snapshot) throw new Error("Open a recovery file or receive a verified device transfer first.");
+      await this.query([this.userId]);
+      const identity = await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId)));
+      const key = (value: string) => z.object({ keys: z.record(z.string(), z.string()) }).parse(JSON.parse(value)).keys;
+      if (!identity || JSON.stringify(key(identity.masterKey)) !== JSON.stringify(key(snapshot.masterKey))) throw new Error("This archive belongs to an older encryption identity. Its history remains readable; it cannot replace your current identity.");
+      // Derive and compare the bundle's actual public identity in an isolated SDK store before mutation.
+      const probe = await this.C.OlmMachine.initialize(new this.C.UserId(matrixUser(this.userId)), new this.C.DeviceId(crypto.randomUUID()), undefined, undefined, silentLogger);
+      try {
+        await probe.importSecretsBundle(this.C.SecretsBundle.from_json(snapshot.secrets));
+        const recovered = await probe.getIdentity(new this.C.UserId(matrixUser(this.userId)));
+        if (!recovered || JSON.stringify(key(recovered.masterKey)) !== JSON.stringify(key(identity.masterKey))) throw new Error("Recovery identity does not match the current account identity.");
+      } finally { probe.close(); }
+      await this.machine.importSecretsBundle(this.C.SecretsBundle.from_json(snapshot.secrets));
+      await this.bootstrap();
+      this.pendingRecovery = null;
+    });
   }
   async createBackup(): Promise<RecoveryFile> {
     return this.serial(async () => {
-      const bytes = new TextEncoder().encode(JSON.stringify(await this.snapshot()));
+      const backupId = crypto.randomUUID();
+      const bytes = new TextEncoder().encode(JSON.stringify(await this.snapshot(backupId)));
       if (bytes.length > DM_MAX_BACKUP_BYTES) throw new Error("This history exceeds the encrypted backup size limit.");
       const attachment = this.C.Attachment.encrypt(bytes);
       const encryptionInfo = attachment.mediaEncryptionInfo;
       if (!encryptionInfo) throw new Error("Could not create recovery information.");
-      const backupId = crypto.randomUUID();
       await dmFetch("/api/dm/backups", { id: backupId, ciphertext: encode(attachment.encryptedData) }, this.metadata);
       attachment.free();
-      return { format: "opendiscord.e2ee-recovery", version: 1, userId: this.userId, backupId, encryptionInfo };
+      return { format: "opendiscord.e2ee-recovery", version: 2, origin: location.origin, userId: this.userId, backupId, encryptionInfo };
     });
   }
   async restoreBackup(raw: unknown): Promise<void> {
     return this.serial(async () => {
       const file = recoverySchema.parse(raw);
-      if (file.userId !== this.userId) throw new Error("This recovery file belongs to another account.");
+      if (file.userId !== this.userId || file.origin !== location.origin) throw new Error("This recovery file belongs to another account or instance.");
       const backup = await dmFetch<{ ciphertext: string }>(`/api/dm/backups?id=${file.backupId}`);
-      const attachment = new this.C.EncryptedAttachment(decode(backup.ciphertext), file.encryptionInfo);
-      const plain = this.C.Attachment.decrypt(attachment);
-      await this.importSnapshot(JSON.parse(new TextDecoder().decode(plain)));
+      const ciphertext = decode(backup.ciphertext);
+      if (ciphertext.length > DM_MAX_BACKUP_BYTES) throw new Error("Recovery exceeds the size limit.");
+      const attachment = new this.C.EncryptedAttachment(ciphertext, file.encryptionInfo);
+      const snapshot = recoverySnapshotSchema.parse(JSON.parse(new TextDecoder().decode(this.C.Attachment.decrypt(attachment))));
+      if (snapshot.id !== file.backupId) throw new Error("Recovery backup binding mismatch.");
+      await this.importArchive(snapshot);
     });
   }
   async shareHistory(targetDeviceId: string): Promise<void> {
@@ -286,10 +338,11 @@ export class PrivateMessaging {
       if (claim) await this.outgoing(claim);
       const device = await this.machine.getDevice(new this.C.UserId(matrixUser(this.userId)), new this.C.DeviceId(targetDeviceId));
       if (!device?.isVerified() || device.isDeleted()) throw new Error("Verify your other device before sharing identity and history.");
-      const content = { ...await this.snapshot(), recipient: targetDeviceId, transferId: crypto.randomUUID() };
+      const transferId = crypto.randomUUID();
+      const content = { ...await this.snapshot(transferId), recipient: targetDeviceId, transferId };
       if (new TextEncoder().encode(JSON.stringify(content)).length > 300_000) throw new Error("Use an encrypted recovery file for this larger history.");
       const encrypted = await device.encryptToDeviceEvent("app.opendiscord.device-transfer", content, this.C.CollectStrategy.onlyTrustedDevices());
-      await this.crypto({ kind: "send", requestId: crypto.randomUUID(), eventType: "m.room.encrypted", body: { messages: { [matrixUser(this.userId)]: { [targetDeviceId]: JSON.parse(encrypted) } } } });
+      await this.crypto({ kind: "send", requestId: transferId, eventType: "m.room.encrypted", body: { messages: { [matrixUser(this.userId)]: { [targetDeviceId]: JSON.parse(encrypted) } } } });
     });
   }
 }

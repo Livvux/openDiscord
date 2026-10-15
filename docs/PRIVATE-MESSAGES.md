@@ -20,9 +20,11 @@ The sender queries the roster before sending and rotates the outbound group sess
 Revocation cannot revoke secrets or plaintext already delivered to a device, and does not cancel a
 message already encrypted in an in-flight browser operation.
 
-Each encrypted payload binds its conversation and client transaction. The SDK authenticates the
-sender and detects invalid ciphertext/replays; the application additionally verifies these bindings
-and the sender's verified device before rendering text. Server writes and device mailbox requests
+Each encrypted payload binds its conversation and client transaction. The SDK authenticates ciphertext and the sender; the client requires CrossSigned decryption and
+a warning-free strict shield before displaying live text. Server-assigned event IDs are not signed
+by Megolm. A durable local IndexedDB ledger additionally pins each conversation/sender/transaction
+to its first accepted event ID and ciphertext, rejecting later duplicate envelopes. The ledger is
+retained across reloads; a new browser cannot know events it never previously received. Server writes and device mailbox requests
 are idempotent. A mailbox batch is acknowledged after SDK persistence. One-time prekeys are atomically
 claimed, and consumed identifiers remain tombstoned so an upload retry cannot resurrect them.
 
@@ -34,23 +36,49 @@ origin. This protects neither against a compromised browser nor against code run
 ## Additional devices and recovery
 
 A new browser enrolls a distinct device. Verify it against an existing trusted device using SAS and
-choose **Share identity and history**, or import a previously downloaded private recovery file.
+choose **Share identity and history**, or open a previously downloaded private recovery file.
 Device sharing uses an authenticated, encrypted Olm event and is limited to verified devices on the
-same account. Large histories use the encrypted backup path instead.
+same account. Large snapshots use the encrypted backup path instead.
 
-**Create encrypted recovery backup** exports the SDK's cross-signing secrets and room keys locally,
-then encrypts that snapshot using the SDK's Matrix attachment encryption. The server receives only
-ciphertext. Download the separate private recovery file: its encryption information is never uploaded.
-Keep it private and outside the browser. Restoring requires both this file and the corresponding
-server backup, plus access to your account. The file provides integrity information for the ciphertext;
-changing encrypted backup bytes makes restoration fail. Deleting a server backup makes that recovery
-file unusable. There are at most ten backups per account, each at most 4 MB before base64 encoding.
+**Create encrypted recovery backup** exports the SDK's cross-signing secrets together with a bounded
+history archive. The archive contains the most recent **200 messages loaded and authenticated by this
+browser**, with their complete ciphertext envelopes and source-verification dates. Load earlier
+messages before backing up if those are needed. It does not promise to include unread messages or
+every historical conversation. Source/device fingerprint, account, original web origin, backup ID and
+format version are bound inside the encrypted snapshot.
 
-Identity recovery and history recovery are distinct: a snapshot restores the identity and only the
-room keys included when it was created. Later keys require a newer backup or a trusted existing
-device. Account password reset does not recover E2EE secrets. Losing every trusted device and every
-recovery file loses the corresponding history. An unavailable browser store can be explicitly
-re-enrolled; this revokes the previous device and requires trust enrollment again.
+The browser encrypts the snapshot using the SDK's Matrix attachment format (AES-CTR with SHA-256
+integrity). This is not an AEAD format: its key, IV and expected hash must stay together in the trusted
+user-held recovery file, or inside an authenticated own-device Olm event. The server receives only
+ciphertext. Neither missing hashes nor server-provided replacement encryption metadata are accepted.
+Keep the private recovery file outside the browser. Restoring requires that file, its server ciphertext
+backup and account access on the original origin. Deleting a server backup makes its recovery file
+unusable. There are at most ten backups per account, each at most 4 MB before base64 encoding.
+
+Opening a recovery file creates a **separate read-only archive**. It does not import arbitrary room keys
+as trusted live sessions, and does not give archive copies a current SDK verification badge. Upstream
+`exportRoomKeys`/`importExportedRoomKeys` loses the authenticated sender provenance: a strict SDK
+probe rejects those imported sessions even when the original session is verified. The archived copies
+were authenticated on the source device before backup; their event IDs and delivery timestamps remain
+server-supplied metadata, not cryptographic delivery-time evidence. Archive IDs are deduplicated and
+imports never replace another archive or live message history.
+
+**Restore current encryption identity** is a separate explicit action. It derives the recovery bundle's
+public identity in an isolated SDK store and requires it to match the current account master key before
+changing the live SDK state. An archive from a previous identity remains readable but cannot silently
+replace the current identity. New live sessions still require the normal SDK authentication path.
+Incoming own-device transfers also require this explicit identity action.
+
+Local verified-copy caches and recovered archives are stored as encrypted attachments in IndexedDB,
+with unlocking information in the same browser origin. This is not protection against endpoint or
+same-origin code compromise. At most ten local archives and 200 source-cache messages are retained;
+local archives can be removed separately from server backups. Future backups include the current
+browser's verified-copy cache, not automatically every previously recovered archive.
+
+Account password reset cannot recover encryption secrets. Losing every trusted device and recovery
+file loses the corresponding history. An unavailable browser store can be explicitly re-enrolled;
+this revokes the previous device and requires trust enrollment again. Clearing browser storage also
+removes the local replay ledger and recovered archives.
 
 ## Server visibility and reporting
 
@@ -93,6 +121,7 @@ Dependency evidence and audit boundaries:
 - [vodozemac and its audit reference](https://github.com/matrix-org/vodozemac)
 - [Matrix client/server encryption and SAS specification](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption)
 
-Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/direct-messages.integration.test.ts` and
+Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-matrix.integration.test.ts`,
+`tests/direct-messages.integration.test.ts` and
 `e2e/direct-messages.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.

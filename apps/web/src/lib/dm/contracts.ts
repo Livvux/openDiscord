@@ -28,4 +28,4 @@ export type DirectConversation = { id: string; peerId: string; peerName: string;
 export type DirectEnvelope = { id: string; conversationId: string; senderId: string; deviceId: string; transactionId: string; content: Record<string, unknown>; createdAt: string };
 export type DeviceView = { id: string; userId: string; name: string; revoked: boolean; createdAt: string };
 export type CryptoSync = { cursor: string; events: Record<string, unknown>[]; oneTimeKeys: Record<string, number>; unusedFallbackKeys: string[] };
-export type RecoveryFile = { format: "opendiscord.e2ee-recovery"; version: 1; userId: string; backupId: string; encryptionInfo: string };
+export type RecoveryFile = { format: "opendiscord.e2ee-recovery"; version: 2; origin: string; userId: string; backupId: string; encryptionInfo: string };

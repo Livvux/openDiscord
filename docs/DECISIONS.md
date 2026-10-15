@@ -90,7 +90,7 @@ not this application, its web delivery, transport or recovery composition. No in
 openDiscord is claimed. See [private messaging architecture and limitations](PRIVATE-MESSAGES.md).
 
 The server stores ciphertext, public keys and delivery metadata. Encrypted backups contain identity
-secrets and exported room keys; the private recovery file containing the encryption key remains with
+secrets and explicitly labelled, source-authenticated read-only history copies; the private recovery file containing the encryption key remains with
 the user. Matrix attachment encryption is reused rather than inventing an encryption format. Community
 channels remain server-readable for moderation, search and history. Voice encryption is a separate
 integration and is not implied by encrypted DMs.

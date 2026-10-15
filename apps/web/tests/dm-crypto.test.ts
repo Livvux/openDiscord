@@ -6,7 +6,7 @@ import { matrixRoom, matrixUser, plainMessageSchema } from "@/lib/dm/contracts";
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe("pinned Matrix cryptographic primitives", () => {
-  it("authenticates Megolm ciphertext and rejects a replay under another event id", async () => {
+  it("authenticates Megolm ciphertext while transport event ids require the application replay ledger", async () => {
     await C.initAsync();
     const user = randomUUID(), device = randomUUID(), conversation = randomUUID();
     const machine = await C.OlmMachine.initialize(new C.UserId(matrixUser(user)), new C.DeviceId(device), undefined, undefined, logger);
@@ -20,7 +20,9 @@ describe("pinned Matrix cryptographic primitives", () => {
       const settings = new C.DecryptionSettings(C.TrustRequirement.Untrusted);
       const decoded = await machine.decryptRoomEvent(JSON.stringify(event), room, settings);
       expect(JSON.parse(decoded.event).content).toEqual(payload);
-      await expect(machine.decryptRoomEvent(JSON.stringify({ ...event, event_id: `$${randomUUID()}` }), room, settings)).rejects.toThrow();
+      // Megolm does not authenticate the server-assigned event id. The browser ledger pins the encrypted transaction instead.
+      const replay = await machine.decryptRoomEvent(JSON.stringify({ ...event, event_id: `$${randomUUID()}` }), room, settings);
+      expect(JSON.parse(replay.event).content.transaction).toBe(payload.transaction);
       const tampered = { ...content, ciphertext: `AAAA${String(content.ciphertext).slice(4)}` };
       await expect(machine.decryptRoomEvent(JSON.stringify({ ...event, event_id: `$${randomUUID()}`, content: tampered }), room, settings)).rejects.toThrow();
     } finally { machine.close(); }

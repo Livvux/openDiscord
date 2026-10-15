@@ -92,14 +92,32 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expect(restored).toHaveURL(/\/app$/);
   await restored.goto("/app/messages");
   await restored.getByRole("button", { name: "Devices and recovery", exact: true }).click();
-  await expect(restored.getByLabel("Restore identity and history", { exact: true })).toBeEnabled({ timeout: 30_000 });
-  await restored.getByLabel("Restore identity and history", { exact: true }).setInputFiles(recoveryFile!);
-  await openConversation(restored, "Private Bob");
-  await expect(restored.getByRole("log").getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(restored.getByRole("log").getByText(offline, { exact: true })).toBeVisible();
+  await expect(restored.getByLabel("Open encrypted recovery archive", { exact: true })).toBeEnabled({ timeout: 30_000 });
+  await restored.getByLabel("Open encrypted recovery archive", { exact: true }).setInputFiles(recoveryFile!);
+  const archive = restored.getByRole("region", { name: "Recovered history archives" });
+  await archive.locator("summary").click();
+  await expect(archive.getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(archive.getByText(offline, { exact: true })).toBeVisible();
+  restored.once("dialog", (dialog) => dialog.accept());
+  await restored.getByRole("button", { name: "Restore current encryption identity", exact: true }).click();
+  await expect(restored.getByRole("button", { name: "Restore current encryption identity", exact: true })).toHaveCount(0);
+  await restored.reload();
+  await restored.getByRole("region", { name: "Recovered history archives" }).locator("summary").click();
+  await expect(restored.getByRole("region", { name: "Recovered history archives" }).getByText(first, { exact: true })).toBeVisible();
   await expectNoA11yViolations(restored);
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
 
+  await bob.route("**/api/dm?conversation=*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.messages.push({ ...body.messages[0], id: "ffffffff-ffff-4fff-8fff-ffffffffffff" });
+    await route.fulfill({ response, json: body });
+  });
+  await bob.reload();
+  await openConversation(bob, "Private Alice");
+  await expect(bob.getByRole("log").getByText(first, { exact: true })).toHaveCount(1, { timeout: 30_000 });
+  await expect(bob.getByRole("log").getByText(/Cannot decrypt or authenticate/)).toHaveCount(1);
+  await bob.unrouteAll();
   await bob.route("**/api/dm?conversation=*", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
