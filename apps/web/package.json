@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "auth:schema": "auth generate --config src/lib/auth.ts --output src/db/auth-schema.ts --yes",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "admin:bootstrap": "tsx --env-file=.env scripts/bootstrap-instance-admin.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

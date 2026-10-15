@@ -13,7 +13,8 @@ data controllers and must publish their own privacy notice; this document is the
 | Passkeys | TLS | Public keys only | n/a |
 
 **Nothing in openDiscord is end-to-end encrypted today.** The operator of an instance can technically
-read community messages. TLS and server-side storage protection are not E2EE, and the product must
+read community messages. In the application, instance administrators can explicitly review a reported
+message only after providing a reason; access is audited. Global rights do not grant community membership. TLS and server-side storage protection are not E2EE, and the product must
 never claim otherwise. E2EE direct messages are planned with an audited protocol ([DECISIONS.md](DECISIONS.md) D10).
 
 ## Data inventory
@@ -29,6 +30,10 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Messages | Conversation | Members of the community | Until deleted by author, moderator, community deletion or account deletion |
 | Bans | Moderation | Moderators with ban permission | Until unbanned, community deleted or the banned account deleted |
 | Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |
+| Instance administrators, suspensions and settings | Instance governance and abuse prevention | Instance administrators; users see their own access restrictions | Until revoked; suspension ends when lifted or the account is deleted |
+| Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Retained until an operator retention process removes them; reporter/resolver links are removed on account deletion |
+| Instance audit log | Administrative accountability | Instance administrators after 2FA confirmation | Retained independently of community deletion; no automated retention job yet. Stores reasons and target IDs, never copies message bodies |
+| Admin verification: session and confirmation time | Require recent 2FA for global administration | Server only | Valid for 15 minutes; removed with the session |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
 There are no analytics, tracking pixels, advertising identifiers, third-party fonts or third-party
@@ -42,13 +47,17 @@ scripts. The Content Security Policy blocks requests to other origins.
 - **Erasure:** Settings → Delete account. This permanently deletes your account, sessions, 2FA and
   passkeys, memberships, bans against you, and every message you wrote. Audit entries about you keep the
   action but lose the link to your account. If you own communities, delete them first, so members
-  aren't left with an ownerless community.
+  aren't left with an ownerless community. Instance administrators must first have their global rights
+  removed by another administrator; the last admin cannot be removed. Instance moderation records are
+  retained for accountability: actor/reporter links become null when the account is deleted, while
+  target IDs and free-text reasons remain. Operators must define appropriate retention and handle
+  requests concerning these records. They are not part of the self-service JSON export.
 - **Restriction/objection:** there is no profiling or optional processing to object to.
 
 ## Search engines and public access
 
-Private areas (`/app`, `/invite`, `/api`) are excluded via `robots.txt` and `noindex`. All APIs
-require membership. Public, indexable channels will exist only as an explicit opt-in (P2).
+Private areas (`/app`, `/invite`, `/api`) are excluded via `robots.txt` and `noindex`. Community-content APIs
+require membership. Instance administration separately requires global rights and recent 2FA confirmation. Public, indexable channels will exist only as an explicit opt-in (P2).
 
 ## Backups
 

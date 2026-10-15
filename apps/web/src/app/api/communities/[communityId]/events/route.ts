@@ -3,7 +3,7 @@
 import { db } from "@/db";
 import { loadAuthority } from "@/server/access";
 import { AppError, notFound } from "@/server/errors";
-import { errorResponse } from "@/server/http";
+import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
 import { getMessageForBroadcast } from "@/server/messages";
 import { hub, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
@@ -28,13 +28,26 @@ function loadOnce(event: HubEvent & { messageId: string }) {
   return load;
 }
 
+async function authorize(request: Request, ctx: RouteContext<"/api/communities/[communityId]/events">) {
+  const userId = (await requireUser(request.headers)).id;
+  const communityId = parse(uuid, (await ctx.params).communityId);
+  if (!(await loadAuthority(db, communityId, userId))) throw notFound("Community not found.");
+  return { userId, communityId };
+}
+
+/** Checks refused stream connections without opening another stream or consuming a stream slot. */
+export async function HEAD(request: Request, ctx: RouteContext<"/api/communities/[communityId]/events">) {
+  try {
+    await authorize(request, ctx);
+    return new Response(null, { status: 204, headers: PRIVATE_NO_STORE });
+  } catch (error) { return errorResponse(error); }
+}
+
 export async function GET(request: Request, ctx: RouteContext<"/api/communities/[communityId]/events">) {
   let userId: string;
   let communityId: string;
   try {
-    userId = (await requireUser(request.headers)).id;
-    communityId = parse(uuid, (await ctx.params).communityId);
-    if (!(await loadAuthority(db, communityId, userId))) throw notFound("Community not found.");
+    ({ userId, communityId } = await authorize(request, ctx));
     if ((openStreams.get(userId) ?? 0) >= MAX_STREAMS_PER_USER) {
       throw new AppError("rate_limited", "Too many open connections. Close some tabs.");
     }
@@ -63,7 +76,17 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
         }
       };
 
+      const checkAccess = async () => {
+        try {
+          await requireUser(request.headers);
+          if (await loadAuthority(db, communityId, userId)) return true;
+        } catch { /* A revoked or suspended session must stop receiving events. */ }
+        send("removed", {});
+        close();
+        return false;
+      };
       const onEvent = async (event: HubEvent) => {
+        if (!(await checkAccess())) return;
         switch (event.type) {
           case "message.created":
           case "message.updated": {
@@ -101,7 +124,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
         }),
       );
       // A named event (not a comment) so the client can detect dead connections.
-      const heartbeat = setInterval(() => send("ping", {}), HEARTBEAT_MS);
+      const heartbeat = setInterval(() => { void checkAccess().then((allowed) => { if (allowed) send("ping", {}); }); }, HEARTBEAT_MS);
       const lifetime = setTimeout(close, MAX_LIFETIME_MS);
       let released = false;
       cleanup = () => {

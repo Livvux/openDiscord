@@ -56,3 +56,6 @@ export const updateRole = async (roleId: string, name: string, permissions: stri
 export const deleteRole = async (roleId: string) => run((u) => moderation.deleteRole(u, roleId));
 export const setMemberRole = async (roleId: string, userId: string, assigned: boolean) =>
   run((u) => moderation.setMemberRole(u, roleId, userId, assigned));
+
+export const reportContent = async (input: { communityId?: string; messageId?: string; reason: string }) =>
+  run(async (u) => (await import("@/server/reports")).reportContent(u, input), false);

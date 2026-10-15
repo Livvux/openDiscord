@@ -4,7 +4,8 @@ import { db } from "@/db";
 import { auditLog, ban, channel, community, invite, member, role } from "@/db/schema";
 import { lockCommunity, requireMember } from "./access";
 import { AppError, forbidden, notFound } from "./errors";
-import { CAPS, enforceCap } from "./limits";
+import { enforceCap } from "./limits";
+import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
 import { DEFAULT_MEMBER_PERMISSIONS, Permission, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
@@ -30,7 +31,10 @@ export interface CommunityView {
 
 export async function createCommunity(userId: string, rawName: unknown): Promise<{ communityId: string; channelId: string }> {
   const name = parse(communityName, rawName);
+  await assertActiveUser(userId);
   return db.transaction(async (tx) => {
+    await tx.execute(sql`select 1 from "user" where id = ${userId} for update`);
+    const CAPS = await getInstanceSettings(tx);
     const [{ owned }] = await tx.select({ owned: count() }).from(community).where(eq(community.ownerId, userId));
     enforceCap(owned, CAPS.ownedCommunities, `You can own at most ${CAPS.ownedCommunities} communities.`);
     const [c] = await tx.insert(community).values({ name, ownerId: userId }).returning({ id: community.id });
@@ -42,11 +46,12 @@ export async function createCommunity(userId: string, rawName: unknown): Promise
 }
 
 export async function listCommunities(userId: string): Promise<CommunitySummary[]> {
+  await assertActiveUser(userId);
   return db
     .select({ id: community.id, name: community.name })
     .from(member)
     .innerJoin(community, eq(community.id, member.communityId))
-    .where(eq(member.userId, userId))
+    .where(and(eq(member.userId, userId), isNull(community.suspendedAt)))
     .orderBy(asc(member.joinedAt));
 }
 
@@ -90,17 +95,18 @@ export async function leaveCommunity(userId: string, rawId: unknown) {
 export async function createChannel(userId: string, rawCommunityId: unknown, rawName: unknown): Promise<string> {
   const communityId = parse(uuid, rawCommunityId);
   const name = parse(channelName, rawName);
-  await requireMember(db, communityId, userId, Permission.ManageChannels);
-  const [{ total }] = await db.select({ total: count() }).from(channel).where(eq(channel.communityId, communityId));
-  enforceCap(total, CAPS.channelsPerCommunity, `A community can have at most ${CAPS.channelsPerCommunity} channels.`);
-  const [ch] = await db
-    .insert(channel)
-    .values({
-      communityId,
-      name,
+  const ch = await db.transaction(async (tx) => {
+    await lockCommunity(tx, communityId);
+    await requireMember(tx, communityId, userId, Permission.ManageChannels);
+    const CAPS = await getInstanceSettings(tx);
+    const [{ total }] = await tx.select({ total: count() }).from(channel).where(eq(channel.communityId, communityId));
+    enforceCap(total, CAPS.channelsPerCommunity, `A community can have at most ${CAPS.channelsPerCommunity} channels.`);
+    const [created] = await tx.insert(channel).values({
+      communityId, name,
       position: sql`(select coalesce(max(${channel.position}), 0) + 1 from ${channel} where ${channel.communityId} = ${communityId})`,
-    })
-    .returning({ id: channel.id });
+    }).returning({ id: channel.id });
+    return created;
+  });
   await publish({ type: "channels.changed", communityId });
   return ch.id;
 }
@@ -143,29 +149,34 @@ export interface InvitePreview {
 export async function createInvite(userId: string, rawCommunityId: unknown, rawOptions: unknown): Promise<string> {
   const communityId = parse(uuid, rawCommunityId);
   const options = parse(inviteOptions, rawOptions);
-  await requireMember(db, communityId, userId, Permission.CreateInvites);
-  const now = new Date();
-  const [{ active }] = await db
-    .select({ active: count() })
-    .from(invite)
-    .where(
-      and(
-        eq(invite.communityId, communityId),
-        or(isNull(invite.expiresAt), gt(invite.expiresAt, now)),
-        or(isNull(invite.maxUses), lt(invite.uses, invite.maxUses)),
-      ),
-    );
-  enforceCap(active, CAPS.activeInvitesPerCommunity, "Too many active invites. Revoke some first.");
-  // 96 random bits: invite codes are bearer tokens for joining.
-  const code = randomBytes(12).toString("base64url");
-  await db.insert(invite).values({
-    code,
-    communityId,
-    creatorId: userId,
-    maxUses: options.maxUses,
-    expiresAt: options.expiresInHours ? new Date(Date.now() + options.expiresInHours * 3_600_000) : null,
+  return db.transaction(async (tx) => {
+    await lockCommunity(tx, communityId);
+    await requireMember(tx, communityId, userId, Permission.CreateInvites);
+    await assertInvitesAllowed(userId, tx);
+    const CAPS = await getInstanceSettings(tx);
+    const now = new Date();
+    const [{ active }] = await tx
+      .select({ active: count() })
+      .from(invite)
+      .where(
+        and(
+          eq(invite.communityId, communityId),
+          or(isNull(invite.expiresAt), gt(invite.expiresAt, now)),
+          or(isNull(invite.maxUses), lt(invite.uses, invite.maxUses)),
+        ),
+      );
+    enforceCap(active, CAPS.activeInvitesPerCommunity, "Too many active invites. Revoke some first.");
+    // 96 random bits: invite codes are bearer tokens for joining.
+    const code = randomBytes(12).toString("base64url");
+    await tx.insert(invite).values({
+      code,
+      communityId,
+      creatorId: userId,
+      maxUses: options.maxUses,
+      expiresAt: options.expiresInHours ? new Date(Date.now() + options.expiresInHours * 3_600_000) : null,
+    });
+    return code;
   });
-  return code;
 }
 
 function isUsable(row: typeof invite.$inferSelect): boolean {
@@ -175,11 +186,12 @@ function isUsable(row: typeof invite.$inferSelect): boolean {
 
 export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview> {
   const code = parse(inviteCode, rawCode);
+  await assertInvitesAllowed();
   const [row] = await db
     .select({ invite, communityName: community.name })
     .from(invite)
     .innerJoin(community, eq(community.id, invite.communityId))
-    .where(eq(invite.code, code));
+    .where(and(eq(invite.code, code), isNull(community.suspendedAt)));
   if (!row || !isUsable(row.invite)) throw notFound("This invite is invalid or has expired.");
   const [{ memberCount }] = await db
     .select({ memberCount: count() })
@@ -189,10 +201,15 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
 }
 
 export async function acceptInvite(userId: string, rawCode: unknown): Promise<string> {
+  await assertActiveUser(userId);
+  await assertInvitesAllowed();
   const code = parse(inviteCode, rawCode);
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(invite).where(eq(invite.code, code)).for("update");
     if (!row || !isUsable(row)) throw notFound("This invite is invalid or has expired.");
+    const [activeCommunity] = await tx.select({ id: community.id }).from(community)
+      .where(and(eq(community.id, row.communityId), isNull(community.suspendedAt)));
+    if (!activeCommunity) throw notFound("Community not found.");
     const [banned] = await tx
       .select({ userId: ban.userId })
       .from(ban)

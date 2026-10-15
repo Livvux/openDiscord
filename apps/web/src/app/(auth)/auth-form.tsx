@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { AuthCard, Field, FormError, FormNotice } from "@/components/app/auth-card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,6 @@ import { safeNextPath } from "@/lib/safe-redirect";
 import { TwoFactorStep } from "./two-factor-step";
 
 export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
-  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -50,8 +49,8 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   }
 
   function done() {
-    router.push(next);
-    router.refresh();
+    // Auth endpoints change cookies outside Server Actions. Discard cached signed-out redirects.
+    window.location.assign(next);
   }
 
   async function signInWithPasskey() {

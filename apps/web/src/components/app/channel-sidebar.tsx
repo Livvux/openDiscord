@@ -4,6 +4,7 @@ import type { CommunityView } from "@/server/communities";
 import { has, Permission } from "@/server/permissions";
 import { ChannelLink } from "./channel-link";
 import { CreateChannelDialog } from "./create-channel-dialog";
+import { ReportDialog } from "./report-dialog";
 import { InviteDialog } from "./invite-dialog";
 
 const SETTINGS_PERMISSIONS =
@@ -35,6 +36,7 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
           </li>
         ))}
       </ul>
+      <div className="px-3 py-2"><ReportDialog communityId={view.id} /></div>
       {has(view.authority, Permission.CreateInvites) && (
         <div className="border-t border-white/5 p-3">
           <InviteDialog communityId={view.id} communityName={view.name} />

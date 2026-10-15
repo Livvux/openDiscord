@@ -21,6 +21,8 @@ const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultN
 export const community = pgTable("community", {
   id: id(),
   name: text("name").notNull(),
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspensionReason: text("suspension_reason"),
   // restrict: an owner must delete or hand over the community before deleting their account.
   ownerId: text("owner_id")
     .notNull()

@@ -6,6 +6,7 @@ import { deleteMessage, editMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import type { MessageView } from "@/server/messages";
+import { ReportDialog } from "../report-dialog";
 import { Avatar, nameColor } from "../avatar";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -72,8 +73,9 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
         )}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
-      {!editing && (canEdit || canDelete) && (
+      {!editing && (
         <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:self-start max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+          <ReportDialog messageId={message.id} />
           {canEdit && (
             <Button variant="ghost" size="icon-sm" aria-label="Edit message" onClick={() => setEditing(true)}>
               <PencilIcon />

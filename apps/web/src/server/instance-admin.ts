@@ -1,0 +1,237 @@
+import { and, count, desc, eq, gt, ilike, or, sql } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@/db";
+import { abuseReport, adminVerification, channel, community, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userSuspension } from "@/db/schema";
+import type { Db } from "./access";
+import { AppError, forbidden, notFound } from "./errors";
+import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "./instance-policy";
+import { requiredReason } from "./reports";
+import { publish } from "./realtime";
+import { parse, uuid } from "./validation";
+
+export interface AdminActor { userId: string; sessionId: string }
+export const ADMIN_VERIFICATION_MS = 15 * 60_000;
+
+export async function requireInstanceAdmin(actor: AdminActor, tx: Db = db, verified = true) {
+  await assertActiveUser(actor.userId, tx);
+  const [row] = await tx.select({ twoFactorEnabled: user.twoFactorEnabled, verifiedAt: adminVerification.verifiedAt })
+    .from(instanceAdmin).innerJoin(user, eq(user.id, instanceAdmin.userId))
+    .innerJoin(session, and(eq(session.userId, user.id), eq(session.id, actor.sessionId), gt(session.expiresAt, new Date())))
+    .leftJoin(adminVerification, eq(adminVerification.sessionId, session.id))
+    .where(eq(instanceAdmin.userId, actor.userId));
+  if (!row) throw forbidden("Instance administrator access required.");
+  const unlocked = row.twoFactorEnabled === true && !!row.verifiedAt && row.verifiedAt.getTime() > Date.now() - ADMIN_VERIFICATION_MS;
+  if (verified && !unlocked) {
+    throw forbidden("Confirm your authenticator code to unlock instance administration for 15 minutes.");
+  }
+  return { ...row, unlocked };
+}
+
+function audit(tx: Db, actor: AdminActor, action: string, targetId: string, reason: string) {
+  return tx.insert(instanceAuditLog).values({ actorId: actor.userId, action, targetId, reason });
+}
+
+/** Serializes admin membership/suspension changes, including concurrent last-admin attempts. */
+async function mutate<T>(actor: AdminActor, fn: (tx: Db) => Promise<T>) {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(187412, 1)`);
+    await requireInstanceAdmin(actor, tx);
+    return fn(tx);
+  });
+}
+
+export async function verifyAdminSession(actor: AdminActor, verify: () => Promise<unknown>) {
+  const valid = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor.userId}, 2))`);
+    const state = await requireInstanceAdmin(actor, tx, false);
+    if (!state.twoFactorEnabled) throw forbidden("Enable two-factor authentication in account settings first.");
+    const [{ failures }] = await tx.select({ failures: count() }).from(instanceAuditLog).where(and(
+      eq(instanceAuditLog.actorId, actor.userId), eq(instanceAuditLog.action, "admin.verify.failed"),
+      gt(instanceAuditLog.createdAt, new Date(Date.now() - 10 * 60_000)),
+    ));
+    if (failures >= 5) throw new AppError("rate_limited", "Too many invalid codes. Try again in 10 minutes.");
+    try { await verify(); } catch (error) {
+      // Only authentication failures are presented as invalid codes; infrastructure failures must surface.
+      const { isAPIError } = await import("better-auth/api");
+      if (!isAPIError(error)) throw error;
+      await audit(tx, actor, "admin.verify.failed", actor.userId, "Invalid authenticator code");
+      return false;
+    }
+    await tx.insert(adminVerification).values({ sessionId: actor.sessionId }).onConflictDoUpdate({
+      target: adminVerification.sessionId, set: { verifiedAt: new Date() },
+    });
+    await audit(tx, actor, "admin.verify", actor.userId, "Authenticator verification for instance administration");
+    return true;
+  });
+  if (!valid) throw forbidden("Invalid authenticator code.");
+}
+
+export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "", rawStatus: unknown = "open") {
+  await requireInstanceAdmin(actor);
+  const search = parse(z.string().trim().max(100), rawSearch);
+  const status = parse(z.enum(["open", "dismissed", "removed"]), rawStatus);
+  const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+  const [users, communities, reports, logs, admins, settings] = await Promise.all([
+    db.select({ id: user.id, name: user.name, email: user.email, twoFactorEnabled: user.twoFactorEnabled,
+      suspendedAt: userSuspension.createdAt, suspensionReason: userSuspension.reason, adminId: instanceAdmin.userId })
+      .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id)).leftJoin(instanceAdmin, eq(instanceAdmin.userId, user.id))
+      .where(search ? or(ilike(user.name, pattern), ilike(user.email, pattern)) : undefined).orderBy(desc(user.createdAt), user.id).limit(50),
+    db.select({ id: community.id, name: community.name, ownerId: community.ownerId, ownerEmail: user.email,
+      suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason })
+      .from(community).innerJoin(user, eq(user.id, community.ownerId))
+      .where(search ? ilike(community.name, pattern) : undefined).orderBy(desc(community.createdAt), community.id).limit(50),
+    db.select({ id: abuseReport.id, communityId: abuseReport.communityId, communityName: community.name,
+      messageId: abuseReport.messageId, reason: abuseReport.reason, status: abuseReport.status, resolution: abuseReport.resolution,
+      createdAt: abuseReport.createdAt }).from(abuseReport).leftJoin(community, eq(community.id, abuseReport.communityId))
+      .where(eq(abuseReport.status, status)).orderBy(desc(abuseReport.createdAt), abuseReport.id).limit(50),
+    db.select({ id: instanceAuditLog.id, actorId: instanceAuditLog.actorId, actorName: user.name, action: instanceAuditLog.action,
+      targetId: instanceAuditLog.targetId, reason: instanceAuditLog.reason, createdAt: instanceAuditLog.createdAt })
+      .from(instanceAuditLog).leftJoin(user, eq(user.id, instanceAuditLog.actorId)).orderBy(desc(instanceAuditLog.id)).limit(100),
+    db.select({ id: user.id, name: user.name, email: user.email }).from(instanceAdmin).innerJoin(user, eq(user.id, instanceAdmin.userId)),
+    getInstanceSettings(),
+  ]);
+  return { users, communities, reports, logs, admins, settings };
+}
+export type AdminDashboard = Awaited<ReturnType<typeof adminDashboard>>;
+
+export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspended: unknown, rawReason: unknown) {
+  const targetId = parse(z.string().min(1).max(128), rawId);
+  const enabled = parse(z.boolean(), suspended);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId)).for("update");
+    if (!target) throw notFound("Account not found.");
+    // Administrators must first be demoted; this protects the last admin and prevents self-lockout.
+    if (enabled && await isInstanceAdmin(targetId, tx)) throw forbidden("Remove this account's instance administrator rights before suspending it.");
+    if (enabled) {
+      await tx.insert(userSuspension).values({ userId: targetId, reason }).onConflictDoUpdate({
+        target: userSuspension.userId, set: { reason, createdAt: new Date() },
+      });
+      await tx.delete(session).where(eq(session.userId, targetId));
+    } else await tx.delete(userSuspension).where(eq(userSuspension.userId, targetId));
+    await audit(tx, actor, enabled ? "user.suspend" : "user.unsuspend", targetId, reason);
+  });
+  if (enabled) await disconnectUser(targetId);
+}
+async function disconnectUser(userId: string) {
+  const memberships = await db.select({ communityId: member.communityId }).from(member).where(eq(member.userId, userId));
+  await Promise.all(memberships.map((m) => publish({ type: "member.removed", communityId: m.communityId, userId })));
+}
+export async function revokeUserSessions(actor: AdminActor, rawId: unknown, rawReason: unknown) {
+  const targetId = parse(z.string().min(1).max(128), rawId);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId));
+    if (!target) throw notFound("Account not found.");
+    await tx.delete(session).where(eq(session.userId, targetId));
+    await audit(tx, actor, "user.sessions.revoke", targetId, reason);
+  });
+  await disconnectUser(targetId);
+}
+export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, suspended: unknown, rawReason: unknown) {
+  const id = parse(uuid, rawId);
+  const enabled = parse(z.boolean(), suspended);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const rows = await tx.update(community).set({ suspendedAt: enabled ? new Date() : null, suspensionReason: enabled ? reason : null })
+      .where(eq(community.id, id)).returning({ id: community.id });
+    if (!rows.length) throw notFound("Community not found.");
+    await audit(tx, actor, enabled ? "community.suspend" : "community.unsuspend", id, reason);
+  });
+  if (enabled) await publish({ type: "community.deleted", communityId: id });
+}
+export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEmail: unknown, rawReason: unknown) {
+  const id = parse(uuid, rawId);
+  const email = parse(z.email().max(254).transform((s) => s.toLowerCase()), rawEmail);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const [c] = await tx.select({ id: community.id }).from(community).where(eq(community.id, id)).for("update");
+    if (!c) throw notFound("Community not found.");
+    const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email)).for("update");
+    if (!target) throw notFound("Account not found.");
+    await assertActiveUser(target.id, tx);
+    const [membership] = await tx.select({ id: member.userId }).from(member).where(and(eq(member.communityId, id), eq(member.userId, target.id)));
+    if (!membership) throw forbidden("The new owner must already be a member of this community.");
+    const [{ owned }] = await tx.select({ owned: count() }).from(community).where(eq(community.ownerId, target.id));
+    const settings = await getInstanceSettings(tx);
+    if (owned >= settings.ownedCommunities) throw forbidden("The new owner has reached the community ownership limit.");
+    await tx.update(community).set({ ownerId: target.id }).where(eq(community.id, id));
+    await audit(tx, actor, "community.transfer", id, `${reason} (new owner: ${target.id})`);
+  });
+  await publish({ type: "channels.changed", communityId: id });
+}
+export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enabled: unknown, rawReason: unknown) {
+  const id = parse(z.string().min(1).max(128), rawId);
+  const grant = parse(z.boolean(), enabled);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const [target] = await tx.select({ id: user.id, twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, id)).for("update");
+    if (!target) throw notFound("Account not found.");
+    if (grant) {
+      await assertActiveUser(id, tx);
+      if (!target.twoFactorEnabled) throw forbidden("This account must enable two-factor authentication first.");
+      await tx.insert(instanceAdmin).values({ userId: id }).onConflictDoNothing();
+    } else {
+      const [{ total }] = await tx.select({ total: count() }).from(instanceAdmin);
+      if (total <= 1 && await isInstanceAdmin(id, tx)) throw forbidden("The last instance administrator cannot be removed.");
+      await tx.delete(instanceAdmin).where(eq(instanceAdmin.userId, id));
+    }
+    // A newly granted admin must step up; demotion also invalidates previous elevated sessions.
+    await tx.delete(adminVerification).where(sql`${adminVerification.sessionId} in (select ${session.id} from ${session} where ${session.userId} = ${id})`);
+    await audit(tx, actor, grant ? "admin.grant" : "admin.revoke", id, reason);
+  });
+}
+export const settingsInput = z.object({
+  registrationOpen: z.boolean(), inviteMode: z.enum(["members", "admins", "disabled"]),
+  ownedCommunities: z.number().int().min(1).max(1000), channelsPerCommunity: z.number().int().min(1).max(1000),
+  rolesPerCommunity: z.number().int().min(1).max(1000), activeInvitesPerCommunity: z.number().int().min(1).max(1000),
+});
+export async function updateInstanceSettings(actor: AdminActor, input: unknown, rawReason: unknown) {
+  const settings = parse(settingsInput, input);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    await tx.insert(instanceSettings).values(settings).onConflictDoUpdate({ target: instanceSettings.id, set: settings });
+    await audit(tx, actor, "instance.settings.update", "instance", `${reason} ${JSON.stringify(settings)}`);
+  });
+}
+
+export async function reviewReport(actor: AdminActor, rawId: unknown, rawReason: unknown) {
+  const id = parse(uuid, rawId);
+  const reason = parse(requiredReason, rawReason);
+  return mutate(actor, async (tx) => {
+    const [report] = await tx.select().from(abuseReport).where(eq(abuseReport.id, id));
+    if (!report) throw notFound("Report not found.");
+    // Explicit and audited access to exactly the reported message; never a bypass for an entire community.
+    await audit(tx, actor, "report.content.view", id, reason);
+    if (!report.messageId) return { content: null, authorName: null, deleted: false };
+    const [row] = await tx.select({ content: message.content, authorName: user.name }).from(message)
+      .innerJoin(channel, eq(channel.id, message.channelId)).innerJoin(user, eq(user.id, message.authorId))
+      .where(and(eq(message.id, report.messageId), eq(channel.communityId, report.communityId)));
+    return { content: row?.content ?? null, authorName: row?.authorName ?? null, deleted: !row };
+  });
+}
+export async function resolveReport(actor: AdminActor, rawId: unknown, rawOutcome: unknown, rawReason: unknown) {
+  const id = parse(uuid, rawId);
+  const outcome = parse(z.enum(["dismissed", "removed"]), rawOutcome);
+  const reason = parse(requiredReason, rawReason);
+  const event = await mutate(actor, async (tx) => {
+    const [report] = await tx.select().from(abuseReport).where(eq(abuseReport.id, id)).for("update");
+    if (!report) throw notFound("Report not found.");
+    if (report.status !== "open") throw new AppError("conflict", "This report has already been resolved.");
+    let deleted: { channelId: string; id: string } | undefined;
+    if (outcome === "removed") {
+      if (report.messageId) {
+        [deleted] = await tx.delete(message).where(and(eq(message.id, report.messageId),
+          sql`${message.channelId} in (select ${channel.id} from ${channel} where ${channel.communityId} = ${report.communityId})`))
+          .returning({ channelId: message.channelId, id: message.id });
+      } else {
+        await tx.update(community).set({ suspendedAt: new Date(), suspensionReason: reason }).where(eq(community.id, report.communityId));
+      }
+    }
+    await tx.update(abuseReport).set({ status: outcome, resolution: reason, resolvedBy: actor.userId, resolvedAt: new Date() }).where(eq(abuseReport.id, id));
+    await audit(tx, actor, `report.${outcome}`, id, reason);
+    return { deleted, communityId: report.communityId, suspend: outcome === "removed" && !report.messageId };
+  });
+  if (event.deleted) await publish({ type: "message.deleted", communityId: event.communityId, channelId: event.deleted.channelId, messageId: event.deleted.id });
+  if (event.suspend) await publish({ type: "community.deleted", communityId: event.communityId });
+}

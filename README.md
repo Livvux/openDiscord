@@ -49,7 +49,7 @@ pnpm dev                                      # http://localhost:3000
 
 ## Documentation
 
-[Architecture](docs/ARCHITECTURE.md) · [Decisions](docs/DECISIONS.md) · [Threat model](docs/THREAT-MODEL.md) ·
+[Instance administration](docs/INSTANCE-ADMINISTRATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Decisions](docs/DECISIONS.md) · [Threat model](docs/THREAT-MODEL.md) ·
 [Privacy](docs/PRIVACY.md) · [Roadmap and gap analysis](docs/ROADMAP.md) · [Self-hosting](docs/SELF-HOSTING.md) ·
 [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 

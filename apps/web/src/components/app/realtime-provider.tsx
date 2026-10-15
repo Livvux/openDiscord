@@ -55,8 +55,25 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
         opened = true;
       });
       es.addEventListener("ping", seen);
-      // CLOSED means the server refused (e.g. signed out); otherwise the browser is retrying.
-      es.addEventListener("error", () => setState(es.readyState === EventSource.CLOSED ? "closed" : "reconnecting"));
+      const removed = () => {
+        if (stopped) return;
+        stopped = true;
+        es.close();
+        // Revocation must discard cached private routes and re-check the session.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Clear cached private routes after access revocation.
+        window.location.assign("/app");
+      };
+      es.addEventListener("error", () => {
+        if (stopped || source !== es) return;
+        const refused = es.readyState === EventSource.CLOSED;
+        setState(refused ? "closed" : "reconnecting");
+        if (refused) {
+          // A ban can land between page render and stream connect. Do not leave a stale private view.
+          void fetch(`/api/communities/${communityId}/events`, { method: "HEAD", cache: "no-store" })
+            .then((response) => { if ([401, 403, 404].includes(response.status)) removed(); })
+            .catch(() => { /* Offline: keep the existing reload/reconnect UI. */ });
+        }
+      });
       for (const type of ["message.created", "message.updated"] as const) {
         es.addEventListener(type, (e) => {
           seen();
@@ -70,12 +87,7 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
       });
       es.addEventListener("resync", () => (seen(), emit({ type: "resync" })));
       es.addEventListener("channels.changed", () => (seen(), router.refresh()));
-      es.addEventListener("removed", () => {
-        stopped = true;
-        es.close();
-        router.push("/app");
-        router.refresh();
-      });
+      es.addEventListener("removed", removed);
     };
 
     // A dropped network can leave a dead connection open for minutes. The server pings every 25 s;

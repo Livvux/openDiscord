@@ -1,3 +1,4 @@
+import { getInstanceSettings } from "./instance-policy";
 // Members, roles, bans and the audit log. Every mutation re-checks authority inside a
 // transaction that locks the community row, so concurrent role changes can't race a kick.
 import { and, asc, count, desc, eq, gte, inArray, max, sql } from "drizzle-orm";
@@ -5,7 +6,7 @@ import { db } from "@/db";
 import { auditLog, ban, member, memberRole, role, user } from "@/db/schema";
 import { loadAuthority, lockCommunity, requireMember, type Db } from "./access";
 import { forbidden, invalid, notFound } from "./errors";
-import { CAPS, enforceCap } from "./limits";
+import { enforceCap } from "./limits";
 import { canManageRole, has, outranks, Permission, permissionsFromNames, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
 import { parse, reason as reasonSchema, roleName, uuid } from "./validation";
@@ -146,6 +147,7 @@ export async function createRole(actorId: string, rawCommunityId: unknown, rawNa
     await lockCommunity(tx, communityId);
     const { authority } = await requireMember(tx, communityId, actorId);
     const [{ total }] = await tx.select({ total: count() }).from(role).where(eq(role.communityId, communityId));
+    const CAPS = await getInstanceSettings(tx);
     enforceCap(total, CAPS.rolesPerCommunity, `A community can have at most ${CAPS.rolesPerCommunity} roles.`);
     // Checked against a slot just below the creator, then made real by shifting their roles up.
     // Rank 0 means only the default role: there is no slot below it.

@@ -2,24 +2,31 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "@/lib/auth";
+import { assertActiveUser } from "./instance-policy";
 import { AppError } from "./errors";
 
 export interface SessionUser {
   id: string;
   name: string;
   email: string;
+  sessionId: string;
 }
 
 async function readUser(source: Headers): Promise<SessionUser | null> {
   const session = await auth.api.getSession({ headers: source });
   if (!session) return null;
   const { id, name, email } = session.user;
-  return { id, name, email };
+  await assertActiveUser(id);
+  return { id, name, email, sessionId: session.session.id };
 }
 
 /** For pages: signed-out visitors go to sign-in. Cached per request. */
 export const requirePageUser = cache(async (): Promise<SessionUser> => {
-  const user = await readUser(await headers());
+  let user: SessionUser | null;
+  try { user = await readUser(await headers()); } catch (error) {
+    if (error instanceof AppError && error.code === "forbidden") redirect("/sign-in?error=suspended");
+    throw error;
+  }
   if (!user) redirect("/sign-in");
   return user;
 });

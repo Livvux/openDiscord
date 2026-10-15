@@ -1,12 +1,15 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import { AppError } from "@/server/errors";
 import { ownedCommunityNames, unlinkFromAuditLog } from "@/server/account";
+import { requireInstanceAdmin } from "@/server/instance-admin";
+import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
 
 const NAME_MAX = 64;
@@ -44,6 +47,9 @@ export const auth = betterAuth({
     deleteUser: {
       enabled: true,
       beforeDelete: async (user) => {
+        if (await isInstanceAdmin(user.id)) {
+          throw new APIError("FORBIDDEN", { message: "Remove instance administrator rights before deleting this account." });
+        }
         const owned = await ownedCommunityNames(user.id);
         if (owned.length > 0) {
           throw new APIError("BAD_REQUEST", {
@@ -54,14 +60,42 @@ export const auth = betterAuth({
       afterDelete: async (user) => unlinkFromAuditLog(user.id),
     },
   },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      const recoveryAccess = ctx.path === "/two-factor/get-totp-uri" || ctx.path === "/two-factor/generate-backup-codes";
+      if (ctx.path === "/two-factor/disable" || recoveryAccess) {
+        const current = await getSessionFromCtx(ctx);
+        if (current && await isInstanceAdmin(current.user.id)) {
+          if (!recoveryAccess) throw new APIError("FORBIDDEN", { message: "Two-factor authentication is mandatory for instance administrators." });
+          // An old session plus a password must not be enough to obtain a new second factor.
+          try { await requireInstanceAdmin({ userId: current.user.id, sessionId: current.session.id }); }
+          catch (error) {
+            if (error instanceof AppError) throw new APIError("FORBIDDEN", { message: error.message });
+            throw error;
+          }
+        }
+      }
+    }),
+  },
   databaseHooks: {
     user: {
-      create: { before: async (user) => checkName(user.name) },
+      create: { before: async (user) => {
+        checkName(user.name);
+        if (!(await getInstanceSettings()).registrationOpen) {
+          throw new APIError("FORBIDDEN", { message: "Registration is closed on this instance." });
+        }
+      } },
       update: { before: async (user) => checkName(user.name) },
     },
     session: {
       // Privacy: IPs are used in memory for rate limiting but never stored with the session.
-      create: { before: async (session) => ({ data: { ...session, ipAddress: null } }) },
+      create: { before: async (session) => {
+        try { await assertActiveUser(session.userId); } catch (error) {
+          if (error instanceof AppError) throw new APIError("FORBIDDEN", { message: "This account is suspended." });
+          throw error;
+        }
+        return { data: { ...session, ipAddress: null } };
+      } },
     },
   },
   plugins: [

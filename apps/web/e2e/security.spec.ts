@@ -1,21 +1,8 @@
-import { createHmac } from "node:crypto";
+import { authenticatorCode as totp } from "../tests/totp";
 import { expect, test, type Page } from "@playwright/test";
 import { expectNoA11yViolations, newUserPage, PASSWORD, signUp } from "./helpers";
 
 test.skip(({ isMobile }) => isMobile, "desktop flow");
-
-/** RFC 6238 TOTP (SHA-1, 6 digits, 30 s), the default authenticator-app format. */
-function totp(base32Secret: string, at = Date.now()): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = "";
-  for (const ch of base32Secret.replace(/=+$/, "").toUpperCase()) bits += alphabet.indexOf(ch).toString(2).padStart(5, "0");
-  const key = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
-  const hmac = createHmac("sha1", key).update(counter).digest();
-  const offset = hmac[hmac.length - 1] & 0xf;
-  return String((hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
-}
 
 async function signOut(page: Page) {
   await page.goto("/app/settings");
@@ -45,7 +32,7 @@ test("authenticator app (TOTP) two-factor sign-in with backup code fallback", as
   // A wrong code doesn't enable it.
   await page.getByLabel("Enter the 6-digit code to finish").fill("000000");
   await page.getByRole("button", { name: "Turn on" }).click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "Invalid code" })).toBeVisible();
   await page.getByLabel("Enter the 6-digit code to finish").fill(totp(secret));
   await page.getByRole("button", { name: "Turn on" }).click();
   await expect(page.getByText("Authenticator app is on.")).toBeVisible();

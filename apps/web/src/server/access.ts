@@ -1,8 +1,9 @@
 // The single place that decides whether a user can see a community, and with which authority.
 // Non-members get "not found" rather than "forbidden" so ids don't reveal what exists.
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { channel, community, member, memberRole, role } from "@/db/schema";
+import { assertActiveUser } from "./instance-policy";
 import { forbidden, notFound } from "./errors";
 import { has, resolveAuthority, type MemberAuthority } from "./permissions";
 
@@ -15,11 +16,12 @@ export interface CommunityAccess {
 }
 
 export async function loadAuthority(tx: Db, communityId: string, userId: string): Promise<MemberAuthority | null> {
+  await assertActiveUser(userId, tx);
   const [row] = await tx
     .select({ ownerId: community.ownerId })
     .from(member)
     .innerJoin(community, eq(community.id, member.communityId))
-    .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+    .where(and(eq(member.communityId, communityId), eq(member.userId, userId), isNull(community.suspendedAt)));
   if (!row) return null;
 
   const roles = await tx
