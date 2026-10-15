@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Logo } from "@/components/logo";
 import { authClient } from "@/lib/auth-client";
 
 const inputClass =
-  "w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-violet-500";
+  "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 outline-none focus:border-brand-indigo";
 
 export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const router = useRouter();
@@ -44,19 +45,20 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   return (
     <main className="flex flex-1 items-center justify-center p-8">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
+        <Logo />
         <h1 className="text-2xl font-semibold">{isSignUp ? "Create your account" : "Welcome back"}</h1>
         {isSignUp && (
           <label className="block space-y-1">
-            <span className="text-sm text-zinc-400">Display name</span>
+            <span className="text-sm text-slate-400">Display name</span>
             <input name="name" required maxLength={64} autoComplete="nickname" className={inputClass} />
           </label>
         )}
         <label className="block space-y-1">
-          <span className="text-sm text-zinc-400">Email</span>
+          <span className="text-sm text-slate-400">Email</span>
           <input name="email" type="email" required autoComplete="email" className={inputClass} />
         </label>
         <label className="block space-y-1">
-          <span className="text-sm text-zinc-400">Password</span>
+          <span className="text-sm text-slate-400">Password</span>
           <input
             name="password"
             type="password"
@@ -71,13 +73,13 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         <button
           type="submit"
           disabled={pending}
-          className="w-full rounded-md bg-violet-600 px-4 py-2 font-medium hover:bg-violet-500 disabled:opacity-50"
+          className="w-full rounded-full bg-brand-indigo px-4 py-2.5 font-medium hover:bg-indigo-400 disabled:opacity-50"
         >
           {pending ? "Please wait…" : isSignUp ? "Create account" : "Sign in"}
         </button>
-        <p className="text-sm text-zinc-400">
+        <p className="text-sm text-slate-400">
           {isSignUp ? "Already have an account? " : "New here? "}
-          <Link href={isSignUp ? "/sign-in" : "/sign-up"} className="text-violet-400 hover:underline">
+          <Link href={isSignUp ? "/sign-in" : "/sign-up"} className="text-brand-cyan hover:underline">
             {isSignUp ? "Sign in" : "Create an account"}
           </Link>
         </p>

@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#9333ea"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="600" fill="#ffffff">O</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="openDiscord brand asset"><defs>
+ <linearGradient id="bluegrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366F1"/><stop offset="100%" stop-color="#33AAFB"/></linearGradient>
+ <linearGradient id="mintgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#36D3C6"/><stop offset="100%" stop-color="#69EBBD"/></linearGradient>
+ <mask id="rightcut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect x="0" y="0" width="512" height="512" fill="white"/><circle cx="314" cy="217" r="83" fill="black"/></mask>
+ <mask id="leftcut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect x="0" y="0" width="512" height="512" fill="white"/><circle cx="200" cy="276" r="83" fill="black"/></mask>
+ </defs><g transform="scale(1.0)"><g fill="#49DDC0"><path d="M385 302 L436 400 Q446 418 428 411 L330 360 Z"/><path fill-rule="evenodd" d="M 439 217 a 125 125 0 1 0 -250 0 a 125 125 0 1 0 250 0 Z M 397 217 a 83 83 0 1 0 -166 0 a 83 83 0 1 0 166 0 Z "/></g><g fill="#6366F1"><path d="M116 354 L74 420 Q66 434 84 427 L165 390 Z"/><path fill-rule="evenodd" d="M 325 276 a 125 125 0 1 0 -250 0 a 125 125 0 1 0 250 0 Z M 283 276 a 83 83 0 1 0 -166 0 a 83 83 0 1 0 166 0 Z "/></g></g></svg>
