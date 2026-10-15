@@ -15,7 +15,7 @@ import { has, Permission } from "./permissions";
 import { parse } from "./validation";
 import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
 
-import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction } from "./voice-sfu";
+import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction, type VoiceRoomBudget } from "./voice-sfu";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Call = typeof voiceCall.$inferSelect;
@@ -210,10 +210,10 @@ async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding,
 }
 /** Internal only: capture authorization and roster under the same lifecycle/community/call locks.
  * No heartbeat extension, SDK call or network effect occurs in this transaction. */
-export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Promise<VoiceMediaGrant> {
+export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown, cleanup?: { budget: VoiceRoomBudget; deferUntilRevalidation?: boolean }): Promise<VoiceMediaGrant> {
   const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
-  const result = await voiceTransaction(async (tx): Promise<VoiceMediaGrant | AppError> => {
+  const result = await db.transaction(async (tx): Promise<VoiceMediaGrant | AppError> => {
     const access = await boundAccess(tx, auth, binding);
     if (access instanceof AppError) return access;
     const { call, own, now, removals } = access;
@@ -230,6 +230,9 @@ export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Pr
     return { snapshot: await snapshot(tx, call, own, now, removals), roomName: voiceRoomName({ channelId: call.channelId, callId: call.id, generation: call.generation }), participantIdentity: participant(own.id), sources, canPublishData: false,
       expiresAt: expiresAt.toISOString() };
   });
+  // A successful first token reservation defers opportunistic consumption until its mandatory
+  // post-create revalidation. Denials still commit reaping and consume within the same allowance.
+  if (!cleanup?.deferUntilRevalidation || result instanceof AppError) await consumeVoiceRooms({ budget: cleanup?.budget });
   if (result instanceof AppError) throw result;
   return result;
 }

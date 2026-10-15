@@ -21,6 +21,12 @@ const LEASE_MS = 30_000;
 const RECHECK_MS = 300_000;
 const ACTIVE_RECHECK_MS = 30_000;
 
+/** One monotonic allowance for an entire token invocation, including explicit creation. */
+export interface VoiceRoomBudget { deadline: number; remainingRequests: number }
+export const createVoiceRoomBudget = (): VoiceRoomBudget => ({ deadline: performance.now() + 2500, remainingRequests: 4 });
+const mayRequest = (budget: VoiceRoomBudget) => budget.remainingRequests > 0 && performance.now() + REQUEST_SECONDS * 1000 <= budget.deadline;
+
+
 export function voiceRoomService(): RoomServiceClient | null {
   const url = process.env.LIVEKIT_API_URL || process.env.LIVEKIT_URL?.replace(/^ws/, "http");
   const key = process.env.LIVEKIT_API_KEY, secret = process.env.LIVEKIT_API_SECRET;
@@ -98,15 +104,17 @@ export async function assertOwnedVoiceRoomActive(name: string): Promise<void> {
 }
 
 /** Explicit server creation follows reservation COMMIT; caller revalidates enrollment again before JWT. */
-export async function createOwnedVoiceRoom(name: string): Promise<void> {
+export async function createOwnedVoiceRoom(name: string, budget = createVoiceRoomBudget()): Promise<void> {
   await assertOwnedVoiceRoomActive(name);
   const client = voiceRoomService();
+  if (!mayRequest(budget)) throw new AppError("conflict", "Voice is temporarily busy. Try again.");
   try {
     if (!client) throw new Error("unavailable");
+    budget.remainingRequests--;
     await client.createRoom({ name });
   } catch {
     await retireOwnedVoiceRoom(name);
-    await consumeVoiceRooms();
+    await consumeVoiceRooms({ budget });
     throw new AppError("conflict", "Voice is temporarily unavailable. Refresh the current call.");
   }
 }
@@ -115,11 +123,12 @@ function notFound(error: unknown): boolean { return error instanceof ServerError
 
 export interface VoiceRoomCleanup { claimed: number; requests: number; retired: number; deleted: number; failed: number; unavailable: number; limited: boolean }
 /** Persistent leases recover crashes; successful deletion remains due for exact recurring rechecks. */
-export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMilliseconds = 2500 }: { maxRooms?: number; maxRequests?: number; maxMilliseconds?: number } = {}): Promise<VoiceRoomCleanup> {
+export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMilliseconds = 2500, budget }: { maxRooms?: number; maxRequests?: number; maxMilliseconds?: number; budget?: VoiceRoomBudget } = {}): Promise<VoiceRoomCleanup> {
   const result: VoiceRoomCleanup = { claimed: 0, requests: 0, retired: 0, deleted: 0, failed: 0, unavailable: 0, limited: false };
-  const deadline = performance.now() + Math.min(Math.max(maxMilliseconds, 0), 20_000);
+  const deadline = Math.min(performance.now() + Math.min(Math.max(maxMilliseconds, 0), 20_000), budget?.deadline ?? Infinity);
   const roomBudget = Math.min(Math.max(Math.floor(maxRooms), 0), 16), requestBudget = Math.min(Math.max(Math.floor(maxRequests), 0), 32);
-  const canRequest = () => result.requests < requestBudget && performance.now() + REQUEST_SECONDS * 1000 <= deadline;
+  const canRequest = () => result.requests < requestBudget && (!budget || budget.remainingRequests > 0) && performance.now() + REQUEST_SECONDS * 1000 <= deadline;
+  const spendRequest = () => { result.requests++; if (budget) budget.remainingRequests--; };
   try {
     const client = voiceRoomService();
     for (; result.claimed < roomBudget && canRequest();) {
@@ -143,12 +152,12 @@ export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMill
           result.retired++;
           if (!canRequest()) retrySoon = true;
           else {
-            result.requests++;
+            spendRequest();
             try { await client.deleteRoom(claim.roomName); outcome = "deleted"; } catch (error) { if (!notFound(error)) throw error; outcome = "not_found"; }
             result.deleted++;
           }
         } else if (canRequest()) {
-          result.requests++;
+          spendRequest();
           const participants = await client.listParticipants(claim.roomName).catch(error => { if (notFound(error)) return []; throw error; });
           // Unknown/overfull rosters cannot become authority. Retirement is terminal for this generation.
           if (participants.length > 8 || participants.some(p => !authority.members?.some(m => m.identity === p.identity))) {
@@ -160,7 +169,7 @@ export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMill
               const current = participant.permission;
               if (current?.canPublishData || current?.canUpdateMetadata || (current?.canPublish && allowed.sources.length === 0) || (current?.canPublishSources ?? []).some(source => !allowed.sources.includes(source))) {
                 if (!canRequest()) { retrySoon = true; break; }
-                result.requests++;
+                spendRequest();
                 await client.updateParticipant(claim.roomName, participant.identity, { permission: { canSubscribe: !!current?.canSubscribe, canPublish: !!current?.canPublish && allowed.sources.length > 0, canPublishSources: (current?.canPublishSources ?? []).filter(source => allowed.sources.includes(source)), canPublishData: false, canUpdateMetadata: false } });
               }
             }

@@ -9,7 +9,7 @@ import { loadChannelAuthority, requireChannel } from "./access";
 import { AppError } from "./errors";
 import { has, Permission } from "./permissions";
 import { grantBoundVoiceMedia } from "./voice-control";
-import { assertOwnedVoiceRoomActive, consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
+import { assertOwnedVoiceRoomActive, consumeVoiceRooms, createOwnedVoiceRoom, createVoiceRoomBudget, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
 import type { VoiceMediaSource } from "@/lib/voice/contracts";
 import { parse, uuid } from "./validation";
 
@@ -78,17 +78,19 @@ export async function createVoiceToken(userId: string, rawChannelId: unknown): P
  * A later revoke can race signing/delivery; generation-room/key lifecycle is required at activation. */
 export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) {
   if (!voiceEnabled) throw new AppError("not_found", "Voice isn't set up on this instance.");
-  const reserved = await grantBoundVoiceMedia(rawAuth, binding);
-  await createOwnedVoiceRoom(reserved.roomName);
+  const budget = createVoiceRoomBudget();
+  const reserved = await grantBoundVoiceMedia(rawAuth, binding, { budget, deferUntilRevalidation: true });
+  await createOwnedVoiceRoom(reserved.roomName, budget);
   let grant: Awaited<ReturnType<typeof grantBoundVoiceMedia>>;
-  try { grant = await grantBoundVoiceMedia(rawAuth, binding); }
+  try { grant = await grantBoundVoiceMedia(rawAuth, binding, { budget }); }
   catch (error) {
     await retireOwnedVoiceRoom(reserved.roomName);
-    await consumeVoiceRooms();
+    await consumeVoiceRooms({ budget });
     throw error;
   }
   if (grant.roomName !== reserved.roomName) throw new AppError("conflict", "Voice membership changed.");
   await assertOwnedVoiceRoomActive(grant.roomName);
+  if (performance.now() > budget.deadline) throw new AppError("conflict", "Voice is temporarily busy. Try again.");
   const expiresAt = Date.parse(grant.expiresAt);
   const ttl = Math.min(TOKEN_TTL_SECONDS, Math.floor(expiresAt / 1000) - Math.ceil(Date.now() / 1000));
   if (ttl < 1) throw new AppError("forbidden", "This voice enrollment has ended.");
@@ -102,7 +104,7 @@ export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) 
   const claims = await new TokenVerifier(apiKey!, apiSecret!).verify(jwt, 0).catch(() => {
     throw new AppError("forbidden", "This voice enrollment has ended.");
   });
-  if (typeof claims.exp !== "number" || !Number.isSafeInteger(claims.exp) || claims.exp > Math.floor(expiresAt / 1000) || claims.exp * 1000 <= Date.now() || Date.now() >= signingDeadline) throw new AppError("forbidden", "This voice enrollment has ended.");
+  if (typeof claims.exp !== "number" || !Number.isSafeInteger(claims.exp) || claims.exp > Math.floor(expiresAt / 1000) || claims.exp * 1000 <= Date.now() || Date.now() >= signingDeadline || performance.now() > budget.deadline) throw new AppError("forbidden", "This voice enrollment has ended.");
   return { url: url!, token: jwt, ...grant };
 }
 

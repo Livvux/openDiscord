@@ -158,8 +158,10 @@ The call generation/status/delete trigger retires registered rooms atomically, i
 session/anchor/user cascades. Ownership has no parent foreign key and survives channel/community
 removal. Cleanup claims due rows with a 30-second lease and a unique claim UUID; an expired worker
 cannot overwrite a newer claim. Requests use the public SDK timeout **0.5 seconds**, with region
-failover disabled, and run sequentially. Interactive consumption allows at most four rooms/four
-requests and a 2.5-second RPC budget; maintenance allows at most sixteen rooms/32 requests and
+failover disabled, and run sequentially. Each public bound-token invocation shares at most four RPCs and one monotonic 2.5-second
+budget across both grants, explicit creation and failure cleanup. Successful first-reservation
+cleanup is deferred to mandatory post-create revalidation; denials still consume after commit.
+Interactive standalone consumption allows at most four rooms/four requests with the same budget; maintenance allows at most sixteen rooms/32 requests and
 20 seconds shared across lifecycle batches. Budgets include retries; failures are deferred durably,
 not retried by generation-ledger timers. Fair ordering uses next-attempt time then exact name. Logs contain only
 bounded aggregate counts/outcome categories. A missing room is successful cleanup only for the
