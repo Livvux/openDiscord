@@ -1,6 +1,6 @@
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
-import { CONTROL, controlSchema, envelopeSchema, same, sasTypes, syncSchema, type Binding, type Control, type WireRequest } from "./voice-three-contracts";
+import { CONTROL, controlSchema, decryptedEnvelopeSchema, envelopeSchema, same, sasTypes, syncSchema, type Binding, type Control, type WireRequest } from "./voice-three-contracts";
 
 type Request = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
 type Verification = { request: C.VerificationRequest; sas?: C.Sas; peer: Binding };
@@ -76,10 +76,11 @@ export class BrowserOlm {
           this.flows.set(key, { peer, request });
         } else if (!this.flows.has(key)) throw new Error("Unknown native flow.");
       } else if (item instanceof C.DecryptedToDeviceEvent) {
-        const event = envelopeSchema.parse(JSON.parse(item.rawEvent));
+        const event = decryptedEnvelopeSchema.parse(JSON.parse(item.rawEvent));
         if (event.type !== CONTROL || !item.encryptionInfo.isSenderVerified()) throw new Error("Unverified control.");
         const control = controlSchema.parse(event.content), peer = this.peers.find((value) => same(value, control.sender));
         if (!peer || !this.admitted.has(peer.member) || !same(control.recipient, this.binding) || event.sender !== peer.user || item.encryptionInfo.sender.toString() !== peer.user || item.encryptionInfo.senderDevice?.toString() !== peer.device) throw new Error("Native control binding.");
+        if (event.recipient !== this.binding.user || event.recipient_keys.ed25519 !== this.machine.identityKeys.ed25519.toBase64() || event.sender_device_keys.user_id !== peer.user || event.sender_device_keys.device_id !== peer.device || event.keys.ed25519 !== event.sender_device_keys.keys[`ed25519:${peer.device}`]) throw new Error("Native Olm envelope metadata binding.");
         this.verifiedControls++;
         await this.receive(control);
       } else throw new Error("Unsupported native processed event.");

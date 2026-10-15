@@ -10,6 +10,12 @@ export const requestSchema = z.object({
 export type WireRequest = z.infer<typeof requestSchema>;
 export const sasTypes = new Set(["request", "ready", "start", "accept", "key", "mac", "done", "cancel"].map((part) => `m.key.verification.${part}`));
 export const envelopeSchema = z.object({ sender: z.string(), type: z.string(), content: record }).strict();
+// Native18.9.0 retains the verified Olm envelope metadata in decrypted rawEvent.
+export const decryptedEnvelopeSchema = envelopeSchema.extend({
+  keys: z.object({ ed25519: z.string().max(100) }).strict(), recipient: z.string().max(150),
+  recipient_keys: z.object({ ed25519: z.string().max(100) }).strict(),
+  sender_device_keys: z.object({ algorithms: z.array(z.string()).max(4), device_id: z.string().max(100), user_id: z.string().max(150), keys: z.record(z.string(), z.string()), signatures: z.record(z.string(), z.record(z.string(), z.string())) }).strict(),
+}).strict();
 export const syncSchema = z.object({ events: z.array(envelopeSchema).max(64), count: z.number().int().min(0).max(100), fallback: z.boolean() }).strict();
 export const controlSchema = z.object({
   version: z.literal(1), kind: z.enum(["material", "prepared", "key-ready"]), transaction: z.uuid(), epoch: z.uuid(),
