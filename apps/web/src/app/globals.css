@@ -146,6 +146,7 @@ html {
    charcoal canvas, darker community rail, faint channel panel, white/5 hairlines, indigo active state.
    Secondary text uses zinc-400 instead of the preview's zinc-500/600 to meet WCAG AA contrast. */
 .dark {
+  color-scheme: dark;
   --background: var(--color-brand-charcoal);
   --foreground: #f4f4f5; /* zinc-100 */
   --card: color-mix(in oklab, var(--color-brand-charcoal) 96%, white);
@@ -182,6 +183,12 @@ html {
   --success: #6ee7b7; /* emerald-300 */
   /* Channel panel: white/2 over charcoal. */
   --panel: color-mix(in oklab, var(--color-brand-charcoal) 98%, white);
+}
+
+/* Keep native scrolling and dragging, with a narrow track matching the app. */
+.dark * {
+  scrollbar-width: thin;
+  scrollbar-color: #71717a transparent;
 }
 
 @layer base {
