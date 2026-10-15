@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog";
 import { ChannelChat } from "@/components/app/chat/channel-chat";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
+import { mediaEnabled } from "@/server/media";
 import { listMessages } from "@/server/messages";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
@@ -49,6 +50,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         currentUserId={user.id}
         canSend={has(view.authority, Permission.SendMessages)}
         canModerate={has(view.authority, Permission.ManageMessages)}
+        mediaEnabled={mediaEnabled}
       />
     </>
   );

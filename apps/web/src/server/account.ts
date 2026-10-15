@@ -1,10 +1,13 @@
 // GDPR: data access/portability (export) and erasure (account deletion via Better Auth).
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLog, channel, community, member, message, passkey, session, user } from "@/db/schema";
+import { attachment, auditLog, channel, community, member, message, passkey, session, user } from "@/db/schema";
 import { notFound } from "./errors";
 
-export const EXPORT_FORMAT_VERSION = 1;
+/** 2: messages carry their images. */
+export const EXPORT_FORMAT_VERSION = 2;
+
+export interface ExportedImage { id: string; url: string; contentType: string; size: number; width: number; height: number; createdAt: string }
 
 export interface UserExport {
   format: "opendiscord.user-export";
@@ -15,7 +18,8 @@ export interface UserExport {
   security: { twoFactorEnabled: boolean; passkeys: { name: string | null; deviceType: string; createdAt: string | null }[] };
   ownedCommunities: { id: string; name: string; createdAt: string }[];
   memberships: { communityId: string; communityName: string; joinedAt: string }[];
-  messages: { id: string; communityId: string; channelName: string; content: string; createdAt: string; editedAt: string | null }[];
+  /** Images download from `url` while signed in, like in the app. */
+  messages: { id: string; communityId: string; channelName: string; content: string; createdAt: string; editedAt: string | null; images: ExportedImage[] }[];
 }
 
 /** Everything stored about the person, as portable JSON. Excludes secrets (password hash, tokens). */
@@ -45,6 +49,13 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       .where(eq(message.authorId, userId))
       .orderBy(asc(message.id)),
   ]);
+  const images = messages.length === 0 ? [] : await db.select({
+    id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, size: attachment.size,
+    width: attachment.width, height: attachment.height, createdAt: attachment.createdAt,
+  }).from(attachment).where(inArray(attachment.messageId, messages.map((m) => m.id))).orderBy(asc(attachment.id));
+  const byMessage = Map.groupBy(images, (i) => i.messageId!);
+  const imagesOf = (messageId: string): ExportedImage[] => (byMessage.get(messageId) ?? [])
+    .map(({ id, contentType, size, width, height, createdAt }) => ({ id, contentType, size, width, height, url: `/api/attachments/${id}`, createdAt: createdAt.toISOString() }));
 
   return {
     format: "opendiscord.user-export",
@@ -73,6 +84,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       ...m,
       createdAt: m.createdAt.toISOString(),
       editedAt: m.editedAt?.toISOString() ?? null,
+      images: imagesOf(m.id),
     })),
   };
 }

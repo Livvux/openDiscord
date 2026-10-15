@@ -16,17 +16,19 @@ interface ChannelChatProps {
   currentUserId: string;
   canSend: boolean;
   canModerate: boolean;
+  mediaEnabled: boolean;
 }
 
 interface Pending {
   tempId: string;
   content: string;
+  images: number;
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 120;
 
-export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate }: ChannelChatProps) {
+export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled }: ChannelChatProps) {
   const { state } = useRealtime();
   const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -58,20 +60,21 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     await loadOlder();
   }
 
-  async function onSend(content: string) {
+  async function onSend(content: string, attachmentIds: string[]): Promise<boolean> {
     const tempId = crypto.randomUUID();
     setSendError(null);
     nearBottom.current = true;
-    setPending((p) => [...p, { tempId, content }]);
-    const result = await sendMessage(channel.id, content);
+    setPending((p) => [...p, { tempId, content, images: attachmentIds.length }]);
+    const result = await sendMessage(channel.id, content, attachmentIds);
     setPending((p) => p.filter((x) => x.tempId !== tempId));
     if (result.ok) {
       upsert(result.data);
-    } else {
-      setSendError(result.error);
-      // Put the text back unless the person already started a new message.
-      setDraft((d) => (d.trim() ? d : content));
+      return true;
     }
+    setSendError(result.error);
+    // Put the text back unless the person already started a new message.
+    setDraft((d) => (d.trim() ? d : content));
+    return false;
   }
 
   return (
@@ -128,7 +131,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
               );
             })}
             {pending.map((p) => (
-              <PendingItem key={p.tempId} content={p.content} />
+              <PendingItem key={p.tempId} content={p.content} images={p.images} />
             ))}
           </ol>
           </div>
@@ -140,7 +143,14 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
         </p>
       )}
       {canSend ? (
-        <Composer channelName={channel.name} draft={draft} setDraft={setDraft} onSend={onSend} />
+        <Composer
+          channelId={channel.id}
+          channelName={channel.name}
+          draft={draft}
+          setDraft={setDraft}
+          onSend={onSend}
+          mediaEnabled={mediaEnabled}
+        />
       ) : (
         <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>
       )}
