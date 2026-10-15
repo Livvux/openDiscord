@@ -4,7 +4,8 @@ import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { BanList, DangerZone, InviteList, RenameCommunity } from "@/components/app/settings/community-admin";
 import { MembersManager } from "@/components/app/settings/members-manager";
 import { RolesEditor } from "@/components/app/settings/roles-editor";
-import { listInvites } from "@/server/communities";
+import { getCommunitySafety, listInvites } from "@/server/communities";
+import { SafetySettings } from "@/components/app/settings/safety-settings";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
@@ -24,6 +25,10 @@ const AUDIT_LABELS: Record<string, string> = {
   "role.unassign": "removed a role from",
   "channel.delete": "deleted channel",
   "channel.permissions": "changed permissions of channel",
+  "invites.pause": "paused invites",
+  "invites.resume": "resumed invites",
+  "invites.auto_pause": "Raid protection paused invites",
+  "community.safety": "changed safety settings",
 };
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
@@ -31,7 +36,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (e.action === "role.delete") return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (e.action === "role.create" || e.action === "role.update") return null;
+  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -66,12 +71,13 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
   const a = view.authority;
-  const [members, roles, invites, bans, audit] = await Promise.all([
+  const [members, roles, invites, bans, audit, safety] = await Promise.all([
     listMembers(user.id, view.id),
     listRoles(user.id, view.id),
     has(a, Permission.ManageCommunity) ? listInvites(user.id, view.id) : null,
     has(a, Permission.BanMembers) ? listBans(user.id, view.id) : null,
     has(a, Permission.ViewAuditLog) ? listAuditLog(user.id, view.id) : null,
+    has(a, Permission.ManageCommunity) ? getCommunitySafety(user.id, view.id) : null,
   ]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
@@ -98,6 +104,11 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           <RolesEditor communityId={view.id} authority={a} roles={roles} />
         </Section>
       )}
+      {safety && (
+        <Section id="safety" title="Safety" description="Control who can join. Changes are recorded in the audit log.">
+          <SafetySettings communityId={view.id} safety={safety} />
+        </Section>
+      )}
       {invites && (
         <Section id="invites" title="Active invites">
           <InviteList invites={invites} />
@@ -116,7 +127,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
             <ol className="divide-y rounded-lg border text-sm">
               {audit.map((e) => (
                 <li key={e.id} className="flex flex-wrap gap-x-1 px-3 py-2">
-                  <span className="font-medium">{e.actorName ?? "Deleted user"}</span>
+                  {e.action !== "invites.auto_pause" && <span className="font-medium">{e.actorName ?? "Deleted user"}</span>}
                   <span>{AUDIT_LABELS[e.action] ?? e.action}</span>
                   {auditTarget(e) && <span className="font-medium">{auditTarget(e)}</span>}
                   {e.reason && <span className="text-muted-foreground">— {e.reason}</span>}

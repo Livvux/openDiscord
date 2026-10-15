@@ -22,6 +22,8 @@ interface ChannelChatProps {
   communityId: string;
   /** Read marker when the channel was opened, for the "new messages" divider. */
   lastReadId: string | null;
+  /** Authors whose messages are collapsed for this person. */
+  blockedIds: string[];
 }
 
 interface Pending {
@@ -34,7 +36,7 @@ interface Pending {
 const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 120;
 
-export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId }: ChannelChatProps) {
+export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds }: ChannelChatProps) {
   const { state } = useRealtime();
   const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -156,6 +158,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
                 <MessageItem
                   message={m}
                   currentUserId={currentUserId}
+                  blocked={blockedIds.includes(m.authorId)}
                   grouped={grouped && m.id !== firstUnread}
                   canEdit={m.authorId === currentUserId}
                   canDelete={m.authorId === currentUserId || canModerate}

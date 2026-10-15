@@ -3,6 +3,7 @@ import { ChannelSidebar } from "@/components/app/channel-sidebar";
 import { MobilePanel } from "@/components/app/mobile-nav";
 import { RealtimeProvider } from "@/components/app/realtime-provider";
 import { UnreadProvider } from "@/components/app/unread-provider";
+import { blockedIds } from "@/server/blocks";
 import { loadCommunityView } from "@/server/pages";
 import { requirePageUser } from "@/server/session";
 
@@ -17,12 +18,13 @@ export default function CommunityLayout({ params, children }: LayoutProps<"/app/
 async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[communityId]">, "params" | "children">) {
   const { communityId } = await params;
   const user = await requirePageUser();
-  const view = await loadCommunityView(user.id, communityId);
+  const [view, blocked] = await Promise.all([loadCommunityView(user.id, communityId), blockedIds(user.id)]);
   return (
     <RealtimeProvider communityId={view.id}>
       <UnreadProvider
         communityId={view.id}
         currentUserId={user.id}
+        blockedIds={blocked}
         initial={Object.fromEntries(view.channels.map((c) => [c.id, { unread: c.unread, mentions: c.mentions }]))}
       >
       <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">

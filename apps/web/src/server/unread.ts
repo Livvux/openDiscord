@@ -3,7 +3,7 @@
 // in, and callers pass only channels the person can view.
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { channel, channelReadState, mention, message } from "@/db/schema";
+import { channel, channelReadState, mention, message, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, requireChannel } from "./access";
 import { Permission } from "./permissions";
 import { notFound } from "./errors";
@@ -51,7 +51,7 @@ export async function unreadState(userId: string, channelIds: string[]): Promise
       lastReadId: channelReadState.lastReadId,
       unread: sql<boolean>`exists (select 1 from ${message} where ${message.channelId} = ${channel.id} and ${message.authorId} <> ${userId} and ${after(message)})`,
       // shortcut: one correlated query per channel; switch to a grouped query if communities grow to hundreds of channels.
-      mentions: sql<number>`(select count(*) from (select 1 from ${mention} inner join ${message} on ${message.id} = ${mention.messageId} where ${mention.userId} = ${userId} and ${message.channelId} = ${channel.id} and ${after(message)} limit ${MENTION_COUNT_CAP}) capped)`.mapWith(Number),
+      mentions: sql<number>`(select count(*) from (select 1 from ${mention} inner join ${message} on ${message.id} = ${mention.messageId} where ${mention.userId} = ${userId} and ${message.channelId} = ${channel.id} and ${after(message)} and not exists (select 1 from ${userBlock} where ${userBlock.blockerId} = ${userId} and ${userBlock.blockedId} = ${message.authorId}) limit ${MENTION_COUNT_CAP}) capped)`.mapWith(Number),
     })
     .from(channel)
     .leftJoin(channelReadState, and(eq(channelReadState.channelId, channel.id), eq(channelReadState.userId, userId)))

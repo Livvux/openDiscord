@@ -78,7 +78,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Search | ❌ | P1: Postgres full-text search, membership-scoped |
 | Notification preferences | 🟡 | Opt-in desktop notifications per browser ✅; per-community all/mentions/nothing P1 |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
-| Invites and onboarding | 🟡 | Expiring, limited-use invites ✅; rules/onboarding screen P2 |
+| Invites and onboarding | 🟡 | Expiring, limited-use, revocable invites; pause and join requirements ✅; rules/onboarding screen P2 |
 | Presence and status | ❌ | P1 |
 | Edit, delete, moderate messages | ✅ | Pinning P1 |
 | Opt-in public, indexable channels | ❌ | P3 |
@@ -95,8 +95,8 @@ They are deliberately outside the text MVP: they bring an SFU, TURN and UDP port
 | Threat model | ✅ | [THREAT-MODEL.md](THREAT-MODEL.md) |
 | Authentication and recovery | ✅ | Password (min 10), email verification and reset when SMTP is set, sessions revoked on reset |
 | Passkeys and TOTP 2FA | ✅ | Better Auth plugins; tested with a virtual authenticator and RFC 6238 codes |
-| Rate limiting, anti-spam | 🟡 | Auth endpoints (Better Auth), messages (5 per 5 s per user), 30 mutations per 10 s per user, caps on communities/channels/roles/invites, 8 live streams per user. Auth limits are shared in Postgres; the mutation burst limit and stream caps are per process (shared store P1); per-community join limits P0 |
-| Anti-raid | ❌ | **P0**: join-rate limits per community, invite pause, minimum account age option |
+| Rate limiting, anti-spam | 🟡 | Auth endpoints (Better Auth), messages (5 per 5 s per user), 30 mutations per 10 s per user, caps on communities/channels/roles/invites, 8 live streams per user. Auth limits are shared in Postgres; the mutation burst limit and stream caps are per process (shared store P1); per-community raid limits ✅ |
+| Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
 | Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery (THREAT-MODEL T23) |
@@ -114,7 +114,7 @@ They are deliberately outside the text MVP: they bring an SFU, TURN and UDP port
 | Explanations for restrictions | 🟡 | Reasons recorded in the audit log; showing the reason to the affected person P2 |
 | Appeals | ❌ | P2 |
 | Role-based moderation access | ✅ | |
-| Blocking and reporting | 🟡 | Reporting of messages and communities with an instance-admin queue ✅; blocking **P0** |
+| Blocking and reporting | ✅ | Reporting of messages and communities with an instance-admin queue; personal blocking (messages collapsed, mentions silent, not disclosed to the blocked person). DM refusal ships with DMs |
 | Anti-harassment, anti-phishing, anti-grooming | ❌ | P1 (link warnings, DM restrictions by default); requires reporting first |
 | Minor protection and age safeguards | ❌ | **P1 legal review** for the official instance. Self-attested minimum age at sign-up as a baseline; no ID collection |
 | Rules for the official instance | ❌ | P2: published terms and community guidelines |
@@ -160,7 +160,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | --- | --- | --- |
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
 | Unread state, @mentions, notifications | ✅ | Unread markers per channel and community; mentions notify only members who can read the channel; opt-in desktop notifications |
-| Blocking, anti-raid, invite controls | ❌ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
+| Blocking, anti-raid, invite controls | ✅ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
 | Production readiness | ❌ | Lint, types, unit/integration, build, Playwright and Docker build green; deployment smoke-tested |
 
 ### P1 — core Discord replacement

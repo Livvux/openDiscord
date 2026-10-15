@@ -24,13 +24,15 @@ export function useClearUnread() {
 interface UnreadProviderProps {
   communityId: string;
   currentUserId: string;
+  /** Mentions from people you blocked don't count. */
+  blockedIds: string[];
   /** Server-rendered state per visible channel. */
   initial: Record<string, UnreadSummary>;
   children: React.ReactNode;
 }
 
 /** Keeps the open community's channel markers current from its realtime stream. */
-export function UnreadProvider({ communityId, currentUserId, initial, children }: UnreadProviderProps) {
+export function UnreadProvider({ communityId, currentUserId, blockedIds, initial, children }: UnreadProviderProps) {
   const { subscribe } = useRealtime();
   const [state, setState] = useState(initial);
   const [seenInitial, setSeenInitial] = useState(initial);
@@ -49,13 +51,13 @@ export function UnreadProvider({ communityId, currentUserId, initial, children }
         const { channelId, mentions } = event.message;
         const watching = window.location.pathname === `/app/c/${communityId}/${channelId}` && document.visibilityState === "visible";
         if (watching) return;
-        const mentioned = mentions.some((m) => m.id === currentUserId);
+        const mentioned = mentions.some((m) => m.id === currentUserId) && !blockedIds.includes(event.message.authorId);
         setState((s) => {
           const prev = s[channelId] ?? NONE;
           return { ...s, [channelId]: { unread: true, mentions: prev.mentions + (mentioned ? 1 : 0) } };
         });
       }),
-    [subscribe, communityId, currentUserId],
+    [subscribe, communityId, currentUserId, blockedIds],
   );
 
   useEffect(() => {

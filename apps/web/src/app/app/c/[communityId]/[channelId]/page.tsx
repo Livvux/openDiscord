@@ -4,6 +4,7 @@ import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog"
 import { ChannelChat } from "@/components/app/chat/channel-chat";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
+import { blockedIds } from "@/server/blocks";
 import { listMessages } from "@/server/messages";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
@@ -24,7 +25,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
   const channel = view.channels.find((c) => c.id === channelId);
   // Channel from another community, or deleted: 404 without revealing which.
   if (!channel) notFound();
-  const page = await listMessages(user.id, channelId);
+  const [page, blocked] = await Promise.all([listMessages(user.id, channelId), blockedIds(user.id)]);
 
   return (
     <>
@@ -57,6 +58,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         mediaEnabled={mediaEnabled}
         communityId={view.id}
         lastReadId={channel.lastReadId}
+        blockedIds={blocked}
       />
     </>
   );
