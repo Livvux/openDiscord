@@ -137,6 +137,27 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expectNoA11yViolations(restored);
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
 
+  const charlie = await newUserPage(browser);
+  await signUp(charlie, "Private Charlie");
+  await charlie.goto(invite);
+  await charlie.getByRole("button", { name: "Accept invite", exact: true }).click();
+  const charlieId = (await charlie.request.get("/api/auth/get-session").then((response) => response.json())).user.id as string;
+  const secondConversation = await alice.evaluate(async (target) => {
+    const response = await fetch("/api/dm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "request", target }) });
+    if (!response.ok) throw new Error("Could not create second conversation fixture");
+    return (await response.json()).id as string;
+  }, charlieId);
+  await charlie.evaluate(async (id) => {
+    const response = await fetch("/api/dm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "respond", id, status: "accepted" }) });
+    if (!response.ok) throw new Error("Could not accept second conversation fixture");
+  }, secondConversation);
+  await alice.getByLabel("Encrypted message", { exact: true }).fill("Draft intended only for Bob");
+  await openConversation(alice, "Private Charlie");
+  await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("");
+  await openConversation(alice, "Private Bob");
+  await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("");
+  await charlie.context().close();
+
   await bob.route("**/api/dm?conversation=*", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
