@@ -356,6 +356,32 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(a.calls.at(-1)?.request.kind).toBe("send");
   }, 30_000);
 
+  it("retires an unknown committed encrypted send and ignores its stale response timeout while retaining current peers", async () => {
+    const [a, b, c] = await fixture(3); await verify(a, b); const epoch = await context(a, b);
+    const committed = deferred(), timeout = deferred(); let id: string | undefined;
+    a.after = async input => {
+      if (input.request.kind === "send" && input.request.eventType === "m.room.encrypted" && !id) {
+        id = input.request.nativeRequestId; committed.resolve(); await timeout.promise;
+        throw new Error("Test network response timeout after unknown commit.");
+      }
+    };
+    const sent = a.owner.sendControl(material(a, b, epoch)), outcome = sent.then(() => undefined, error => error as unknown);
+    await committed.promise;
+    const original = a.calls.find(item => item.request.kind === "send" && item.request.nativeRequestId === id)!;
+    const queued = await db.$count(voiceControlMailbox);
+    expect(await handleVoiceCrypto(auth(a), { ...original.binding, request: original.request })).toEqual({ nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } });
+    expect(await db.$count(voiceControlMailbox)).toBe(queued);
+    await leaveVoiceControl(auth(c), binding(c));
+    a.snapshot = await heartbeatVoiceControl(auth(a), binding(a)); await a.owner.transition(a.snapshot);
+    const retired = a.calls.find(item => item.request.kind === "retire" && item.request.nativeRequestId === id);
+    expect(retired).toBeDefined();
+    timeout.resolve(); expect(await outcome).toBeInstanceOf(VoiceGenerationInterrupted);
+    a.after = undefined; await refresh([b]);
+    const freshEpoch = await context(a, b), forward = material(a, b, freshEpoch);
+    await a.owner.sendControl(forward); expect(await b.owner.receive()).toEqual([forward]);
+    const reverse = material(b, a, freshEpoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
+  }, 30_000);
+
   it("holds the account guard until native cleanup completes after lifetime abort", async () => {
     const [a, b] = await fixture();
     const entered = deferred(), release = deferred();
