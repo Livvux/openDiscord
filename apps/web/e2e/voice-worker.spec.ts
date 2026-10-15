@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Worker } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
@@ -59,11 +59,22 @@ async function start(page: Page, scenario: Scenario, media: Media): Promise<void
     return value.toJwt();
   }
   const input = { scenario, media, url: process.env.LIVEKIT_URL ?? "ws://localhost:7880", senderToken: await token("sender"), receiverToken: await token("receiver") };
-  await page.evaluate(async (value) => {
-    try { await window.voiceProof.start(value); }
-    // Native fail-closed disconnect may race publishTrack; other startup failures must propagate.
-    catch (error) { if (!(await window.voiceProof.snapshot()).errors.length) throw error; }
-  }, input);
+  const expectedWorker = await page.evaluate(() => window.voiceProof.snapshot().then((value) => value.workerUrl));
+  const loadedWorkers: string[] = [];
+  const observeWorker = (nativeWorker: Worker) => { loadedWorkers.push(nativeWorker.url()); };
+  page.on("worker", observeWorker);
+  try {
+    await page.evaluate(async (value) => {
+      try { await window.voiceProof.start(value); }
+      // Native fail-closed disconnect may race publishTrack; other startup failures must propagate.
+      catch (error) { if (!(await window.voiceProof.snapshot()).errors.length) throw error; }
+    }, input);
+    // Observe the actual browser worker bootstrap URLs, not only a separately fetched asset.
+    await expect.poll(() => loadedWorkers.length).toBe(2);
+    expect(loadedWorkers).toEqual([expectedWorker, expectedWorker]);
+  } finally {
+    page.off("worker", observeWorker);
+  }
 }
 
 async function healthy(page: Page, media: Media, afterDecoded = 0): Promise<Metrics> {

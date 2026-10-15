@@ -15,7 +15,12 @@ class Provider extends BaseKeyProvider {
 }
 
 let workerUrl = new URL("/voice-proof/worker.mjs", location.href);
-export function configureWorkerUrl(url: URL): void { workerUrl = url; metrics.workerUrl = url.href; }
+export function configureWorkerUrl(url: URL): void {
+  // Turbopack's import.meta asset URL has a relative href despite its URL type.
+  // Normalize the same asset for native Worker construction and recorded evidence.
+  workerUrl = new URL(url.href, location.href);
+  metrics.workerUrl = workerUrl.href;
+}
 
 const metrics: Metrics = { framesDecoded: 0, videoWidth: 0, codec: "", subscriptions: 0, unsubscriptions: 0, reconnecting: 0, reconnected: 0, workerUrl: workerUrl.href, encoded: 0, decoded: 0, changed: 0, nonemptyEncoded: 0, unmatched: 0, encodeSetups: 0, decodeSetups: 0, scriptTransform: false, errors: [], framesAtFailure: null, energy: 0, connected: false };
 let sender: Room | undefined;
