@@ -8,6 +8,7 @@ import { expect, it } from "vitest";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 import { authSecrets } from "@/lib/auth-secrets";
+import { authenticatorCode } from "./totp";
 
 it("keeps legacy and previous-version TOTP material readable through native key rotation", async () => {
   const legacy = randomBytes(32).toString("base64");
@@ -35,7 +36,8 @@ it("keeps legacy and previous-version TOTP material readable through native key 
       const [row] = await db.select().from(schema.twoFactor).where(eq(schema.twoFactor.userId, signup.response.user.id));
       const current = await rotated.$context;
       const secret = await symmetricDecrypt({ key: current.secretConfig, data: row.secret });
-      expect(secret).toBe(new URL(enabled.totpURI).searchParams.get("secret"));
+      const sourceContext = await source.$context;
+      expect(secret).toBe(await symmetricDecrypt({ key: sourceContext.secretConfig, data: row.secret }));
       const codes = JSON.parse(await symmetricDecrypt({ key: current.secretConfig, data: row.backupCodes }));
       expect(codes).toEqual(enabled.backupCodes);
       if (index === 1) {
@@ -50,7 +52,10 @@ it("keeps legacy and previous-version TOTP material readable through native key 
       const signin = await rotated.api.signInEmail({ body: { email: emails[index], password }, returnHeaders: true });
       const rotatedHeaders = new Headers({ cookie: (signin.headers.get("set-cookie") ?? "").split(";")[0] });
       const recovered = await rotated.api.getTOTPURI({ headers: rotatedHeaders, body: { password } });
-      expect(new URL(recovered.totpURI).searchParams.get("secret")).toBe(secret);
+      expect(recovered.totpURI).toBe(enabled.totpURI);
+      const provisioningSecret = new URL(recovered.totpURI).searchParams.get("secret");
+      if (!provisioningSecret) throw new Error("Missing provisioning secret");
+      await expect(rotated.api.verifyTOTP({ headers: rotatedHeaders, body: { code: authenticatorCode(provisioningSecret) } })).resolves.toBeTruthy();
     }
   } finally {
     for (const email of emails) await db.delete(schema.user).where(eq(schema.user.email, email));
