@@ -4,7 +4,7 @@ on:
   pull_request:
     paths: ['desktop/**', '.github/workflows/desktop.yml']
   push:
-    branches: ['main', 'feat/native-desktop-shell']
+    branches: ['main']
     paths: ['desktop/**', '.github/workflows/desktop.yml']
 concurrency:
   group: desktop-${{ github.ref }}
@@ -29,7 +29,7 @@ jobs:
           components: rustfmt, clippy
       - name: Linux WebView dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
@@ -48,6 +48,15 @@ jobs:
           cargo metadata --locked --format-version 1 > dependency-metadata.json
       - name: Build unsigned native bundles
         run: cargo tauri build --ci
+      - name: Linux native runtime acceptance
+        if: runner.os == 'Linux'
+        run: |
+          cargo install tauri-driver --locked
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/desktop-fixture.key -out /tmp/desktop-fixture.crt -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+          sudo cp /tmp/desktop-fixture.crt /usr/local/share/ca-certificates/desktop-fixture.crt
+          sudo update-ca-certificates
+          OPENDISCORD_INSTANCE_URL=https://localhost:9443 cargo build --locked
+          xvfb-run -a python3 tests/native_smoke.py
       - name: Checksums
         run: |
           python - <<'PY'
@@ -68,5 +77,6 @@ jobs:
             desktop/target/release/bundle/
             desktop/SHA256SUMS
             desktop/dependency-metadata.json
+            desktop/native-evidence/
           if-no-files-found: error
           retention-days: 14
