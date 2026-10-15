@@ -46,6 +46,16 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - run: pnpm test
+      - name: Characterize isolated message read load
+        timeout-minutes: 3
+        env:
+          OPENDISCORD_ISOLATED_LOAD: "1"
+        run: pnpm --filter web exec tsx scripts/characterize-load.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: load-characterization
+          path: apps/web/load-characterization.json
+          if-no-files-found: error
       - name: Rehearse encrypted backup and isolated restore
         run: |
           sudo apt-get update
