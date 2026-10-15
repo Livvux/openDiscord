@@ -10,6 +10,7 @@ import { ownedCommunityNames, unlinkFromAuditLog } from "@/server/account";
 import { authRateLimitStore } from "@/server/rate-limit-store";
 import { AccountBlocked, assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
+import { sessionDeviceLabel } from "./session-device";
 
 const NAME_MAX = 64;
 const APP_NAME = "openDiscord";
@@ -66,6 +67,13 @@ export const auth = betterAuth({
   },
   advanced: { ipAddress: { trustedProxies } },
   user: {
+    changeEmail: {
+      enabled: mailEnabled,
+      updateEmailWithoutVerification: false,
+      sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
+        await sendMail(user.email, "Confirm your openDiscord email change", `Approve changing your email address to ${newEmail}:\n${url}\n\nAfter approval, we'll verify the new address. If you didn't request this, don't approve it.`);
+      },
+    },
     additionalFields: {
       // Closed Alpha gate. Only the database hook and instance admins change it; clients can't set it.
       approvalStatus: { type: ["approved", "pending", "rejected"], defaultValue: "approved", input: false, required: true },
@@ -108,8 +116,13 @@ export const auth = betterAuth({
           }
           throw error;
         }
-        return { data: { ...session, ipAddress: null } };
+        return { data: { ...session, ipAddress: null, userAgent: sessionDeviceLabel(session.userAgent) } };
       } },
+      update: { before: async (session) => ({ data: {
+        ...session,
+        ipAddress: null,
+        ...(session.userAgent !== undefined && { userAgent: sessionDeviceLabel(session.userAgent) }),
+      } }) },
     },
   },
   plugins: [

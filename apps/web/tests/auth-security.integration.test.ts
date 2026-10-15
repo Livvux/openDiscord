@@ -33,3 +33,20 @@ describe("two-factor secrets", () => {
     ).rejects.toThrow(/Display names/);
   });
 });
+
+describe("session metadata", () => {
+  it("stores a coarse label instead of raw user agent or client IP", async () => {
+    const address = `device-${randomUUID()}@example.test`;
+    try {
+      const result = await auth.api.signUpEmail({
+        body: { email: address, password, name: "Device privacy" },
+        headers: new Headers({ "user-agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.1 unique-hardware", "x-forwarded-for": "192.0.2.10" }),
+      });
+      const row = await db.query.session.findFirst({ where: (s, { eq }) => eq(s.userId, result.user.id) });
+      expect(row?.ipAddress).toBeNull();
+      expect(row?.userAgent).toBe("Chrome on Windows");
+    } finally {
+      await db.delete(user).where(eq(user.email, address));
+    }
+  });
+});

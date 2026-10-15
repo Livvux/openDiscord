@@ -11,6 +11,7 @@
     "test": "pnpm --filter web test",
     "db:generate": "pnpm --filter web db:generate",
     "db:migrate": "pnpm --filter web db:migrate",
-    "test:e2e": "pnpm --filter web test:e2e"
+    "test:e2e": "pnpm --filter web test:e2e",
+    "maintenance": "pnpm --filter web maintenance"
   }
 }

@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { BlockedList } from "@/components/app/settings/blocked-list";
 import { DeleteAccount } from "@/components/app/settings/delete-account";
+import { EmailSettings } from "@/components/app/settings/email-settings";
 import { NotificationSettings } from "@/components/app/settings/notification-settings";
 import { ProfileForm } from "@/components/app/settings/profile-form";
 import { PasskeySettings } from "@/components/app/settings/passkey-settings";
@@ -16,6 +17,7 @@ import { pushEnabled, vapidPublicKey } from "@/server/push";
 import { PushSettings } from "@/components/app/settings/push-settings";
 import { PresenceSettings } from "@/components/app/settings/presence-settings";
 import { requirePageUser } from "@/server/session";
+import { mailEnabled } from "@/lib/mail";
 
 export const metadata: Metadata = { title: "Account settings" };
 
@@ -57,6 +59,9 @@ async function Settings() {
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
         <ProfileForm name={user.name} email={user.email} />
+      </Section>
+      <Section title="Email address" description="Changes require a recent sign-in and verification. Your email is never shown to other members.">
+        {mailEnabled ? <EmailSettings email={user.email} /> : <p className="text-sm text-muted-foreground">Email changes are unavailable because this instance has not configured email delivery.</p>}
       </Section>
       <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
         <NotificationSettings />

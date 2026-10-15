@@ -24,7 +24,7 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Email address | Sign-in, verification, password reset | The person and the operator | Until account deletion |
 | Display name | Shown next to messages and in member lists | Members of shared communities | Until changed or deleted |
 | Password hash | Authentication | Nobody (server only) | Until changed or deleted |
-| Sessions: creation/expiry time, user agent | Keep you signed in; "signed-in devices" list | The person | Until expiry (7 days by default) or sign-out; expired rows are purged by a P1 job |
+| Sessions: creation/expiry time, coarse browser/platform label | Keep you signed in; "signed-in devices" list | The person | Until expiry (7 days by default) or sign-out; expired rows are purged by the operator maintenance job |
 | IP addresses | Rate limiting | Nobody | **Not stored.** Sign-in/sign-up limits keep a keyed hash (HMAC) of "IP + endpoint" and a counter for at most a day; it can't be turned back into an IP without the server secret |
 | Communities, memberships, roles | Running the community | Members | Until the community is deleted or you leave |
 | Messages | Conversation | Members of the community | Until deleted by author, moderator, community deletion or account deletion |
@@ -40,10 +40,10 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Blocked people | Hide their messages, silence their mentions | The person only; the blocked person is not told | Until unblocked or either account is deleted; included in the data export |
 | Account approval status (Closed Alpha) | Access control | The person (on sign-in) and instance administrators | Until account deletion |
 | Bans | Moderation | Moderators with ban permission | Until unbanned, community deleted or the banned account deleted |
-| Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |
+| Audit log | Moderation accountability | Members with "view audit log" | Until community deletion or 180-day retention through the operator maintenance job. Never contains message content |
 | Instance administrators, suspensions and settings | Instance governance and abuse prevention | Instance administrators; users see their own access restrictions | Until revoked; suspension ends when lifted or the account is deleted |
-| Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Retained until an operator retention process removes them; reporter/resolver links are removed on account deletion |
-| Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; no automated retention job yet. Stores reasons and target IDs, never copies message bodies |
+| Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Open reports remain until resolved; resolved reports are purged 180 days after resolution by maintenance. Reporter/resolver links are removed on account deletion |
+| Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; 180-day retention through the operator maintenance job. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
 There are no analytics, tracking pixels, advertising identifiers or third-party fonts. The Content
@@ -57,7 +57,7 @@ processor; visitors never contact R2 directly.
 
 - **Access and portability:** Settings → Your data → Download my data (JSON: profile, sessions,
   security settings, memberships, owned communities, all your messages).
-- **Correction:** change your display name in settings. Email change is P1.
+- **Correction:** change your display name in settings. With SMTP configured, change your email after a recent sign-in: a verified current address must approve the change, then the new address must be verified. Without SMTP, email changes are disabled.
 - **Erasure:** Settings → Delete account. This permanently deletes your account, sessions, 2FA and
   passkeys, memberships, bans against you, and every message you wrote. Audit entries about you keep the
   action but lose the link to your account. If you own communities, delete them first, so members
@@ -78,3 +78,13 @@ require membership. Instance administration separately requires global rights an
 Backups made with `scripts/backup.sh` contain all of the above. Store them encrypted, restrict access,
 and delete them on a schedule; deleted accounts disappear from the live database immediately and from
 backups when those expire.
+
+## Scheduled maintenance
+
+The operator must schedule `pnpm maintenance --apply` (or invoke the script directly as described in
+SELF-HOSTING.md). Without `--apply`, it only reports aggregate counts. Each run removes expired sessions
+and verification records, rate-limit windows older than one day, expired connection leases, audit logs
+older than 180 days, and reports resolved more than 180 days ago. It also replaces legacy raw session
+user agents with coarse browser/platform labels and removes legacy session IP fields. Active sessions,
+open reports, accounts and messages are not deleted. Batch limits bound each run; a nonempty `limited`
+list means more work remains for the next run. New sessions and updates containing device metadata also minimize it; existing raw metadata is scrubbed by maintenance.

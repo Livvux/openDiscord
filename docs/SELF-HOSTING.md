@@ -138,3 +138,20 @@ docker compose -f compose.dev.yaml up -d   # Postgres 18 on 127.0.0.1:5433
 # 5433 avoids clashing with a locally installed Postgres on 5432, which is usually older than 18
 # and fails the migrations. Change it with DEV_DB_PORT and update DATABASE_URL in apps/web/.env.
 ```
+
+## Retention maintenance
+
+Schedule maintenance hourly from the same release and environment as the app. First inspect the dry run:
+
+```sh
+docker compose run --rm --no-deps migrate pnpm --filter web exec tsx scripts/maintenance.ts
+# Apply the documented retention policy (180-day audit/resolved-report retention):
+docker compose run --rm --no-deps migrate pnpm --filter web exec tsx scripts/maintenance.ts --apply
+```
+
+On Dokploy add `-f docker-compose.dokploy.yml` and use the deployed checkout/environment. Never build
+a new migration image on a running production host just to execute maintenance; use its already-built
+`migrate` image (`--no-build`). Serialize scheduled runs with `flock`, retain job failure logs without
+credentials and alert on failure. The command prints aggregate counts only, is a dry run by default,
+and processes bounded batches. Inspect `limited` to detect a backlog. The command does not delete
+accounts, messages or open reports. Back up before initially applying the retention policy.
