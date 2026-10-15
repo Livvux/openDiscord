@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { Footer } from "@/components/marketing/footer";
-import { GITHUB_URL } from "@/lib/site";
+import { GITHUB_URL, SPONSOR_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Funding and running costs",
@@ -30,6 +30,11 @@ export default function FundingPage() {
         <h2 id="funding-goal" className="text-2xl font-semibold">Our funding goal</h2>
         <p className="mt-4 leading-relaxed text-slate-300">Cover the €250 monthly operating total so the hosted instance can continue running. Contribution income and development costs are not included in this cost statement.</p>
         <p className="mt-4 leading-relaxed text-slate-300">Community permissions follow the same rules for everyone. Financial support grants no moderation powers or exclusive hosted features.</p>
+      </section>
+      <section aria-labelledby="sponsor" className="mt-12">
+        <h2 id="sponsor" className="text-2xl font-semibold">Support the running costs</h2>
+        <p className="mt-4 leading-relaxed text-slate-300">Voluntary contributions through GitHub Sponsors help support the project and its hosted service.</p>
+        <a href={SPONSOR_URL} className="mt-6 inline-flex rounded-full bg-indigo-600 px-6 py-3 font-medium hover:bg-indigo-500">Sponsor Livvux on GitHub →</a>
       </section>
       <section aria-labelledby="contribute" className="mt-12">
         <h2 id="contribute" className="text-2xl font-semibold">Help the project grow</h2>

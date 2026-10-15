@@ -41,6 +41,7 @@ test("funding page publishes the operator cost total and works on small screens"
   await expect(page.getByRole("region", { name: "Monthly running costs" })).toContainText("€250");
   await expect(page.getByRole("region", { name: "Our funding goal" })).toContainText("€250 monthly");
   await expect(page.getByRole("link", { name: "Contribute on GitHub" })).toHaveAttribute("href", "https://github.com/Livvux/openDiscord/blob/main/CONTRIBUTING.md");
+  await expect(page.getByRole("link", { name: "Sponsor Livvux on GitHub" })).toHaveAttribute("href", "https://github.com/sponsors/Livvux");
   await expectNoA11yViolations(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(errors).toEqual([]);
