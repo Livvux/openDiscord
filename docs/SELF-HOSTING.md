@@ -170,14 +170,20 @@ A restore drill is part of the test plan: the round trip is verified to restore 
 
 ## Upgrade
 
+Upgrades introducing migration `0031` require complete writer quiescence. Follow the
+[0031 compatibility rollout and recovery procedure](OPERATIONS.md#0031-compatible-writer-rollout)
+before starting a migration or new application image. The generic sequence below is insufficient
+for this version boundary: Compose startup dependencies do not stop existing replicas or jobs.
+
 ```sh
 scripts/backup.sh
 git pull
 docker compose up -d --build
 ```
 
-Migrations are forward-only. To roll back, restore the backup taken before the upgrade and check out
-the previous release.
+Migrations are forward-only. A `0031` rollback must follow the linked recovery procedure; starting
+an old image against the new guards is unsafe. Full restore loses writes after the backup and
+requires stopped writers, preserved current state, a verified backup and matching previous images.
 
 ## Moving one community
 
