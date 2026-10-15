@@ -39,7 +39,7 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
       </header>
       <div className="flex items-center justify-between px-3 pt-3 pb-1">
         <h3 className="px-2 text-[11px] tracking-widest text-zinc-400 uppercase">Text channels</h3>
-        {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} />}
+        {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} isOwner={view.isOwner} />}
       </div>
       <ul className="flex-1 space-y-0.5 overflow-y-auto px-3">
         {loose.filter((c) => c.kind === "text").map(link)}

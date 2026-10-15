@@ -3,16 +3,17 @@
 import { PlusIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { createChannel } from "@/app/app/actions";
+import { createChannel, createPublicChannel } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function CreateChannelDialog({ communityId, voiceEnabled }: { communityId: string; voiceEnabled: boolean }) {
+export function CreateChannelDialog({ communityId, voiceEnabled, isOwner }: { communityId: string; voiceEnabled: boolean; isOwner: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [publicMode, setPublicMode] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -21,7 +22,9 @@ export function CreateChannelDialog({ communityId, voiceEnabled }: { communityId
     const name = String(form.get("name"));
     const kind = form.get("kind") === "voice" ? "voice" : "text";
     startTransition(async () => {
-      const result = await createChannel(communityId, name, kind);
+      const result = publicMode
+        ? await createPublicChannel(communityId, { name, communityTitle: String(form.get("publicTitle") ?? ""), acknowledge: form.get("acknowledge") === "on" })
+        : await createChannel(communityId, name, kind);
       if (!result.ok) return setError(result.error);
       setOpen(false);
       router.push(`/app/c/${communityId}/${result.data}`);
@@ -33,7 +36,7 @@ export function CreateChannelDialog({ communityId, voiceEnabled }: { communityId
       <DialogTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Create channel" />}>
         <PlusIcon />
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[85dvh] overflow-y-auto">
         <form onSubmit={onSubmit} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Create channel</DialogTitle>
@@ -42,7 +45,9 @@ export function CreateChannelDialog({ communityId, voiceEnabled }: { communityId
             <Label htmlFor="channel-name">Channel name</Label>
             <Input id="channel-name" name="name" required maxLength={32} autoFocus autoComplete="off" placeholder="new-channel" />
           </div>
-          {voiceEnabled && (
+          {isOwner && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={publicMode} onChange={(e) => setPublicMode(e.target.checked)} />Create a new public text channel</label>}
+          {publicMode && <><div className="grid gap-2"><Label htmlFor="public-community-title">Public community title</Label><Input id="public-community-title" name="publicTitle" required maxLength={80} placeholder="Choose what the public sees" /><p className="text-xs text-muted-foreground">Separate from your private community name. Only this new channel is published. Existing private history stays private.</p></div><label className="flex items-start gap-2 text-sm"><input type="checkbox" name="acknowledge" required />I understand that this new channel’s title, future acknowledged posts, display names and timestamps will be public and searchable and may remain in third-party caches. Unpublishing is permanent and cannot erase external copies.</label></>}
+          {voiceEnabled && !publicMode && (
             <fieldset className="grid gap-1.5">
               <legend className="mb-1 text-sm font-medium">Type</legend>
               <label className="flex items-center gap-2 text-sm">

@@ -1,6 +1,7 @@
 "use client";
 
-import { FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
+import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
+import { SmilePlusIcon, FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,11 @@ import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE
 import { shortFilename } from "@/lib/filename";
 import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
+import { assetShortcode, encodeAssetShortcodes, type AssetRef } from "@/lib/community-assets";
+import { CommunityAssetPicker } from "../community-asset-picker";
+
 interface ComposerProps {
+  isPublic?: boolean;
   channelId: string;
   channelName: string;
   /** Overrides "Message #channel" (e.g. in threads). */
@@ -68,10 +73,13 @@ function useMentionSuggestions(communityId: string, query: string | null) {
   return query !== null && results?.query === query ? results.members : [];
 }
 
-export function Composer({ channelId, channelName, placeholder, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply }: ComposerProps) {
+export function Composer({ channelId, channelName, placeholder, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply, isPublic }: ComposerProps) {
+  const [publicAcknowledged, setPublicAcknowledged] = useState(false);
   const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const picked = useRef<Mention[]>([]);
+  const pickedAssets = useRef<AssetRef[]>([]);
+  const [pickingAssets, setPickingAssets] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   // Hidden copies of previous routes stay mounted, so ids must be unique per instance.
@@ -129,9 +137,10 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
   const uploading = uploads.some((u) => !u.id && !u.error);
   const ready = uploads.filter((u) => u.id).map((u) => u.id!);
   const failed = uploads.find((u) => u.error);
-  const canSend = !sending && !uploading && !failed && (draft.trim().length > 0 || ready.length > 0);
+  const canSend = (!isPublic || publicAcknowledged) && !sending && !uploading && !failed && (draft.trim().length > 0 || ready.length > 0);
 
   function trackMention(el: HTMLTextAreaElement) {
+    if (isPublic) return;
     const next = mentionQuery(el.value, el.selectionStart);
     setMentionAt(next);
     if (next?.query !== mentionAt?.query) setActiveOption(0);
@@ -163,7 +172,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
     if (!canSend) return;
     const text = draft.trim();
     const mentions = picked.current.filter((m) => text.includes(`@${m.name}`));
-    const content = encodeMentions(text, mentions);
+    const content = encodeAssetShortcodes(encodeMentions(text, mentions), pickedAssets.current);
     picked.current = [];
     setDraft("");
     setMentionAt(null);
@@ -189,6 +198,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
       }}
       className="relative mx-4 mb-4 rounded-lg bg-white/5 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
     >
+      {isPublic && <div className="border-b border-white/10 p-3 text-xs text-zinc-300"><p>{PUBLIC_POST_NOTICE}</p><label className="mt-2 flex items-start gap-2"><input type="checkbox" checked={publicAcknowledged} onChange={(e) => setPublicAcknowledged(e.target.checked)} />I acknowledge public posting in this channel.</label></div>}
       {replyTo && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1.5 text-xs text-zinc-300">
           <span className="min-w-0 flex-1 truncate">Replying to <span className="font-medium text-zinc-100">{replyTo.authorName}</span></span>
@@ -260,7 +270,14 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           {failed.name}: {failed.error} Remove it to send.
         </p>
       )}
+      {pickingAssets && <CommunityAssetPicker channelId={channelId} onPick={(asset) => {
+        pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
+        setDraft(`${draft}${draft && !draft.endsWith(" ") ? " " : ""}${assetShortcode(asset)} `);
+        setPickingAssets(false);
+        textarea.current?.focus();
+      }} />}
       <div className="flex items-end gap-2 py-1 pr-1 pl-2">
+        {!isPublic && <Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose community emoji or sticker" aria-expanded={pickingAssets} onClick={() => setPickingAssets((value) => !value)}><SmilePlusIcon /></Button>}
         {mediaEnabled && (
           <>
             <input

@@ -1,3 +1,5 @@
+import { ASSET_TOKEN_SOURCE, assetTokens, type AssetView } from "@/lib/community-assets";
+import { assetsForMessages } from "./community-assets";
 // Read-side extras of a message view: reactions and the preview of the message it replies to.
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -8,6 +10,7 @@ import { mentionsFor } from "./mentions";
 
 export interface ReactionView {
   emoji: string;
+  asset?: AssetView;
   /** Who reacted, oldest first; the client derives the count and "you reacted". */
   userIds: string[];
 }
@@ -26,24 +29,28 @@ export const REPLY_EXCERPT_LENGTH = 100;
 
 const PICTO = String.raw`\p{Extended_Pictographic}(?:\ufe0f|\p{Emoji_Modifier})?`;
 /** Exactly one emoji: a keycap, a flag, or a pictograph with optional variation, skin tone and ZWJ parts. */
-export const emoji = z
+const unicodeEmoji = z
   .string()
   .max(16)
   .regex(new RegExp(String.raw`^(?:[#*0-9]\ufe0f?\u20e3|\p{Regional_Indicator}{2}|${PICTO}(?:\u200d${PICTO})*)$`, "u"), "Pick an emoji.");
+
+export const emoji = z.union([unicodeEmoji, z.string().regex(new RegExp(`^${ASSET_TOKEN_SOURCE}$`)).refine((value) => assetTokens(value)[0]?.kind === "emoji", "Pick an emoji.")]);
 
 export async function reactionsFor(messageIds: string[]): Promise<Map<string, ReactionView[]>> {
   const byMessage = new Map<string, ReactionView[]>();
   if (messageIds.length === 0) return byMessage;
   const rows = await db
-    .select({ messageId: reaction.messageId, emoji: reaction.emoji, userId: reaction.userId })
+    .select({ messageId: reaction.messageId, emoji: reaction.emoji, userId: reaction.userId, channelId: message.channelId })
     .from(reaction)
+    .innerJoin(message, eq(message.id, reaction.messageId))
     .where(inArray(reaction.messageId, messageIds))
     .orderBy(asc(reaction.createdAt));
-  for (const r of rows) {
+  const assets = await assetsForMessages(rows.map((r, index) => ({ id: String(index), channelId: r.channelId, content: r.emoji })));
+  for (const [index, r] of rows.entries()) {
     const list = byMessage.get(r.messageId) ?? [];
     const entry = list.find((e) => e.emoji === r.emoji);
     if (entry) entry.userIds.push(r.userId);
-    else list.push({ emoji: r.emoji, userIds: [r.userId] });
+    else list.push({ emoji: r.emoji, userIds: [r.userId], ...(assets.get(String(index))?.[0] ? { asset: assets.get(String(index))![0] } : {}) });
     byMessage.set(r.messageId, list);
   }
   return byMessage;

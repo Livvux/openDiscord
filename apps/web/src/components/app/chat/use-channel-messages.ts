@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { assetTokens, type AssetView } from "@/lib/community-assets";
 import type { MessagePage, MessageView } from "@/server/messages";
 import { applyResync, mergeMessages, syncReplies, type LoadedMessages } from "@/lib/merge-messages";
 import { useRealtime } from "../realtime-provider";
@@ -17,6 +18,7 @@ async function fetchPage(channelId: string, threadId: string | null, before?: st
 /** Messages of a channel's main list, or of one thread when `threadId` is set; kept live from the stream. */
 export function useChannelMessages(channelId: string, initialPage: MessagePage, threadId: string | null = null) {
   const { subscribe } = useRealtime();
+  const libraryGeneration = useRef(0);
   const [state, setState] = useState<LoadedMessages>(initialPage);
   const { messages, hasMore } = state;
   const setMessages = useCallback(
@@ -46,6 +48,23 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
           case "message.deleted":
             if (event.channelId === channelId) setMessages((m) => syncReplies(m.filter((x) => x.id !== event.messageId), { deletedId: event.messageId }));
             break;
+          case "assets.changed": {
+            const generation = ++libraryGeneration.current;
+            void fetch(`/api/channels/${channelId}/assets`, { cache: "no-store" })
+              .then(async (response) => {
+                if (!response.ok) return;
+                const library = await response.json() as AssetView[];
+                if (generation !== libraryGeneration.current) return;
+                const resolve = (content: string) => assetTokens(content).flatMap((ref) => {
+                  const asset = library.find((asset) => asset.id === ref.id && asset.name === ref.name && asset.kind === ref.kind);
+                  return asset ? [asset] : [];
+                });
+                setMessages((messages) => messages.map((message) => ({ ...message, assets: resolve(message.content),
+                  reactions: message.reactions.map((reaction) => ({ emoji: reaction.emoji, userIds: reaction.userIds, asset: resolve(reaction.emoji)[0] })),
+                })));
+              }).catch(() => {});
+            break;
+          }
           case "resync":
             // Catch up on anything missed while disconnected.
             fetchPage(channelId, threadId).then(

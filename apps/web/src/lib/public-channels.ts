@@ -1,0 +1,1 @@
+export const PUBLIC_POST_NOTICE = "Public channel: your display name, text and timestamp are visible to everyone, searchable, and may remain in third-party caches. Blocks and community bans cannot hide public posts from anonymous readers. Text only; no private attachments, replies, threads or community images.";

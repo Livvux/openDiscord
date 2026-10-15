@@ -1,3 +1,4 @@
+import { assetText } from "@/lib/community-assets";
 // Bots and incoming webhooks. A bot is a member like anyone else: its roles decide what it may do,
 // and the public API calls the same services as the app. A webhook can only post plain messages into
 // its one channel. Tokens are shown once and stored as SHA-256 hashes (they are high-entropy secrets).
@@ -15,6 +16,7 @@ import { parseMentionIds } from "./mentions";
 import { getMessageForBroadcast, RATE_LIMIT, type MessageView } from "./messages";
 import { Permission, resolveAuthority } from "./permissions";
 import { publish } from "./realtime";
+import { checkPublicPost, publicText, snapshotPublicPost } from "./public-channels";
 import { messageContent, parse, uuid } from "./validation";
 
 export const MAX_INTEGRATIONS = 25;
@@ -126,7 +128,7 @@ export async function requireBot(headers: Headers): Promise<{ userId: string }> 
   return { userId: bot.userId };
 }
 
-const webhookBody = z.object({ content: messageContent });
+const webhookBody = z.object({ content: messageContent, publicGeneration: z.uuid().nullish() });
 
 /** Posts a plain message through a webhook. Mentions become plain text: webhooks can't ping or badge anyone. */
 /** `<@id>` → `@Name` for members of the community (others become "@member"). */
@@ -145,7 +147,7 @@ export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawB
   const hook = await findByToken("webhook", token);
   // Wrong id/token pairs look exactly like unknown webhooks.
   if (!hook || hook.id !== id || !hook.channelId) throw notFound("Webhook not found.");
-  const { content } = parse(webhookBody, rawBody);
+  const { content, publicGeneration } = parse(webhookBody, rawBody);
   await consume(`webhook:${hook.id}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000);
   const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);
   const [{ recent }] = await db.select({ recent: count() }).from(message)
@@ -153,9 +155,20 @@ export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawB
   if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "This webhook is posting too quickly.");
   // Webhooks hold no permissions, so AutoMod always applies to them.
   await enforceAutomod(hook.communityId, hook.userId, resolveAuthority(false, []), content);
-  const [created] = await db.insert(message)
-    .values({ channelId: hook.channelId, authorId: hook.userId, content: await mentionsAsText(hook.communityId, content) })
-    .returning({ id: message.id });
+  const created = await db.transaction(async (tx) => {
+    await lockCommunity(tx, hook.communityId);
+    const [current] = await tx.select({ id: integration.id }).from(integration)
+      .innerJoin(community, eq(community.id, integration.communityId))
+      .where(and(eq(integration.id, hook.id), isNull(integration.revokedAt), isNull(community.suspendedAt)));
+    if (!current) throw notFound("Webhook not found.");
+    await assertActiveUser(hook.userId, tx);
+    const publication = await checkPublicPost(tx, hook.channelId!, publicGeneration, content);
+    // Public sends never resolve private member names before snapshotting.
+    const text = publication ? publicText(content) : assetText(await mentionsAsText(hook.communityId, content));
+    const [row] = await tx.insert(message).values({ channelId: hook.channelId!, authorId: hook.userId, content: text }).returning();
+    if (publication) await snapshotPublicPost(tx, row);
+    return row;
+  });
   await publish({ type: "message.created", communityId: hook.communityId, channelId: hook.channelId, messageId: created.id });
   return (await getMessageForBroadcast(created.id))!.message;
 }

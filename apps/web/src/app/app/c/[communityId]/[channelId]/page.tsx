@@ -1,3 +1,5 @@
+import { publicChannelState } from "@/server/public-channels";
+import { PublicChannelControls } from "@/components/app/public-channel-controls";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog";
@@ -29,7 +31,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
   const channel = view.channels.find((c) => c.id === channelId);
   // Channel from another community, or deleted: 404 without revealing which.
   if (!channel) notFound();
-  const [page, blocked] = await Promise.all([listMessages(user.id, channelId), blockedIds(user.id)]);
+  const [page, blocked, publication] = await Promise.all([listMessages(user.id, channelId), blockedIds(user.id), publicChannelState(user.id, channelId)]);
 
   return (
     <>
@@ -54,6 +56,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
           )}
         </div>
       </header>
+      {publication && <PublicChannelControls channelId={channel.id} unpublished={publication.unpublished} isOwner={view.isOwner} />}
       {channel.kind === "voice" ? (
         <VoiceRoom
           key={channel.id}
@@ -67,7 +70,8 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         channel={channel}
         initialPage={page}
         currentUserId={user.id}
-        canSend={has(channel, Permission.SendMessages)}
+        canSend={has(channel, Permission.SendMessages) && !publication?.unpublished}
+        publicGeneration={publication && !publication.unpublished ? publication.generation : null}
         canModerate={has(channel, Permission.ManageMessages)}
         mediaEnabled={mediaEnabled}
         communityId={view.id}

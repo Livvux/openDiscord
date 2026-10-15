@@ -54,7 +54,8 @@
 - [x] Add minimal readiness checks and protected/operator maintenance execution.
 - [x] Configure production scheduling, encrypted off-host backups and alerts, with backups and reversible changes.
 - [x] Rehearse production-data restore remotely in isolation.
-- [ ] Validate TURN and physical-device acceptance separately.
+- [x] Validate production TURN/TLS relay transport separately with two real Chromium clients and restricted egress.
+- [ ] Complete physical-device media acceptance.
 - [x] Deploy verified increments #29, #31, #32 and #33; verify public edge and runtime revision. Future increments retain this gate.
 
 ### Task 5: Community trust
@@ -91,10 +92,23 @@
 - Cloudflare configuration now disables injected RUM only for opendiscord.app. API readback and live browser DOM/network checks on funding and sign-in found no Cloudflare Analytics script/request after propagation; CSP was not relaxed.
 - [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation. Exact-head CI 38778505661 passed at 77ffba8; merged and deployed as 90920fe. Public browser verified approved operator details and the required age checkbox; ready200 and environment mode0600. No date of birth or identity document is collected. External legal review remains open.
 - [PR #30](https://github.com/Livvux/openDiscord/pull/30): Matrix crypto WASM18.9.0 encrypted DMs merged as9afba57 after exact-head CI38785473940 passed lint/types, 268 tests (5 existing skips), production/Docker builds and43 browser checks (22 existing conditional skips). Desktop/mobile genuine SAS, offline delivery, bounded recovery, transfer retry after aborted storage, replay/tamper and explicit identity reset passed; independent internal security/TypeScript reviews approved. Production container restarted18:39:13UTC with28 migrations; public readiness200, protected messages route redirects to sign-in, mobile sign-in has no overflow or injected analytics, environment0600. This is deployment/readiness evidence, not a real-user production conversation or external cryptographic audit. Voice E2EE has not shipped.
-- SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, TURN, physical-device voice and push delivery remain separate acceptance checks.
+- SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, physical-device voice and push delivery remain separate acceptance checks.
 
 ### Auth key rotation evidence (2026-10-15)
 
 - [PR #36](https://github.com/Livvux/openDiscord/pull/36) exposes Better Auth1.7.7 native versioned encryption keys with sanitized configuration validation and Compose passthrough. Independent TypeScript and security reviews approved ace7a8e.
 - Exact-head CI38780435291 passed lint, types, migrations, unit/integration, encrypted restore, production/Docker builds and desktop/mobile browser checks. Native PostgreSQL integration proves legacy/previous-version TOTP and backup-code decryption, rejected retired keys and a real authenticator challenge after rotation. Browser auth/2FA flows run with disposable versioned keys.
 - Merged and deployed as b266d70; readiness returned200 and the public mobile sign-in page was checked. Production key values were not changed. This delivers rotation support, not an actual primary-key change or automatic key retirement; legacy ciphertext and retained backups still need their original keys.
+
+
+### Complete private archive release and TURN transport evidence (2026-10-15)
+
+- [PR #39](https://github.com/Livvux/openDiscord/pull/39) merged and deployed as `bca6372aaa9679e9add37b587403d6e2da4e154d` at 19:46:38 UTC after a fresh verified private production backup. Exact implementation head `fa97b4c`, CI38795399969: 280 unit/integration tests passed, 5 conditional skips; 45 browser tests passed, 22 conditional skips, no flaky results. Owner-only complete private archives are released; their earlier draft status is superseded.
+- The official TURN endpoint is persisted through Dokploy and a dedicated Traefik SNI route, with public DNS and valid TLS for `turn.opendiscord.app`. Two isolated Chromium clients published synthetic audio through the production SFU while an isolated guest firewall allowed fresh external traffic only over TCP443. Both received positive, increasing audio bytes and decoded samples. Gathered candidates were exclusively relay; selected candidate stats reported `prflx` over the TLS relay and exact TURN URL, which is recorded without relabeling. An invalid-credential control completed gathering with zero relay candidates. Temporary rooms, credentials, browsers and guest firewall rules were cleaned up.
+- This proves controlled Chromium TURN/TLS transport connectivity. It does not establish voice E2EE, participant trust, physical-device/browser coverage, arbitrary firewall compatibility, credential-expiry timing or capacity. The isolated guest needed a private DNS mapping from independently verified public records; its normal DNS operation was not accepted by this proof. TURN route backup inclusion is tracked separately in PR #43.
+
+### Community asset implementation evidence (draft PR #41)
+
+- Private static emoji/sticker management, composer/rendering/reactions, community-bound immutable references, active-member delivery and atomic storage cleanup are implemented. JSON v2 has readable fallbacks, gzip archive v3 carries the entire live library and creates fresh IDs during atomic import, and personal export v7 distinguishes uploader attribution from community ownership.
+- Independent SQL/storage and code reviews found predicate and stale-reference defects that were corrected. A separate security review required exact-Origin checks on cookie-authenticated upload/delete, now enforced before authentication or body reads with route regressions. No unresolved confirmed security blocker remained in that scoped review; this is not an external audit.
+- Earlier implementation head `ed03adc`, CI38795896195, passed 296 unit/integration tests (5 conditional skips), 47 browser tests (22 conditional skips), restore rehearsal, production and Docker builds. It includes desktop/mobile manager library/picker/reaction/deletion PNG evidence. Later member/archive browser coverage and final origin/parser changes require their own exact-head CI. PR #41 remains a draft; migration 0028 has not been applied to production and no asset release is claimed here.
