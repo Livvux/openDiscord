@@ -13,6 +13,7 @@ import { acceptInvite, createCommunity, createInvite } from "@/server/communitie
 import { registerDmDevice } from "@/server/direct-messages";
 import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, leaveVoiceControl } from "@/server/voice-control";
 import { testUsers } from "./helpers";
+import { PublicServicePeer } from "./fixtures/voice-service-peer";
 
 // Internal real PostgreSQL service only. The sole fake is Node's absent browser Web Lock manager.
 const users = testUsers();
@@ -93,6 +94,26 @@ async function verify(a: Endpoint, b: Endpoint) {
   expect((await state(a, b)).done).toBe(true); expect((await state(b, a)).done).toBe(true);
   await a.owner.admit(b.snapshot.memberId); await b.owner.admit(a.snapshot.memberId);
 }
+async function verifyPublicPeer(a: Endpoint, b: Endpoint, peer: PublicServicePeer) {
+  await peer.query();
+  const handle = await a.owner.requestVerification(b.snapshot.memberId); await peer.receive();
+  const ownMember = a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!;
+  const request = peer.verification(ownMember), ready = request.acceptWithMethods([C.VerificationMethod.SasV1]);
+  if (!ready) throw new Error("Missing genuine peer SAS ready.");
+  await peer.out(ready); await a.owner.receive();
+  await a.owner.verificationStep(handle, "start"); await peer.receive();
+  const sas = peer.sas(ownMember), accept = sas.accept(); if (accept) await peer.out(accept);
+  await a.owner.receive(); await peer.receive(); await a.owner.receive();
+  const nativeState = await state(a, b);
+  expect(nativeState.emojiIndices).toHaveLength(7); expect(nativeState.emojiIndices).toEqual(Array.from(sas.emojiIndex()!));
+  expect(sas.decimals()).toHaveLength(3);
+  await a.owner.verificationStep(handle, "confirm");
+  for (const output of await sas.confirm()) await peer.out(output);
+  for (let round = 0; round < 3; round++) { await a.owner.receive(); await peer.receive(); }
+  await a.owner.query([a.snapshot.memberId, b.snapshot.memberId]); await peer.query();
+  expect((await state(a, b)).done).toBe(true); expect(sas.isDone()).toBe(true);
+  await a.owner.admit(b.snapshot.memberId);
+}
 async function context(a: Endpoint, b: Endpoint) {
   const epochId = randomUUID(), ids = [a.snapshot.memberId, b.snapshot.memberId];
   await a.owner.setControlContext(epochId, ids); await b.owner.setControlContext(epochId, ids);
@@ -115,6 +136,25 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     const reverse = material(b, a, epoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
     expect(await dmBaseline()).toEqual(baseline);
     expect(a.calls.some(c => c.request.kind === "claim")).toBe(true);
+  }, 30_000);
+
+  for (const change of ["generation", "epochId", "audience"] as const) it(`rejects separately ${change}-only stale payload after genuine verified Olm decryption`, async () => {
+    const [a, b] = await fixture(2, 1);
+    const peer = await PublicServicePeer.create(b.snapshot, input => handleVoiceCrypto(auth(b), { ...input.binding, request: input.request }));
+    try {
+      await verifyPublicPeer(a, b, peer);
+      const epoch = randomUUID(); await a.owner.setControlContext(epoch, [a.snapshot.memberId, b.snapshot.memberId]);
+      const positive = material(b, a, epoch);
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, positive);
+      expect(await a.owner.receive()).toEqual([positive]);
+      const invalid = { ...positive, transaction: randomUUID(), [change]: change === "generation" ? positive.generation + 1 : change === "epochId" ? randomUUID() : [positive.sender] };
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, invalid);
+      const sends = a.calls.filter(c => c.request.kind === "send").length;
+      await expect(a.owner.receive()).rejects.toThrow(change === "audience" ? "audience mismatch" : "Stale voice control binding");
+      expect(a.calls.filter(c => c.request.kind === "send")).toHaveLength(sends);
+      expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(a.owner.admit(b.snapshot.memberId)).rejects.toThrow("closed");
+    } finally { peer.close(); }
   }, 30_000);
 
   for (const change of ["generation", "epoch", "audience"] as const) it(`fences a genuinely decrypted control across an ack-delivery ${change} change`, async () => {
@@ -143,7 +183,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
   }, 30_000);
 
   it("re-dispatches a genuine pending native claim into actual current-generation absence during transition", async () => {
-    const [a, b] = await fixture(); await verify(a, b); const epoch = await context(a, b);
+    const [a, b, c] = await fixture(3); await verify(a, b); await verify(a, c); const epoch = await context(a, b);
     const entered = deferred(), release = deferred(); let paused = false;
     const responses: { input: Dispatch; response: unknown }[] = [];
     a.before = async input => {
@@ -166,8 +206,13 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     const prekeys = await db.select().from(voicePrekey);
     expect(await handleVoiceCrypto(auth(a), { ...fresh.input.binding, request: fresh.input.request })).toEqual(fresh.response);
     expect(await db.select().from(voicePrekey)).toEqual(prekeys);
-    release.resolve(); expect(await outcome).toMatchObject({ code: "conflict" });
-    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+    release.resolve(); expect(await outcome).toBeInstanceOf(VoiceGenerationInterrupted);
+    expect(a.fence).not.toHaveBeenCalledWith("transport-or-completion-failure");
+    await refresh([c]);
+    const currentEpoch = await context(a, c), forward = material(a, c, currentEpoch);
+    await a.owner.sendControl(forward); expect(await c.owner.receive()).toEqual([forward]);
+    const reverse = material(c, a, currentEpoch);
+    await c.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
   }, 30_000);
 
   it("processes genuine native query device absence without invented keys or a busy loop", async () => {
@@ -199,8 +244,8 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(await db.$count(voiceControlMailbox)).toBe(count);
   });
 
-  for (const phase of ["before-commit", "after-commit"] as const) it(`serializes late ${phase} send with real retirement and exactly one native completion`, async () => {
-    const [a, b] = await fixture();
+  for (const targetState of ["removed", "current"] as const) for (const phase of ["before-commit", "after-commit"] as const) it(`serializes late ${phase} send to ${targetState} target with real retirement and exactly one native completion`, async () => {
+    const [a, b, c] = await fixture(3);
     const entered = deferred(), release = deferred(), completing = deferred(), finish = deferred();
     let target: string | undefined;
     const completions: string[] = [];
@@ -220,7 +265,8 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     const outcome = request.then(value => ({ value }), error => ({ error: error as unknown }));
     await entered.promise;
     const originalSend = a.calls.find(c => c.request.kind === "send")!;
-    await leaveVoiceControl(auth(b), binding(b));
+    const departing = targetState === "removed" ? b : c;
+    await leaveVoiceControl(auth(departing), binding(departing));
     a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
     const transition = a.owner.transition(a.snapshot);
     await completing.promise;
@@ -238,6 +284,38 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(retired.request.requestId).not.toBe(originalSend.request.requestId);
     expect(retired.binding.expectedGeneration).toBe(a.snapshot.generation);
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+  }, 30_000);
+
+  it("completes genuine historical send before delayed real retirement response exactly once", async () => {
+    const [a, b, c] = await fixture(3);
+    const sent = deferred(), releaseSend = deferred(), retired = deferred(), releaseRetire = deferred(), completed = deferred();
+    let id: string | undefined;
+    const completions: string[] = [], original = C.OlmMachine.prototype.markRequestAsSent;
+    a.after = async input => {
+      if (input.request.kind === "send" && input.request.eventType === "m.key.verification.request") { id = input.request.nativeRequestId; sent.resolve(); await releaseSend.promise; }
+      if (input.request.kind === "retire" && input.request.nativeRequestId === id) { retired.resolve(); await releaseRetire.promise; }
+    };
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, nativeId, type, response) {
+      if (nativeId === id) completions.push(nativeId);
+      const result = await original.call(this, nativeId, type, response);
+      if (nativeId === id) completed.resolve();
+      return result;
+    });
+    const requested = a.owner.requestVerification(b.snapshot.memberId);
+    const outcome = requested.then(value => ({ value }), error => ({ error: error as unknown }));
+    await sent.promise;
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(1);
+    await leaveVoiceControl(auth(c), binding(c));
+    a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
+    const transition = a.owner.transition(a.snapshot); await retired.promise;
+    releaseSend.resolve(); await completed.promise;
+    expect(completions).toEqual([id]);
+    releaseRetire.resolve(); await transition;
+    expect(await outcome).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
+    expect(completions).toEqual([id]);
+    a.after = undefined;
+    expect(await a.owner.requestVerification(b.snapshot.memberId)).toBeTruthy();
+    expect(a.calls.at(-1)?.request.kind).toBe("send");
   }, 30_000);
 
   it("holds the account guard until native cleanup completes after lifetime abort", async () => {
