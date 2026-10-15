@@ -21,6 +21,8 @@ class ObservedWorker extends StrictVoiceWorker {
   readonly trace: TraceEntry[] = [];
   readonly frames: FrameCount[] = [];
   private readonly posted = new Set<string>();
+  private readonly observed = new Set<string>();
+  private readonly observers = new Map<string, Set<() => void>>();
   private localCommand = 0;
   fence = false;
   private sequence = 0;
@@ -36,10 +38,26 @@ class ObservedWorker extends StrictVoiceWorker {
         if (!this.localCommand || (!this.diagnostic && this.posted.size !== this.expected.size)) { this.refuse("Invalid fresh-worker queue fence."); return; }
         this.fence = true;
       }
+      this.observed.add(data.participantIdentity);
+      this.observers.get(data.participantIdentity)?.forEach((done) => done());
     });
   }
+  override async waitUntilEnabled(identity: string, timeoutMs = 5000): Promise<void> {
+    const deadline = performance.now() + timeoutMs;
+    await super.waitUntilEnabled(identity, timeoutMs);
+    // Worker dispatch can run promise continuations between listeners. Preserve the
+    // native guard and also wait for this observer to record that exact ACK.
+    if (!this.dead && !this.observed.has(identity)) await new Promise<void>((resolve) => {
+      const callbacks = this.observers.get(identity) ?? new Set<() => void>();
+      this.observers.set(identity, callbacks);
+      const done = () => { clearTimeout(timer); callbacks.delete(done); resolve(); };
+      const timer = setTimeout(() => { this.refuse("Native ACK observation timed out."); done(); }, Math.max(0, deadline - performance.now()));
+      callbacks.add(done);
+    });
+    if (this.dead || !this.observed.has(identity)) throw new Error("Native ACK observation unavailable.");
+  }
   mark(kind: string, identity: string, track?: string): void { if (this.trace.length < 200) this.trace.push({ sequence: ++this.sequence, kind, identity, ...(track ? { track } : {}) }); }
-  private refuse(reason: string): void { if (this.dead) return; this.dead = true; this.fence = false; this.failure(reason); super.terminate(); }
+  private refuse(reason: string): void { if (this.dead) return; this.dead = true; this.fence = false; this.observers.forEach((callbacks) => callbacks.forEach((done) => done())); this.failure(reason); super.terminate(); }
   override postMessage(message: unknown, transfer: Transferable[]): void;
   override postMessage(message: unknown, options?: StructuredSerializeOptions): void;
   override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void {
@@ -91,7 +109,7 @@ class ObservedWorker extends StrictVoiceWorker {
     }
     if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options);
   }
-  override terminate(): void { this.dead = true; this.fence = false; super.terminate(); }
+  override terminate(): void { this.dead = true; this.fence = false; this.observers.forEach((callbacks) => callbacks.forEach((done) => done())); super.terminate(); }
 }
 
 export class BrowserMedia {
