@@ -4,7 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, role, session } from "@/db/schema";
-import { voiceCallMember, voiceControlMailbox, voicePrekey, voiceSignature, voiceIdentity } from "@/db/voice-schema";
+import { voiceCallMember, voiceControlMailbox, voicePrekey, voiceSignature, voiceIdentity, voiceControlReceipt } from "@/db/voice-schema";
 import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport } from "@/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "@/lib/voice/owner-guard";
 import { voiceControlParty, VOICE_CONTROL_EVENT, type VoiceOwnerControl } from "@/lib/voice/owner-control";
@@ -29,7 +29,7 @@ function locks() {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
 }
-async function fixture(count = 2, nativeOwners = count) {
+async function fixture(count = 2, nativeOwners = count, beforeNative?: () => Promise<void>) {
   locks();
   const accounts = [];
   for (let i = 0; i < count; i++) {
@@ -53,6 +53,7 @@ async function fixture(count = 2, nativeOwners = count) {
     });
   }
   for (const endpoint of endpoints) endpoint.snapshot = await heartbeatVoiceControl(auth(endpoint), binding(endpoint));
+  await beforeNative?.();
   for (const endpoint of endpoints.slice(0, nativeOwners)) {
     endpoint.owner = await VoiceCryptoOwner.create({ accountId: endpoint.userId, guard: await acquireVoiceOwnerGuard(endpoint.userId), snapshot: endpoint.snapshot, lifetime: { signal: endpoint.lifetime.signal, assertCurrent() {} }, onFence: endpoint.fence, transport: async input => {
       endpoint.calls.push({ binding: structuredClone(input.binding), request: structuredClone(input.request), signal: input.signal });
@@ -133,13 +134,15 @@ function material(a: Endpoint, b: Endpoint, epochId: string): VoiceOwnerControl 
   const recipient = voiceControlParty(b.snapshot.members.find(m => m.memberId === b.snapshot.memberId)!);
   return { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: a.snapshot.callId, generation: a.snapshot.generation, epochId, sender, recipient, publisher: sender, audience: [sender, recipient].sort((x, y) => x.memberId.localeCompare(y.memberId)), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 9).toString("base64") };
 }
-async function dmBaseline() { return Promise.all([db.select().from(dmIdentity), db.select().from(dmKey), db.select().from(dmMailbox), db.select().from(dmMessage), db.select().from(dmSignature)]); }
+async function dmBaseline() { return Promise.all([db.select().from(dmDevice), db.select().from(dmIdentity), db.select().from(dmKey), db.select().from(dmMailbox), db.select().from(dmMessage), db.select().from(dmSignature)]); }
 afterEach(async () => { for (const release of barriers) release(); barriers.clear(); for (const owner of owners) await owner.close(); owners.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 afterAll(() => users.cleanup());
 
 describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice service", () => {
   it("completes two-owner genuine SAS, explicit admissions and bidirectional typed Olm controls without DM writes", async () => {
-    const [a, b] = await fixture(); const baseline = await dmBaseline();
+    let baseline: Awaited<ReturnType<typeof dmBaseline>> | undefined;
+    const [a, b] = await fixture(2, 2, async () => { baseline = await dmBaseline(); });
+    expect(baseline).toBeDefined();
     await verify(a, b); const epoch = await context(a, b);
     const forward = material(a, b, epoch); await a.owner.sendControl(forward); expect(await b.owner.receive()).toEqual([forward]);
     const reverse = material(b, a, epoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
@@ -356,6 +359,56 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     a.before = undefined; a.after = undefined;
     expect(await a.owner.requestVerification((targetState === "removed" ? c : b).snapshot.memberId)).toBeTruthy();
     expect(a.calls.at(-1)?.request.kind).toBe("send");
+  }, 30_000);
+
+  it("serializes a real uncommitted send against a queued leave before retiring its held committed response", async () => {
+    const [a, b, c] = await fixture(3); await verify(a, b); const epoch = await context(a, b);
+    const beforeCommit = deferred(), commit = deferred(), delivered = deferred(), response = deferred();
+    let paused = false, blockerPid: number | undefined, nativeId: string | undefined;
+    const complete: string[] = [], transaction = db.transaction.bind(db), mark = C.OlmMachine.prototype.markRequestAsSent;
+    vi.spyOn(db, "transaction").mockImplementation((callback, config) => transaction(async tx => {
+      const result = await callback(tx);
+      const disposition = typeof result === "object" && result !== null && "disposition" in result ? result.disposition : undefined;
+      if (!paused && typeof disposition === "object" && disposition !== null && "status" in disposition && disposition.status === "processed-current") {
+        paused = true;
+        const [connection] = await tx.select({ pid: sql<number>`pg_backend_pid()` }).from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
+        blockerPid = connection.pid;
+        beforeCommit.resolve(); await commit.promise;
+      }
+      return result;
+    }, config));
+    a.after = async input => { if (input.request.kind === "send" && input.request.eventType === "m.room.encrypted") { delivered.resolve(); await response.promise; } };
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, body) {
+      if (id === nativeId) complete.push(id);
+      return mark.call(this, id, type, body);
+    });
+    const sending = a.owner.sendControl(material(a, b, epoch)), sent = sending.then(() => undefined, error => error as unknown);
+    await beforeCommit.promise;
+    const original = a.calls.find(item => item.request.kind === "send" && item.request.eventType === "m.room.encrypted")!;
+    if (original.request.kind !== "send") throw new Error("Missing genuine encrypted native send.");
+    nativeId = original.request.nativeRequestId;
+    // The real mailbox write is still invisible outside the sender's held transaction.
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(0);
+    const leaving = leaveVoiceControl(auth(c), binding(c)).then(value => ({ value }), error => ({ error: error as unknown }));
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const { rows: [row] } = await db.$client.query<{ blocked: boolean }>("select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))) as blocked", [blockerPid]);
+      if (row.blocked) { blocked = true; break; }
+      await new Promise(done => setTimeout(done, 10));
+    }
+    expect(blocked).toBe(true);
+    commit.resolve(); await delivered.promise;
+    expect(await leaving).toMatchObject({ value: { removals: expect.arrayContaining([expect.objectContaining({ memberId: c.snapshot.memberId })]) } });
+    a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
+    expect(a.snapshot.generation).toBe(original.binding.expectedGeneration + 1);
+    const [receipt] = await db.select().from(voiceControlReceipt).where(and(eq(voiceControlReceipt.senderMemberId, a.snapshot.memberId), eq(voiceControlReceipt.requestId, original.request.requestId)));
+    expect(receipt.response).toEqual({ nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } });
+    await a.owner.transition(a.snapshot);
+    response.resolve(); expect(await sent).toBeInstanceOf(VoiceGenerationInterrupted);
+    expect(complete).toEqual([nativeId]);
+    a.after = undefined; await refresh([b]); const nextEpoch = await context(a, b), forward = material(a, b, nextEpoch);
+    await a.owner.sendControl(forward); expect(await b.owner.receive()).toEqual([forward]);
+    const reverse = material(b, a, nextEpoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
   }, 30_000);
 
   it("receives genuine historical send success before delayed real retirement response and completes exactly once", async () => {
