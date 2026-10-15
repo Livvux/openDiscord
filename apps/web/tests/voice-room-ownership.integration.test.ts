@@ -5,7 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { channel, session, member } from "@/db/schema";
 import { voiceCall, voiceSfuRoom, voiceCallMember, voiceIdentity } from "@/db/voice-schema";
-import { consumeVoiceRooms, retireOwnedVoiceRoom, voiceTransaction } from "@/server/voice-sfu";
+import { consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceTransaction } from "@/server/voice-sfu";
 import { createCommunity, deleteChannel, deleteCommunity } from "@/server/communities";
 import { registerDmDevice } from "@/server/direct-messages";
 import { joinVoiceControl, grantBoundVoiceMedia, handleVoiceCrypto, heartbeatVoiceControl, leaveVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
@@ -265,4 +265,41 @@ describe("legacy compatibility before coherent activation", () => {
     const result = timer.mock.results[index];
     if (result.type === "return") clearTimeout(result.value);
   });
+});
+
+
+it("rechecks session expiry after the observed real PostgreSQL SHARE wait before creating an owned room", async () => {
+  const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+  const expiresAt = new Date(Date.now() + 8000);
+  await db.update(session).set({ expiresAt }).where(eq(session.id, f.sessionId));
+  const barrier = await db.$client.connect();
+  let pending: Promise<void> | undefined;
+  try {
+    await barrier.query("begin");
+    const { rows: [{ pid }] } = await barrier.query<{ pid: number }>("select pg_backend_pid() as pid");
+    await barrier.query('select id from "session" where id = $1 for update', [f.sessionId]);
+    vi.mocked(RoomServiceClient.prototype.createRoom).mockClear();
+    const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant");
+    pending = createOwnedVoiceRoom(grant.roomName);
+    const outcome = pending.then(() => null, (error: unknown) => error);
+    const deadline = performance.now() + 4000;
+    let waiting = false;
+    while (performance.now() < deadline) {
+      const { rows } = await db.$client.query<{ waiting: boolean }>("select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid)) and wait_event_type = 'Lock') as waiting", [pid]);
+      if (rows[0].waiting) { waiting = true; break; }
+    }
+    expect(waiting).toBe(true);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(expiresAt.getTime() + 1);
+    await barrier.query("commit");
+    expect(await outcome).toMatchObject({ code: "forbidden" });
+    expect(RoomServiceClient.prototype.createRoom).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect((await owned(grant.roomName)).status).toBe("retired");
+  } finally {
+    await barrier.query("rollback");
+    await pending?.catch(() => {});
+    vi.useRealTimers();
+    barrier.release();
+  }
 });
