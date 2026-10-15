@@ -1,19 +1,19 @@
 const stages = [
   {
     label: "Now",
-    title: "Text chat beta",
-    items: ["Accounts and profiles", "Communities, channels, invites", "Roles, private channels, moderation", "Self-host with Docker"],
+    title: "Closed alpha",
+    items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API"],
     active: true,
   },
   {
     label: "Next",
     title: "Closer together",
-    items: ["Mentions and unread state", "Voice channels via LiveKit", "Direct messages", "Search, replies, reactions"],
+    items: ["End-to-end encrypted DMs", "Appeals and published rules", "Retention controls", "Self-hosting polish"],
   },
   {
     label: "Later",
     title: "Voice and beyond",
-    items: ["Video and screen sharing", "Threads, bots and webhooks", "Native apps", "Federation research"],
+    items: ["Custom emoji and stickers", "Native apps", "Federation research", "Community discovery"],
   },
 ];
 

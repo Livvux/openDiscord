@@ -6,17 +6,19 @@ Open-source community platform you can host yourself. *Communities belong to eve
 [opendiscord.app](https://opendiscord.app); every self-hosted install runs the same release
 and works without it.
 
-> **Status: early development — text-chat MVP.** Communities, channels, roles, invites, moderation,
-> realtime messaging, data export and account deletion, 2FA and passkeys work and are tested.
-> Voice, DMs, attachments and search are not built yet ([roadmap](docs/ROADMAP.md)).
-> **Nothing is end-to-end encrypted yet**: the operator of an instance can read community messages
-> ([privacy](docs/PRIVACY.md)). No external security audit has been done.
-> Name and marks are pending a trademark review, see [docs/brand](docs/brand/BRAND-GUIDELINES.md).
+> **Status: closed alpha.** Communities with private channels and role permissions, realtime chat with
+> mentions, unread state, replies, reactions, pins, threads, Markdown, search, images and files, voice and
+> video channels with screen sharing (optional LiveKit), presence, notifications (in-app, desktop, Web Push),
+> blocking, AutoMod, anti-raid controls, bots, webhooks and a public API, community export/import, GDPR
+> export and deletion, 2FA and passkeys — all covered by automated tests ([roadmap](docs/ROADMAP.md)).
+> **Direct messages are not built yet, and nothing is end-to-end encrypted**: the operator of an instance
+> can read community messages ([privacy](docs/PRIVACY.md)). No external security audit has been done.
 
 ## Stack
 
 Next.js (App Router) · PostgreSQL 18 + Drizzle · Better Auth · Tailwind CSS + shadcn/ui ·
-Server-Sent Events over Postgres LISTEN/NOTIFY · Docker Compose + Caddy
+Server-Sent Events over Postgres LISTEN/NOTIFY · Docker Compose + Caddy · optional LiveKit (voice/video),
+S3-compatible storage (attachments) and Web Push
 
 ## Self-host
 
