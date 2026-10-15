@@ -21,14 +21,13 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP and merged releases #12–#29 and #31–#33 in production
+`main` runs the text-chat MVP and merged releases #12–#29 and #31–#34 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
 
 Encrypted DMs remain in draft PR #30 and have not passed full runtime/browser acceptance. Public
-operator policies and 16-year signup self-attestation are under verification in PR #34. Neither is
-claimed deployed here. Voice E2EE, TURN, physical-device media, real Web Push delivery, external
+operator policies and required 16-year signup self-attestation shipped in PR #34. Voice E2EE, TURN, physical-device media, real Web Push delivery, external
 security/legal review and the remaining product items below are still open.
 
 ## Requirements matrix
@@ -119,8 +118,8 @@ encrypted (the SFU relays DTLS-SRTP).
 | Role-based moderation access | ✅ | |
 | Blocking and reporting | ✅ | Reporting of messages and communities with an instance-admin queue; personal blocking (messages collapsed, mentions silent, not disclosed to the blocked person). DM refusal ships with DMs |
 | Anti-harassment, anti-phishing, anti-grooming | 🟡 | Blocking, reporting and per-community AutoMod (blocked words, links) ✅; DM restrictions by default ship with DMs |
-| Minor protection and age safeguards | ❌ | **P1 legal review** for the official instance. Self-attested minimum age at sign-up as a baseline; no ID collection |
-| Rules for the official instance | ❌ | P2: published terms and community guidelines |
+| Minor protection and age safeguards | 🟡 | Required 16-year self-attestation on the official instance, enforced before signup. No DOB/ID collection; self-attestation is not proof of age. External legal review remains open |
+| Rules for the official instance | ✅ published | Public terms, guidelines, privacy notice and operator-supplied imprint; external legal review not claimed |
 
 ### 7. UX, performance and accessibility
 
@@ -181,7 +180,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, ~~bot accounts,
 incoming webhooks and a versioned public API (OpenAPI)~~ ✅, ~~Web Push notifications (VAPID)~~ ✅, ~~per-community export/import~~ ✅, ~~retention jobs~~ ✅, ~~ban explanations and appeals~~ ✅, ~~funding page and governance~~ ✅.
-Published operator rules and minimum-age attestation are under verification in #34; legal review remains external.
+Published operator rules and minimum-age attestation shipped in #34; legal review remains external.
 
 ### P3 — later
 

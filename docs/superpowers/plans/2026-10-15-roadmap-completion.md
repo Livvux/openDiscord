@@ -60,7 +60,7 @@
 ### Task 5: Community trust
 
 - [x] Design and implement scoped onboarding/rules and ban explanations/appeals with permission tests and UI flows.
-- [ ] Publish factual operator policies; track external legal review separately.
+- [x] Publish factual operator policies and 16-year self-attestation; external legal review remains open.
 
 ### Task 6: DMs and authenticated E2EE
 
@@ -89,6 +89,6 @@
 - Production encrypted off-host backup readback matched SHA-256; private bucket, 30-day lifecycle and daily timer configured. Two real isolated production-data restores succeeded; the post-release archive restored 34 public tables and 25 migrations. That archive had zero attachment references, so it does not prove restoration of existing media. Temporary database, recovery-key input and probe user were removed.
 - Public health/readiness return 200. Maintenance is scheduled hourly; its first apply minimized one legacy session's metadata and deleted no active records. Health and backup failure/staleness monitors run on separate hosts; SMTP accepted test notifications to the existing operator address. Inbox delivery is not proven by SMTP acceptance alone.
 - Cloudflare configuration now disables injected RUM only for opendiscord.app. API readback and live browser DOM/network checks on funding and sign-in found no Cloudflare Analytics script/request after propagation; CSP was not relaxed.
-- [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation are under verification, not deployed at this ledger revision. No date of birth or identity document is collected. External legal review remains open.
+- [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation. Exact-head CI 38778505661 passed at 77ffba8; merged and deployed as 90920fe. Public browser verified approved operator details and the required age checkbox; ready200 and environment mode0600. No date of birth or identity document is collected. External legal review remains open.
 - [PR #30](https://github.com/Livvux/openDiscord/pull/30): encrypted DMs with Matrix crypto WASM18.9.0 are still in implementation and runtime verification. No plaintext fallback or completed/audited E2EE claim is made. Voice E2EE has not shipped.
 - SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, TURN, physical-device voice and push delivery remain separate acceptance checks.
