@@ -29,7 +29,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   const invitePath = await createInviteLink(owner);
   await owner.goto(settingsPath);
   const rules = owner.locator('section[aria-labelledby="community-rules"]');
-  await rules.getByLabel("Community rules", { exact: true }).fill("Be respectful. <b>Plain text rules</b>");
+  await rules.getByRole("textbox", { name: "Community rules", exact: true }).fill("Be respectful. <b>Plain text rules</b>");
   await rules.getByLabel("Require acknowledgement").check();
   await rules.getByRole("button", { name: "Save community rules" }).click();
   await expect(rules.getByRole("status")).toHaveText("Rules saved.");
@@ -45,7 +45,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await expect(member.getByRole("heading", { name: "general", exact: true })).toBeVisible();
   await sendMessage(member, "I joined after acknowledging.");
 
-  await rules.getByLabel("Community rules", { exact: true }).fill("Updated: respect privacy.");
+  await rules.getByRole("textbox", { name: "Community rules", exact: true }).fill("Updated: respect privacy.");
   await rules.getByRole("button", { name: "Save community rules" }).click();
   await expect(rules.getByRole("status")).toHaveText("Rules saved.");
   await member.reload();
