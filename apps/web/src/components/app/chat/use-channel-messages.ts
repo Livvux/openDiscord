@@ -42,7 +42,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage) 
             );
             break;
         }
-      }),
+      }, { replay: true }),
     [channelId, subscribe, setMessages],
   );
 
