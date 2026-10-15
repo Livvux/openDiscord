@@ -49,3 +49,34 @@ Monitor both failed jobs and backup freshness. A verified ciphertext upload is n
 production-data restore; record the recovery rehearsal separately. Never restore a recovery bundle
 into the live database as a test. Local-volume attachments require extending this S3-oriented job
 before changing the production storage backend.
+
+
+## Operator alerts
+
+`scripts/operator-monitor.py` runs as a short systemd oneshot, independently of the application.
+A monitor on a separate host checks the public HTTPS health/readiness endpoints every minute;
+three consecutive failures trigger an operator email. On the production host, a five-minute check
+alerts on failed backup jobs or a success marker older than 30 hours. A successful backup marker
+is written only after a complete encrypted off-host readback. It does not continuously prove that
+the object remains available later. Monitor state suppresses repeat emails for one hour and sends
+a recovery email after a notified failure resolves.
+
+The owner-only JSON configuration contains `mode` (`health` or `backup`), `smtp_url`, `from`, and
+`to`; the file must belong to the executing user and have no group/other permissions. SMTP uses
+verified TLS (implicit TLS for `smtps`, mandatory STARTTLS for `smtp`). Credentials are never
+included in check output or exception logs. State is stored in `/var/lib/opendiscord-monitor`.
+Run `python3 scripts/operator-monitor.py --config /etc/opendiscord-monitor/config.json --test-mail`
+to test SMTP submission. SMTP acceptance proves submission, not inbox delivery. Timer status and
+mail delivery should be checked independently; a failure of the monitoring host or SMTP provider
+can itself prevent delivery. Use a systemd timeout of 90 seconds and serialize runs with the
+script's lock. No alerts contain user/message contents.
+
+### Hosted-instance restore evidence, 2026-10-15
+
+The actual encrypted off-host production backup was decrypted and restored with PostgreSQL 18.6
+on a separate host. The temporary service had no network access, a dedicated temporary user,
+read-only host filesystems and a Unix socket only. Recovery completed with 31 public tables and
+23 migrations. This archive contained zero attachment references; production-media recovery with
+existing attachments remains a separate acceptance case. The temporary database, recovery-key
+credential, encrypted input copy and temporary user were removed and their absence checked.
+This is operational recovery evidence, not a security audit.
