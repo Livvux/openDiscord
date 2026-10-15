@@ -7,7 +7,7 @@ import { requireUser } from "@/server/session";
 export async function GET(request: Request, ctx: RouteContext<"/api/communities/[communityId]/export">) {
   try {
     const user = await requireUser(request.headers);
-    consume(`export:${user.id}`, 5, 60 * 60_000);
+    await consume(`export:${user.id}`, 5, 60 * 60_000);
     const { communityId } = await ctx.params;
     const data = await exportCommunity(user.id, communityId);
     return new Response(JSON.stringify(data), {

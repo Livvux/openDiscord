@@ -6,6 +6,7 @@ import { acceptInvite, createChannel, createCommunity, createInvite, getCommunit
 import { editMessage, listMessages, listPinned, sendMessage, setPinned } from "@/server/messages";
 import { createRole, listAuditLog, listRoles } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
+import { getCommunityRules, updateCommunityRules } from "@/server/community-trust";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
@@ -28,6 +29,7 @@ beforeAll(async () => {
   await sendMessage(owner, generalId, "welcome!", [], root.id);
   await sendMessage(owner, generalId, "thread reply", [], null, root.id);
   await setPinned(owner, root.id, true);
+  await updateCommunityRules(owner, communityId, { text: "Respect the community.", required: true });
 });
 afterAll(() => users.cleanup());
 
@@ -40,6 +42,7 @@ describe("community export", () => {
 
   it("contains structure and messages, with mentions as plain names and no account ids", () => {
     expect(exported.community.name).toBe("Moving Out");
+    expect(exported.community).toMatchObject({ rules: "Respect the community.", rulesRequired: true });
     expect(exported.channels.map((c) => c.name)).toEqual(["general", "staff-room"]);
     expect(exported.messages.map((m) => [m.author, m.content])).toEqual([
       ["Mia", "hello @Owner"],
@@ -54,10 +57,16 @@ describe("community export", () => {
 describe("community import", () => {
   let imported: string;
 
+  it("accepts older version-one exports without rules", async () => {
+    const id = await importCommunity(importer, { ...exported, community: { name: "Legacy rules" } });
+    expect(await getCommunityRules(importer, id)).toMatchObject({ text: "", required: false });
+  });
+
   it("rebuilds roles, categories, channels, overrides and messages for the importer", async () => {
     imported = await importCommunity(importer, exported);
     const view = await getCommunityView(importer, imported);
     expect(view.isOwner).toBe(true);
+    expect(await getCommunityRules(importer, imported)).toMatchObject({ text: "Respect the community.", required: true, accepted: true });
     expect(view.categories.map((c) => c.name)).toEqual(["Staff"]);
     const staff = view.channels.find((c) => c.name === "staff-room")!;
     expect(staff.categoryId).toBe(view.categories[0].id);

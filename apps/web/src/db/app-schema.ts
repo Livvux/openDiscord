@@ -26,6 +26,9 @@ const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultN
 export const community = pgTable("community", {
   id: id(),
   name: text("name").notNull(),
+  rules: text("rules").notNull().default(""),
+  rulesVersion: integer("rules_version").notNull().default(0),
+  rulesRequired: boolean("rules_required").notNull().default(false),
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspensionReason: text("suspension_reason"),
   /** Set while invites are paused (by a manager, or automatically by raid protection). */
@@ -77,6 +80,7 @@ export const member = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+    rulesAcceptedVersion: integer("rules_accepted_version").notNull().default(0),
     /** "muted": no desktop notifications or unread dot for this community; mention badges stay. */
     notifications: text("notifications", { enum: ["mentions", "muted"] }).notNull().default("mentions"),
   },
@@ -262,6 +266,7 @@ export const invite = pgTable(
 export const ban = pgTable(
   "ban",
   {
+    id: uuid("id").notNull().default(sql`uuidv7()`).unique(),
     communityId: uuid("community_id")
       .notNull()
       .references(() => community.id, { onDelete: "cascade" }),
@@ -274,6 +279,27 @@ export const ban = pgTable(
   },
   (t) => [primaryKey({ columns: [t.communityId, t.userId] })],
 );
+
+/** Appeals are private to their author and ban-capable community moderators. A ban ID
+ * identifies an issuance; removing/reissuing a ban never attaches an old appeal to the new ban. */
+export const banAppeal = pgTable("ban_appeal", {
+  id: id(),
+  communityId: uuid("community_id").notNull().references(() => community.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  banId: uuid("ban_id").notNull(),
+  content: text("content").notNull(),
+  createdAt: createdAt(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolution: text("resolution", { enum: ["uphold", "unban"] }),
+  resolutionNote: text("resolution_note"),
+  resolvedBy: text("resolved_by").references(() => user.id, { onDelete: "set null" }),
+}, (t) => [
+  uniqueIndex("ban_appeal_issuance_idx").on(t.banId),
+  index("ban_appeal_community_idx").on(t.communityId, t.createdAt),
+  index("ban_appeal_resolved_idx").on(t.resolvedAt),
+  check("ban_appeal_content_length", sql`char_length(${t.content}) between 1 and 2000`),
+  check("ban_appeal_resolution", sql`(${t.resolvedAt} is null and ${t.resolution} is null) or (${t.resolvedAt} is not null and ${t.resolution} in ('uphold', 'unban'))`),
+]);
 
 /** Security- and moderation-relevant actions inside a community. Never stores message content. */
 export const auditLog = pgTable(

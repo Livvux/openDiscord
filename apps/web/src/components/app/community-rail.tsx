@@ -27,6 +27,7 @@ export async function CommunityRail() {
           <CreateCommunityDialog />
         </li>
       </ul>
+      <Link href="/app/restrictions" className="mb-4 rounded-xl p-2 text-xs hover:bg-white/5" aria-label="Your community restrictions">Bans</Link>
       {admin && <Link href="/app/admin" aria-label="Instance administration" className="mb-4 rounded-xl p-2 text-brand-mint hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"><ShieldIcon className="size-5" /></Link>}
       <Link
         href="/app/settings"

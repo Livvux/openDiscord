@@ -1,9 +1,10 @@
+import { requireBanReviewAuthority } from "./community-trust";
 import { getInstanceSettings } from "./instance-policy";
 // Members, roles, bans and the audit log. Every mutation re-checks authority inside a
 // transaction that locks the community row, so concurrent role changes can't race a kick.
-import { and, asc, count, desc, eq, gte, ilike, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, max, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLog, ban, member, memberRole, role, user } from "@/db/schema";
+import { auditLog, ban, banAppeal, member, memberRole, role, user } from "@/db/schema";
 import { loadAuthority, lockCommunity, requireMember, type Db } from "./access";
 import { forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
@@ -142,13 +143,10 @@ export async function unbanMember(actorId: string, rawCommunityId: unknown, rawT
     const [existing] = await tx.select().from(ban).where(and(eq(ban.communityId, communityId), eq(ban.userId, targetId)));
     if (!existing) throw notFound("That person is not banned.");
     // Lower-ranked moderators can't overturn a ban issued by someone above them.
-    if (existing.moderatorId && existing.moderatorId !== actorId) {
-      const issuer = await loadAuthority(tx, communityId, existing.moderatorId);
-      if (issuer && !outranks(authority, issuer) && !authority.isOwner) {
-        throw forbidden("This ban was issued by someone ranked above you.");
-      }
-    }
+    await requireBanReviewAuthority(tx, communityId, actorId, authority, existing.moderatorId);
     await tx.delete(ban).where(and(eq(ban.communityId, communityId), eq(ban.userId, targetId)));
+    await tx.update(banAppeal).set({ resolvedAt: new Date(), resolvedBy: actorId, resolution: "unban" })
+      .where(and(eq(banAppeal.communityId, communityId), eq(banAppeal.userId, targetId), eq(banAppeal.banId, existing.id), isNull(banAppeal.resolvedAt)));
     await tx.insert(auditLog).values({ communityId, actorId, action: "member.unban", targetId });
   });
 }

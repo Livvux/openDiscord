@@ -3,19 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
+import { sessionDeviceLabel } from "@/lib/session-device";
 
 interface SessionRow {
   id: string;
   token: string;
   userAgent?: string | null;
   createdAt: Date;
-}
-
-function describe(userAgent: string | null | undefined): string {
-  if (!userAgent) return "Unknown device";
-  const browser = /Firefox\//.test(userAgent) ? "Firefox" : /Edg\//.test(userAgent) ? "Edge" : /Chrome\//.test(userAgent) ? "Chrome" : /Safari\//.test(userAgent) ? "Safari" : "Browser";
-  const os = /Windows/.test(userAgent) ? "Windows" : /Android/.test(userAgent) ? "Android" : /iPhone|iPad/.test(userAgent) ? "iOS" : /Mac OS X/.test(userAgent) ? "macOS" : /Linux/.test(userAgent) ? "Linux" : "";
-  return os ? `${browser} on ${os}` : browser;
 }
 
 export function Sessions() {
@@ -49,7 +43,7 @@ export function Sessions() {
       {sessions.map((s) => (
         <li key={s.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
           <span>
-            {describe(s.userAgent)}
+            {sessionDeviceLabel(s.userAgent) ?? "Unknown device"}
             <span className="block text-xs text-muted-foreground" suppressHydrationWarning>
               Signed in {new Date(s.createdAt).toLocaleString()}
             </span>

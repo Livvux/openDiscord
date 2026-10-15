@@ -30,9 +30,11 @@ Redis pub/sub or NATS is the next step.
 Rate limiting for messages is a Postgres count over an indexed column. Better Auth's per-IP limits use
 a Postgres table too (`auth_rate_limit`, one atomic upsert per request), so they hold across replicas.
 Its keys are HMACs of "IP + path" with the server secret, so no IP address is stored; rows older than a
-day are purged. Better Auth's own database storage was not used because it stores the raw IP. The
-general mutation burst limit and stream caps are still in memory per process. **Revisit when** those
-need to be shared: move them to the same table or add Redis.
+day are purged. Better Auth's own database storage was not used because it stores the raw IP.
+Application mutation, read, upload and integration limits use atomic sliding windows in
+`application_rate_limit`. SSE slots use transaction-serialized `stream_lease` rows: eight personal
+and eight community streams per user across all replicas. Disconnects release leases; a dead worker
+loses its slots after ten minutes plus a thirty-second cleanup allowance. No extra service is needed.
 
 ## D5. Better Auth for authentication
 

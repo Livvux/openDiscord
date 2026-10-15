@@ -10,7 +10,7 @@ import type { z } from "zod";
 async function run<T>(fn: (actor: admin.AdminActor) => Promise<T>, refreshUi = true) {
   return toResult(async () => {
     const user = await requireUser();
-    consume(`admin:${user.id}`, MUTATION_LIMIT.max, MUTATION_LIMIT.windowMs);
+    await consume(`admin:${user.id}`, MUTATION_LIMIT.max, MUTATION_LIMIT.windowMs);
     const result = await fn({ userId: user.id, sessionId: user.sessionId });
     if (refreshUi) refresh();
     return result;

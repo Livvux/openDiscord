@@ -61,11 +61,11 @@ describe("caps", () => {
     await expect(createChannel(owner, full, "one-too-many")).rejects.toMatchObject({ code: "conflict" });
   });
 
-  it("limits bursts of mutations", () => {
+  it("limits bursts of mutations", async () => {
     const key = `test:${randomUUID()}`;
-    for (let i = 0; i < 3; i++) consume(key, 3, 1000, 10_000 + i);
-    expect(() => consume(key, 3, 1000, 10_500)).toThrow(/too often/);
-    expect(() => consume(key, 3, 1000, 12_000)).not.toThrow();
+    for (let i = 0; i < 3; i++) await consume(key, 3, 1000, 10_000 + i);
+    await expect(consume(key, 3, 1000, 10_500)).rejects.toThrow(/too often/);
+    await expect(consume(key, 3, 1000, 12_000)).resolves.toBeUndefined();
   });
 });
 

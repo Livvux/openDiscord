@@ -264,6 +264,9 @@ export interface InvitePreview {
   communityName: string;
   memberCount: number;
   paused: boolean;
+  rules: string;
+  rulesVersion: number;
+  rulesRequired: boolean;
 }
 
 export async function createInvite(userId: string, rawCommunityId: unknown, rawOptions: unknown): Promise<string> {
@@ -309,7 +312,7 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
   const code = parse(inviteCode, rawCode);
   await assertInvitesAllowed();
   const [row] = await db
-    .select({ invite, communityName: community.name, pausedAt: community.invitesPausedAt })
+    .select({ invite, communityName: community.name, pausedAt: community.invitesPausedAt, rules: community.rules, rulesVersion: community.rulesVersion, rulesRequired: community.rulesRequired })
     .from(invite)
     .innerJoin(community, eq(community.id, invite.communityId))
     .where(and(eq(invite.code, code), isNull(community.suspendedAt)));
@@ -318,7 +321,7 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
     .select({ memberCount: count() })
     .from(member)
     .where(eq(member.communityId, row.invite.communityId));
-  return { code, communityId: row.invite.communityId, communityName: row.communityName, memberCount, paused: row.pausedAt !== null };
+  return { code, communityId: row.invite.communityId, communityName: row.communityName, memberCount, paused: row.pausedAt !== null, rules: row.rules, rulesVersion: row.rulesVersion, rulesRequired: row.rulesRequired };
 }
 
 // Pauses only end when a moderator resumes invites, so "try again later" would mislead.
@@ -327,7 +330,7 @@ const PAUSED_MESSAGE = "Invites to this community are paused. Ask a moderator of
 /** Raid protection counts joins in this window. */
 export const RAID_WINDOW_MINUTES = 10;
 
-export async function acceptInvite(userId: string, rawCode: unknown): Promise<string> {
+export async function acceptInvite(userId: string, rawCode: unknown, acceptedRulesVersion?: unknown): Promise<string> {
   await assertActiveUser(userId);
   await assertInvitesAllowed();
   const code = parse(inviteCode, rawCode);
@@ -349,6 +352,7 @@ export async function acceptInvite(userId: string, rawCode: unknown): Promise<st
       .where(and(eq(member.communityId, row.communityId), eq(member.userId, userId)));
     // Already a member: nothing to check and don't burn a use.
     if (existing) return { communityId: row.communityId };
+    if (c.rulesRequired && acceptedRulesVersion !== c.rulesVersion) throw forbidden("Read and acknowledge the current community rules before joining.");
     if (c.invitesPausedAt) throw forbidden(PAUSED_MESSAGE);
     if (c.minAccountAgeHours > 0) {
       const [me] = await tx.select({ createdAt: user.createdAt }).from(user).where(eq(user.id, userId));
@@ -367,7 +371,7 @@ export async function acceptInvite(userId: string, rawCode: unknown): Promise<st
         return { raid: true as const };
       }
     }
-    await tx.insert(member).values({ communityId: row.communityId, userId });
+    await tx.insert(member).values({ communityId: row.communityId, userId, rulesAcceptedVersion: c.rulesRequired ? c.rulesVersion : 0 });
     await tx.update(invite).set({ uses: sql`${invite.uses} + 1` }).where(eq(invite.code, code));
     return { communityId: row.communityId };
   });

@@ -33,12 +33,21 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Production dependency license inventory
+        run: node scripts/check-dependency-licenses.mjs
       - name: Dependency audit (production dependencies)
         run: pnpm audit --prod --audit-level=high
+      - name: Operator alert state regression checks
+        run: python3 scripts/test-operator-monitor.py
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - run: pnpm test
+      - name: Rehearse encrypted backup and isolated restore
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age
+          pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
       - run: pnpm build
       - name: Start LiveKit (dev mode)
         run: docker run -d --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1

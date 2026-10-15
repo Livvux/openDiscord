@@ -1,12 +1,12 @@
 // GDPR: data access/portability (export) and erasure (account deletion via Better Auth).
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, auditLog, channel, community, member, message, passkey, session, user } from "@/db/schema";
+import { attachment, auditLog, ban, banAppeal, channel, community, member, message, passkey, session, user } from "@/db/schema";
 import { listBlocked } from "./blocks";
 import { notFound } from "./errors";
 
-/** 2: messages carry their images. 3: blocked people. 4: file attachments (`images[].filename`). */
-export const EXPORT_FORMAT_VERSION = 4;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. */
+export const EXPORT_FORMAT_VERSION = 5;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
@@ -23,13 +23,15 @@ export interface UserExport {
   /** Images download from `url` while signed in, like in the app. */
   messages: { id: string; communityId: string; channelName: string; content: string; createdAt: string; editedAt: string | null; images: ExportedImage[] }[];
   blocked: { id: string; name: string; createdAt: string }[];
+  restrictions: { communityId: string; reason: string | null; createdAt: string }[];
+  appeals: { communityId: string; content: string; createdAt: string; resolvedAt: string | null; resolution: "uphold" | "unban" | null; resolutionNote: string | null }[];
 }
 
 /** Everything stored about the person, as portable JSON. Excludes secrets (password hash, tokens). */
 export async function exportUserData(userId: string): Promise<UserExport> {
   const [profile] = await db.select().from(user).where(eq(user.id, userId));
   if (!profile) throw notFound("Account not found.");
-  const [sessions, passkeys, owned, memberships, messages, blocked] = await Promise.all([
+  const [sessions, passkeys, owned, memberships, messages, blocked, restrictions, appeals] = await Promise.all([
     db.select().from(session).where(eq(session.userId, userId)).orderBy(asc(session.createdAt)),
     db.select().from(passkey).where(eq(passkey.userId, userId)),
     db.select().from(community).where(eq(community.ownerId, userId)),
@@ -52,6 +54,10 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       .where(eq(message.authorId, userId))
       .orderBy(asc(message.id)),
     listBlocked(userId),
+    db.select({ communityId: ban.communityId, reason: ban.reason, createdAt: ban.createdAt }).from(ban).where(eq(ban.userId, userId)).orderBy(asc(ban.createdAt)),
+    db.select({ communityId: banAppeal.communityId, content: banAppeal.content, createdAt: banAppeal.createdAt,
+      resolvedAt: banAppeal.resolvedAt, resolution: banAppeal.resolution, resolutionNote: banAppeal.resolutionNote,
+    }).from(banAppeal).where(eq(banAppeal.userId, userId)).orderBy(asc(banAppeal.createdAt)),
   ]);
   const images = messages.length === 0 ? [] : await db.select({
     id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, filename: attachment.filename, size: attachment.size,
@@ -91,6 +97,8 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       images: imagesOf(m.id),
     })),
     blocked: blocked.map((b) => ({ ...b, createdAt: b.createdAt.toISOString() })),
+    restrictions: restrictions.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })),
+    appeals: appeals.map((a) => ({ ...a, createdAt: a.createdAt.toISOString(), resolvedAt: a.resolvedAt?.toISOString() ?? null })),
   };
 }
 

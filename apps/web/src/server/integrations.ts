@@ -122,7 +122,7 @@ export async function requireBot(headers: Headers): Promise<{ userId: string }> 
   const bot = match ? await findByToken("bot", match[1]) : null;
   if (!bot) throw new AppError("unauthorized", "Missing or invalid bot token.");
   await assertActiveUser(bot.userId);
-  consume(`api:${bot.id}`, 60, 60_000);
+  await consume(`api:${bot.id}`, 60, 60_000);
   return { userId: bot.userId };
 }
 
@@ -146,7 +146,7 @@ export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawB
   // Wrong id/token pairs look exactly like unknown webhooks.
   if (!hook || hook.id !== id || !hook.channelId) throw notFound("Webhook not found.");
   const { content } = parse(webhookBody, rawBody);
-  consume(`webhook:${hook.id}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000);
+  await consume(`webhook:${hook.id}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000);
   const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);
   const [{ recent }] = await db.select({ recent: count() }).from(message)
     .where(and(eq(message.authorId, hook.userId), gt(message.createdAt, since)));

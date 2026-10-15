@@ -100,6 +100,12 @@ export async function requireChannel(tx: Db, channelId: string, userId: string, 
   const access = await loadChannelAuthority(tx, channelId, userId);
   if (!access) throw notFound("Channel not found.");
   if (permission !== undefined && !has(access.authority, permission)) throw forbidden();
+  if (permission !== undefined && (permission & Permission.SendMessages) !== 0) {
+    const [m] = await tx.select({ required: community.rulesRequired, version: community.rulesVersion, accepted: member.rulesAcceptedVersion })
+      .from(member).innerJoin(community, eq(community.id, member.communityId))
+      .where(and(eq(member.communityId, access.channel.communityId), eq(member.userId, userId)));
+    if (!m || (m.required && m.accepted !== m.version)) throw forbidden("Read and acknowledge the current community rules before sending messages.");
+  }
   return access;
 }
 
