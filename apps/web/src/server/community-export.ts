@@ -22,7 +22,8 @@ const key = z.string().min(1).max(64);
 const exportSchema = z.object({
   format: z.literal(EXPORT_FORMAT),
   version: z.literal(EXPORT_VERSION),
-  community: z.object({ name: communityName }),
+  community: z.object({ name: communityName, rules: z.string().trim().max(4000).default(""), rulesRequired: z.boolean().default(false) })
+    .refine((c) => !c.rulesRequired || c.rules.length > 0, "Required community rules cannot be empty."),
   roles: z.array(z.object({ key, name: roleName, permissions: z.number().int(), position: z.number().int(), isDefault: z.boolean() })).max(100),
   categories: z.array(z.object({ key, name: z.string().trim().min(1).max(32), position: z.number().int() })).max(50),
   channels: z.array(z.object({
@@ -97,7 +98,7 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
     truncated,
-    community: { name: c.name },
+    community: { name: c.name, rules: c.rules, rulesRequired: c.rulesRequired },
     roles: roles.map((r) => ({ key: r.id, name: r.name, permissions: r.permissions, position: r.position, isDefault: r.isDefault })),
     categories: categories.map((cat) => ({ key: cat.id, name: cat.name, position: cat.position })),
     channels: channels.map((ch) => ({
@@ -143,8 +144,10 @@ async function runImport(userId: string, data: z.infer<typeof exportSchema>): Pr
     enforceCap(owned, CAPS.ownedCommunities, `You can own at most ${CAPS.ownedCommunities} communities.`);
     enforceCap(data.channels.length - 1, CAPS.channelsPerCommunity, `A community can have at most ${CAPS.channelsPerCommunity} channels.`);
     enforceCap(data.roles.length - 1, CAPS.rolesPerCommunity, `A community can have at most ${CAPS.rolesPerCommunity} roles.`);
-    const [c] = await tx.insert(community).values({ name: data.community.name, ownerId: userId }).returning({ id: community.id });
-    await tx.insert(member).values({ communityId: c.id, userId });
+    const [c] = await tx.insert(community).values({ name: data.community.name, ownerId: userId,
+      rules: data.community.rules, rulesRequired: data.community.rulesRequired, rulesVersion: data.community.rules ? 1 : 0,
+    }).returning({ id: community.id, rulesVersion: community.rulesVersion });
+    await tx.insert(member).values({ communityId: c.id, userId, rulesAcceptedVersion: c.rulesVersion });
 
     // Roles: exactly one default role; others keep their relative order. Unknown bits are dropped.
     const roleIds = new Map<string, string>();

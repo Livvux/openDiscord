@@ -8,6 +8,7 @@ import { acknowledgeCommunityRules, getCommunityRules, listBanAppeals, listOwnAp
 import { sendMessage, toggleReaction } from "@/server/messages";
 import { banMember, createRole, listAuditLog, setMemberRole, unbanMember } from "@/server/moderation";
 import { testUsers } from "./helpers";
+import { exportUserData } from "@/server/account";
 
 const users = testUsers();
 let owner: string, alice: string, bob: string, stranger: string;
@@ -89,6 +90,10 @@ describe("private ban appeals", () => {
     expect(appeals).toHaveLength(1);
     appealId = appeals[0].id;
     expect((await listOwnRestrictions(alice))[0].content).toContain("<img");
+    const ownData = await exportUserData(alice);
+    expect(ownData.restrictions[0].reason).toContain("Only Alice");
+    expect(ownData.appeals[0].content).toContain("<img");
+    expect((await exportUserData(bob)).appeals).toEqual([]);
     expect(await listOwnAppealHistory(bob)).toEqual([]);
     const other = await createCommunity(bob, "Other community");
     await expect(resolveBanAppeal(bob, other.communityId, appealId, "unban", "")).rejects.toThrow("not found");
