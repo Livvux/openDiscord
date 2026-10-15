@@ -72,6 +72,7 @@ class BrowserProof {
     if (this.invalid || !this.epoch || !this.raw || !own) throw new Error("No current publisher material.");
     const peers = member ? [owner.peer(member)] : this.audience.filter((peer) => !same(peer, owner.binding));
     for (const peer of peers) {
+      if (!this.audience.some((current) => same(current, peer)) || same(peer, owner.binding)) throw new Error("Recipient outside current media audience.");
       if (this.sent.has(peer.member)) throw new Error("Material already sent.");
       const control = controlSchema.parse({ version: 1, kind: "material", transaction: own.reference, epoch: this.epoch, sender: owner.binding, recipient: peer, publisher: owner.binding, audience: this.audience, keyId: own.keyId, reference: own.reference, material: btoa(String.fromCharCode(...this.raw)) });
       await owner.send(control); this.sent.set(peer.member, control);
@@ -79,10 +80,11 @@ class BrowserProof {
   }
   async connect(input: { url: string; token: string; omit?: string; diagnostic?: "missing-key" | "wrong-key"; target?: string }): Promise<void> {
     if (this.invalid || this.materials.size !== this.audience.length) throw new Error("All authenticated material required.");
-    if (this.media) await this.media.close();
+    if (this.media && !input.diagnostic) throw new Error("Fresh epoch required for normal worker replacement.");
     // A diagnostic receiver can never send key-ready or publish, including after its native fence.
     const diagnostic = input.diagnostic !== undefined;
-    if (diagnostic && (!input.target || input.target === this.active().binding.member)) throw new Error("Diagnostic remote target required.");
+    if (diagnostic && (!this.media || !input.target || input.target === this.active().binding.member || !this.audience.some((peer) => peer.member === input.target))) throw new Error("Diagnostic remote target required.");
+    if (this.media) await this.media.close();
     const expected = new Map([...this.materials].map(([identity, value]) => [identity, value.key]));
     if (input.diagnostic === "wrong-key" && input.target) expected.set(input.target, await createKeyMaterialFromBuffer(crypto.getRandomValues(new Uint8Array(32)).buffer));
     const supplied = new Map(expected);

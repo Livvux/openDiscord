@@ -8,7 +8,7 @@ import { BrowserVoiceTransport } from "./fixtures/voice-three-transport";
 import type { Binding } from "./fixtures/voice-three-contracts";
 import type { MediaKind, MediaSnapshot } from "./fixtures/voice-three-media";
 
-type Device = { page: Page; context: BrowserContext; binding: Binding; workers: string[]; errors: string[]; token: string; fingerprint: string };
+type Device = { page: Page; context: BrowserContext; binding: Binding; workers: string[]; errors: string[]; token: string; fingerprint: string; consoleErrors: number; failedRequests: number };
 type Harness = { devices: Device[]; transport: BrowserVoiceTransport; room: string; url: string; close: () => Promise<void> };
 const dependency = createRequire(path.join(process.cwd(), "package.json"));
 const worker = readFileSync(path.join(path.dirname(dependency.resolve("livekit-client")), "livekit-client.e2ee.worker.mjs"));
@@ -30,8 +30,10 @@ async function open(browser: Browser, profile: Pick<BrowserContextOptions, "view
       const page = await context.newPage(); page.setDefaultTimeout(10_000);
       const access = new AccessToken(key, secret, { identity: binding.member, ttl: 300 });
       access.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true, canPublishData: false });
-      const device: Device = { context, page, binding, workers: [], errors: [], token: await access.toJwt(), fingerprint: "" }; devices.push(device);
+      const device: Device = { context, page, binding, workers: [], errors: [], token: await access.toJwt(), fingerprint: "", consoleErrors: 0, failedRequests: 0 }; devices.push(device);
       page.on("pageerror", (error) => device.errors.push(error.message));
+      page.on("console", (message) => { if (message.type() === "error") device.consoleErrors++; });
+      page.on("requestfailed", () => { device.failedRequests++; });
       page.on("worker", (value) => device.workers.push(value.url()));
       await page.exposeBinding("voiceThreeTransport", (source, request: unknown) => {
         if (source.page !== page || source.frame !== page.mainFrame()) throw new Error("Unregistered browser transport owner.");
@@ -60,7 +62,7 @@ async function drain(devices: Device[], transport: BrowserVoiceTransport): Promi
   }
   throw new Error("Browser control drain exceeded bound.");
 }
-async function verify(a: Device, b: Device, transport: BrowserVoiceTransport): Promise<void> {
+async function verify(a: Device, b: Device, transport: BrowserVoiceTransport, admit = true): Promise<void> {
   await a.page.evaluate(() => window.threeVoice.query()); await b.page.evaluate(() => window.threeVoice.query());
   const flow = await a.page.evaluate((member) => window.threeVoice.request(member), b.binding.member);
   await b.page.evaluate(() => window.threeVoice.sync());
@@ -79,20 +81,25 @@ async function verify(a: Device, b: Device, transport: BrowserVoiceTransport): P
     expect((await own.page.evaluate(({ member, flow }) => window.threeVoice.sas(member, flow), { member: peer.binding.member, flow })).done).toBe(true);
     await own.page.evaluate(() => window.threeVoice.query());
     expect(await own.page.evaluate((member) => window.threeVoice.trusted(member), peer.binding.member)).toBe(true);
-    await own.page.evaluate((member) => window.threeVoice.admit(member), peer.binding.member);
+    if (admit) await own.page.evaluate((member) => window.threeVoice.admit(member), peer.binding.member);
   }
 }
 async function setup(harness: Harness): Promise<void> {
   const [a, b, c] = harness.devices;
   await verify(a, b, harness.transport);
   const first = randomUUID();
-  for (const own of [a, b]) await own.page.evaluate(({ epoch, members }) => window.threeVoice.begin(epoch, members), { epoch: first, members: [a.binding.member, b.binding.member] });
+  for (const own of [a, b]) await own.page.evaluate(({ epoch, members }) => window.threeVoice.begin(epoch, members), { epoch: first, members: [a.binding.member, b.binding.member, c.binding.member] });
   const before = harness.transport.submissions;
   const cBefore = harness.transport.delivered.get(c.binding.member) ?? 0;
   expect(await a.page.evaluate((member) => window.threeVoice.distribute(member).then(() => "allowed", (error: Error) => error.message), c.binding.member)).toBe("Explicit admission required.");
   expect(harness.transport.submissions).toBe(before); expect(harness.transport.delivered.get(c.binding.member) ?? 0).toBe(cBefore);
   expect((await c.page.evaluate(() => window.threeVoice.snapshot())).material).toBe(0);
-  await verify(a, c, harness.transport); await verify(b, c, harness.transport);
+  await verify(a, c, harness.transport, false);
+  const verifiedBefore = harness.transport.submissions, verifiedCBefore = harness.transport.delivered.get(c.binding.member) ?? 0;
+  expect(await a.page.evaluate((member) => window.threeVoice.distribute(member).then(() => "allowed", (error: Error) => error.message), c.binding.member)).toBe("Explicit admission required.");
+  expect(harness.transport.submissions).toBe(verifiedBefore); expect(harness.transport.delivered.get(c.binding.member) ?? 0).toBe(verifiedCBefore);
+  for (const [own, peer] of [[a, c], [c, a]]) await own.page.evaluate((member) => window.threeVoice.admit(member), peer.binding.member);
+  await verify(b, c, harness.transport);
 }
 async function epoch(harness: Harness, devices = harness.devices): Promise<void> {
   const id = randomUUID(), members = devices.map((device) => device.binding.member);
@@ -127,7 +134,9 @@ function ordering(value: MediaSnapshot, local: string, members: string[]): void 
     expect(value.trace.some((item) => item.kind === "ack" && item.identity === subscription.identity && item.sequence < subscription.sequence)).toBe(true);
   }
   for (const decoded of value.trace.filter((item) => item.kind === "decode")) expect(value.trace.some((item) => item.kind === "ack" && item.identity === decoded.identity && item.sequence < decoded.sequence)).toBe(true);
-  for (const frame of value.frames.filter((item) => item.direction === "encode")) { expect(frame.nonempty).toBeGreaterThan(10); expect(frame.changed).toBe(frame.nonempty); expect(frame.unmatched).toBe(0); }
+  const encoded = value.frames.filter((item) => item.direction === "encode");
+  expect(encoded.length).toBeGreaterThan(0);
+  for (const frame of encoded) { expect(frame.nonempty).toBeGreaterThan(10); expect(frame.changed).toBe(frame.nonempty); expect(frame.unmatched).toBe(0); }
 }
 async function healthy(device: Device, peers: Device[], media: MediaKind): Promise<MediaSnapshot> {
   await expect.poll(async () => {
@@ -139,7 +148,7 @@ async function healthy(device: Device, peers: Device[], media: MediaKind): Promi
   ordering(value, device.binding.member, peers.map((peer) => peer.binding.member));
   expect(value.streams.filter((stream) => stream.kind === media)).toHaveLength(peers.length - 1);
   for (const stream of value.streams.filter((stream) => stream.kind === media)) expect(stream.codec.toLowerCase()).toBe(media === "audio" ? "audio/opus" : "video/vp8");
-  expect(device.errors).toEqual([]); expect(device.workers).toContain(value.workerUrl);
+  expect(device.errors).toEqual([]); expect(device.consoleErrors).toBe(0); expect(device.failedRequests).toBe(0); expect(device.workers).toContain(value.workerUrl);
   return value;
 }
 
@@ -150,6 +159,7 @@ test.describe("three actual browsers: independently verified ephemeral control a
     const harness = await open(browser, info.project.use);
     try {
       await setup(harness); await epoch(harness); await connect(harness);
+      expect(await harness.devices[0].page.evaluate((input) => window.threeVoice.connect(input).then(() => "allowed", (error: Error) => error.message), { url: harness.url, token: harness.devices[0].token })).toBe("Fresh epoch required for normal worker replacement.");
       for (const device of harness.devices) {
         expect(await device.page.evaluate((kind) => window.threeVoice.publish(kind).then(() => "allowed", (error: Error) => error.message), media)).toBe("All current authenticated key-ready receipts required.");
         expect((await device.page.evaluate(() => window.threeVoice.snapshot())).media?.publications).toBe(0);
@@ -165,6 +175,9 @@ test.describe("three actual browsers: independently verified ephemeral control a
       const cMaterials = (await c.page.evaluate(() => window.threeVoice.snapshot())).receivedMaterial;
       await c.page.evaluate(() => window.threeVoice.closeMedia());
       await epoch(harness, [a, b]);
+      const submissions = harness.transport.submissions, queued = harness.transport.queued(c.binding);
+      expect(await a.page.evaluate((member) => window.threeVoice.distribute(member).then(() => "allowed", (error: Error) => error.message), c.binding.member)).toBe("Recipient outside current media audience.");
+      expect(harness.transport.submissions).toBe(submissions); expect(harness.transport.queued(c.binding)).toBe(queued);
       await b.page.evaluate((member) => window.threeVoice.stale(member), a.binding.member);
       await drain([a, b], harness.transport);
       expect((await a.page.evaluate(() => window.threeVoice.snapshot())).ignored).toBeGreaterThan(0);
