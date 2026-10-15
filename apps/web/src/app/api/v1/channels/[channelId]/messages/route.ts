@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
+import { errorResponse, PRIVATE_NO_STORE, readJsonBody } from "@/server/http";
 import { requireBot } from "@/server/integrations";
 import { listMessages, sendMessage } from "@/server/messages";
 import { parse } from "@/server/validation";
@@ -27,7 +27,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/v1/channels
   try {
     const { userId } = await requireBot(request.headers);
     const { channelId } = await ctx.params;
-    const input = parse(body, await request.json().catch(() => null));
+    const input = parse(body, await readJsonBody(request, 16 * 1024));
     const message = await sendMessage(userId, channelId, input.content, [], input.replyToId ?? null, input.threadId ?? null);
     return Response.json(message, { status: 201, headers: PRIVATE_NO_STORE });
   } catch (error) {

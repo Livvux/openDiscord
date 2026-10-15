@@ -71,13 +71,14 @@ describe("webhooks", () => {
     await expect(postWebhookMessage(id, token, { content: "after revoke" })).rejects.toThrow("Webhook not found.");
   });
 
-  it("render mentions without notifying, and are subject to AutoMod", async () => {
+  it("turn mentions into plain text (no pings, no badges), and are subject to AutoMod", async () => {
     const { id, token } = await createIntegration(owner, communityId, { kind: "webhook", name: "Pinger", channelId: generalId });
     const received: HubEvent[] = [];
     const unsubscribe = hub.subscribe(userTopic(member), (e) => received.push(e));
     await new Promise((r) => setTimeout(r, 300));
     const posted = await postWebhookMessage(id, token, { content: `hey <@${member}>` });
-    expect(posted.mentions).toEqual([{ id: member, name: "Member" }]);
+    expect(posted.content).toBe("hey @Member");
+    expect(posted.mentions).toEqual([]);
     await new Promise((r) => setTimeout(r, 300));
     expect(received.filter((e) => e.type === "mention.created")).toEqual([]);
     unsubscribe();

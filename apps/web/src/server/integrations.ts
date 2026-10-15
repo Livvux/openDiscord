@@ -2,7 +2,7 @@
 // and the public API calls the same services as the app. A webhook can only post plain messages into
 // its one channel. Tokens are shown once and stored as SHA-256 hashes (they are high-entropy secrets).
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, asc, count, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, community, integration, member, message, user } from "@/db/schema";
@@ -11,7 +11,7 @@ import { enforceAutomod } from "./automod";
 import { AppError, notFound } from "./errors";
 import { assertActiveUser } from "./instance-policy";
 import { consume, enforceCap } from "./limits";
-import { syncMentions } from "./mentions";
+import { parseMentionIds } from "./mentions";
 import { getMessageForBroadcast, RATE_LIMIT, type MessageView } from "./messages";
 import { Permission, resolveAuthority } from "./permissions";
 import { publish } from "./realtime";
@@ -128,7 +128,17 @@ export async function requireBot(headers: Headers): Promise<{ userId: string }> 
 
 const webhookBody = z.object({ content: messageContent });
 
-/** Posts a plain message through a webhook. Mentions render but never notify. */
+/** Posts a plain message through a webhook. Mentions become plain text: webhooks can't ping or badge anyone. */
+/** `<@id>` → `@Name` for members of the community (others become "@member"). */
+async function mentionsAsText(communityId: string, content: string): Promise<string> {
+  const ids = parseMentionIds(content);
+  if (ids.length === 0) return content;
+  const rows = await db.select({ id: user.id, name: user.name }).from(member).innerJoin(user, eq(user.id, member.userId))
+    .where(and(eq(member.communityId, communityId), inArray(member.userId, ids)));
+  const names = new Map(rows.map((r) => [r.id, r.name]));
+  return content.replace(/<@([A-Za-z0-9_-]{1,64})>/g, (_, id: string) => `@${names.get(id) ?? "member"}`);
+}
+
 export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawBody: unknown): Promise<MessageView> {
   const id = parse(uuid, rawId);
   const token = parse(z.string().regex(/^od_wh_[A-Za-z0-9_-]{43}$/, "Invalid webhook."), rawToken);
@@ -143,11 +153,9 @@ export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawB
   if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "This webhook is posting too quickly.");
   // Webhooks hold no permissions, so AutoMod always applies to them.
   await enforceAutomod(hook.communityId, hook.userId, resolveAuthority(false, []), content);
-  const created = await db.transaction(async (tx) => {
-    const [row] = await tx.insert(message).values({ channelId: hook.channelId!, authorId: hook.userId, content }).returning({ id: message.id });
-    await syncMentions(tx, hook.communityId, row.id, hook.userId, content);
-    return row;
-  });
+  const [created] = await db.insert(message)
+    .values({ channelId: hook.channelId, authorId: hook.userId, content: await mentionsAsText(hook.communityId, content) })
+    .returning({ id: message.id });
   await publish({ type: "message.created", communityId: hook.communityId, channelId: hook.channelId, messageId: created.id });
   return (await getMessageForBroadcast(created.id))!.message;
 }

@@ -29,7 +29,7 @@ curl -H "Content-Type: application/json" -d '{"content":"Build #42 passed"}' \
   https://example.org/api/webhooks/$ID/$TOKEN
 ```
 
-Mentions render but never notify. AutoMod always applies. Unknown, revoked and mismatched URLs all
+Mentions are turned into plain names: webhooks can't ping or badge anyone. AutoMod always applies. Unknown, revoked and mismatched URLs all
 answer `404`.
 
 ## Tokens
