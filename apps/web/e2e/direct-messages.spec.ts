@@ -95,12 +95,11 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   const restored = await newUserPage(browser);
   restored.context().setDefaultTimeout(15_000); restored.context().setDefaultNavigationTimeout(30_000);
   restored.on("pageerror", (e) => errors.push(e.message));
-  await restored.goto("/sign-in");
+  await restored.goto("/sign-in?next=/app/messages");
   await restored.getByLabel("Email", { exact: true }).fill(email);
   await restored.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await restored.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(restored).toHaveURL(/\/app$/);
-  await restored.goto("/app/messages");
+  await expect(restored).toHaveURL(/\/app\/messages$/);
   await restored.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
   await expect(restored.getByLabel("Open encrypted recovery archive", { exact: true })).toBeEnabled({ timeout: 30_000 });
   await restored.getByLabel("Open encrypted recovery archive", { exact: true }).setInputFiles(recoveryFile!);
