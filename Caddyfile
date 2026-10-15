@@ -1,4 +1,9 @@
 {$DOMAIN} {
 	encode zstd gzip
-	reverse_proxy web:3000
+	header Strict-Transport-Security "max-age=31536000"
+	# Server-Sent Events: flush immediately instead of buffering.
+	reverse_proxy web:3000 {
+		flush_interval -1
+	}
+	# Don't keep client IP addresses in access logs (Caddy logs nothing by default).
 }
