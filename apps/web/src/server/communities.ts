@@ -128,8 +128,9 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
     if (botUsers.length) await tx.delete(user).where(inArray(user.id, botUsers.map(b => b.id)));
     return rooms;
   });
+  for (const room of voiceRooms.slice(0, 4)) await closeVoiceRoom(room.id);
+  if (voiceRooms.length > 4) console.warn("[voice] legacy deletion limited");
   await publish({ type: "community.deleted", communityId });
-  for (const room of voiceRooms) await closeVoiceRoom(room.id);
 }
 
 export async function leaveCommunity(userId: string, rawId: unknown) {
@@ -192,8 +193,8 @@ export async function deleteChannel(userId: string, rawChannelId: unknown) {
     await tx.delete(channel).where(eq(channel.id, channelId));
     await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.delete", targetId });
   });
-  await publish({ type: "channels.changed", communityId: ch.communityId });
   if (ch.kind === "voice") await closeVoiceRoom(ch.id);
+  await publish({ type: "channels.changed", communityId: ch.communityId });
 }
 
 // --- Channel permission overrides -------------------------------------------

@@ -355,6 +355,7 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
   if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
   const voiceBatchSize = Math.min(batchSize, VOICE_MAINTENANCE_BATCH_SIZE);
   const cleanupDeadline = performance.now() + 20_000;
+  let cleanupRooms = 16, cleanupRequests = 32;
   let cursor: string | undefined, scanned = 0, closed = 0, removed = 0;
   const closedCallIds: string[] = [];
   for (let batch = 0; batch < maxBatches; batch++) {
@@ -373,7 +374,10 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
       }
       return { calls, closed, removed, closedCallIds };
     });
-    await consumeVoiceRooms({ maxRooms: 16, maxRequests: 32, maxMilliseconds: Math.max(0, cleanupDeadline - performance.now()) });
+    if (cleanupRooms > 0 && cleanupRequests > 0) {
+      const cleanup = await consumeVoiceRooms({ maxRooms: cleanupRooms, maxRequests: cleanupRequests, maxMilliseconds: Math.max(0, cleanupDeadline - performance.now()) });
+      cleanupRooms -= cleanup.claimed; cleanupRequests -= cleanup.requests;
+    }
     scanned += result.calls.length; closed += result.closed; removed += result.removed;
     closedCallIds.push(...result.closedCallIds);
     cursor = result.calls.at(-1)?.call.id;

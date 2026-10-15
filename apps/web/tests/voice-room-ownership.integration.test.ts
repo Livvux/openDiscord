@@ -1,14 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { AccessToken, Room, RoomServiceClient, ServerError } from "livekit-server-sdk";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { channel, session, member } from "@/db/schema";
 import { voiceCall, voiceSfuRoom, voiceCallMember, voiceIdentity } from "@/db/voice-schema";
 import { consumeVoiceRooms, retireOwnedVoiceRoom, voiceTransaction } from "@/server/voice-sfu";
 import { createCommunity, deleteChannel } from "@/server/communities";
 import { registerDmDevice } from "@/server/direct-messages";
-import { joinVoiceControl, grantBoundVoiceMedia, handleVoiceCrypto, heartbeatVoiceControl, leaveVoiceControl } from "@/server/voice-control";
+import { joinVoiceControl, grantBoundVoiceMedia, handleVoiceCrypto, heartbeatVoiceControl, leaveVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
 import { createBoundVoiceToken } from "@/server/voice";
 import { testUsers } from "./helpers";
 
@@ -158,4 +158,85 @@ describe("durable room lifecycle", () => {
     expect(await owned(grant.roomName)).toMatchObject({ status: "retired", lastOutcome: "not_found" });
     expect((await owned(grant.roomName)).nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
   });
+});
+
+describe("bounded persistent cleanup", () => {
+  it("recovers expired claims, fences stale completion, and never overwrites a newer lease", async () => {
+    const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+    await retireOwnedVoiceRoom(grant.roomName);
+    const newer = randomUUID(), later = new Date(Date.now() + 120_000);
+    await db.update(voiceSfuRoom).set({ nextAttemptAt: new Date(0), leaseToken: randomUUID(), leaseUntil: new Date(0) }).where(eq(voiceSfuRoom.roomName, grant.roomName));
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockImplementation(async name => {
+      if (name === grant.roomName) await db.update(voiceSfuRoom).set({ leaseToken: newer, leaseUntil: later, nextAttemptAt: later, lastOutcome: "pending" }).where(eq(voiceSfuRoom.roomName, name));
+    });
+    const stats = await consumeVoiceRooms({ maxRooms: 1, maxRequests: 1 });
+    expect(stats.requests).toBe(1);
+    expect(await owned(grant.roomName)).toMatchObject({ leaseToken: newer, lastOutcome: "pending" });
+    expect((await owned(grant.roomName)).nextAttemptAt.getTime()).toBe(later.getTime());
+  });
+
+  it("orders due work fairly, honors the per-run budget, and retries deleted rooms beyond app expiry", async () => {
+    const a = await fixture(), ag = await grantBoundVoiceMedia(a.auth, a.binding);
+    const b = await fixture(), bg = await grantBoundVoiceMedia(b.auth, b.binding);
+    for (const name of [ag.roomName, bg.roomName]) { await retireOwnedVoiceRoom(name); await due(name); }
+    await db.update(voiceSfuRoom).set({ nextAttemptAt: new Date(1), lastAppTokenExpiry: new Date(0) }).where(eq(voiceSfuRoom.roomName, bg.roomName));
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
+    const first = await consumeVoiceRooms({ maxRooms: 1, maxRequests: 1 });
+    expect(first).toMatchObject({ claimed: 1, requests: 1, limited: true });
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenLastCalledWith(ag.roomName);
+    await consumeVoiceRooms({ maxRooms: 1, maxRequests: 1 });
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenLastCalledWith(bg.roomName);
+    await due(ag.roomName);
+    await consumeVoiceRooms({ maxRooms: 1, maxRequests: 1 });
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenLastCalledWith(ag.roomName);
+    expect(await owned(ag.roomName)).toMatchObject({ status: "retired", lastOutcome: "deleted" });
+  });
+
+  it("keeps terminal DB revocation when the SDK rejects and exposes only generic failure counts", async () => {
+    const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockRejectedValue(new Error("private SDK body"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await leaveVoiceControl(f.auth, f.binding);
+    await due(grant.roomName);
+    const stats = await consumeVoiceRooms({ maxRooms: 1, maxRequests: 1 });
+    expect(stats.failed).toBe(1);
+    expect((await owned(grant.roomName)).status).toBe("retired");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private SDK body");
+    await expect(grantBoundVoiceMedia(f.auth, f.binding)).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("fails new room grants closed at capacity while an existing reservation remains usable", async () => {
+    const existing = await fixture(), grant = await grantBoundVoiceMedia(existing.auth, existing.binding), fresh = await fixture();
+    const syntheticChannel = randomUUID(), syntheticCall = randomUUID();
+    const count = await db.$count(voiceSfuRoom);
+    try {
+      await db.execute(sql`insert into voice_sfu_room (room_name, channel_id, call_id, generation, status, retired_at, last_app_token_expiry, next_attempt_at)
+        select 'voice:' || ${syntheticChannel} || ':' || ${syntheticCall} || ':' || n::text,
+          ${syntheticChannel}::uuid, ${syntheticCall}::uuid, n, 'retired', now(), now(), now() + interval '1 day'
+        from generate_series(1, ${100000 - count}) n`);
+      expect(await grantBoundVoiceMedia(existing.auth, existing.binding)).toMatchObject({ roomName: grant.roomName });
+      await expect(grantBoundVoiceMedia(fresh.auth, fresh.binding)).rejects.toMatchObject({ code: "conflict" });
+      expect(await db.$count(voiceSfuRoom, eq(voiceSfuRoom.callId, fresh.snapshot.callId))).toBe(0);
+    } finally {
+      // Disposable synthetic test resources only; production has no tombstone prune path.
+      await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, syntheticChannel));
+    }
+  });
+});
+
+
+it("shares one maintenance room/RPC budget across multiple fast lifecycle batches and keeps dry-run inert", async () => {
+  const fixtures = [await fixture(), await fixture(), await fixture()];
+  for (const f of fixtures) await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(0) }).where(eq(voiceCallMember.id, f.snapshot.memberId));
+  const channelId = randomUUID(), callId = randomUUID();
+  try {
+    await db.insert(voiceSfuRoom).values(Array.from({ length: 40 }, (_, n) => ({ roomName: `voice:${channelId}:${callId}:${n + 1}`, channelId, callId, generation: n + 1, status: "retired" as const, retiredAt: new Date(0), lastAppTokenExpiry: new Date(0), nextAttemptAt: new Date(0) })));
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
+    await sweepVoiceLifecycle({ apply: false, now: new Date(), batchSize: 1, maxBatches: 3 });
+    expect(RoomServiceClient.prototype.deleteRoom).not.toHaveBeenCalled();
+    const result = await sweepVoiceLifecycle({ apply: true, now: new Date(), batchSize: 1, maxBatches: 3 });
+    expect(result.scanned).toBe(3);
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenCalledTimes(16);
+    expect(await db.$count(voiceSfuRoom, and(eq(voiceSfuRoom.channelId, channelId), eq(voiceSfuRoom.lastOutcome, "pending")))).toBeGreaterThanOrEqual(24);
+  } finally { await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, channelId)); }
 });

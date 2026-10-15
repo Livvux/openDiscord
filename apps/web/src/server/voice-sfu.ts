@@ -66,11 +66,13 @@ async function roomAuthority(name: string) {
     const members = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.callId, owned.callId), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCallMember.id)).limit(9);
     const ids = members.map(member => member.userId);
     const blocked = ids.length > 1 ? await tx.select({ id: userBlock.blockerId }).from(userBlock).where(and(sql`${userBlock.blockerId} = any(${ids}::text[])`, sql`${userBlock.blockedId} = any(${ids}::text[])`)).limit(1) : [];
+    const sessionExpiries: Date[] = [];
     const allowed: { identity: string; sources: TrackSource[] }[] = [];
     let valid = members.length > 0 && members.length <= 8 && !blocked.length;
     for (const member of members) {
       const now = new Date();
-      const [s] = await tx.select({ id: session.id }).from(session).where(and(eq(session.id, member.sessionId), eq(session.userId, member.userId), gt(session.expiresAt, now))).for("share");
+      const [s] = await tx.select({ id: session.id, expiresAt: session.expiresAt }).from(session).where(and(eq(session.id, member.sessionId), eq(session.userId, member.userId), gt(session.expiresAt, now))).for("share");
+      if (s) sessionExpiries.push(s.expiresAt);
       const [anchor] = await tx.select({ id: dmDevice.id }).from(dmDevice).where(and(eq(dmDevice.id, member.anchorDeviceId), eq(dmDevice.userId, member.userId), isNull(dmDevice.revokedAt))).for("share");
       let access: Awaited<ReturnType<typeof loadChannelAuthority>> = null;
       try { access = await loadChannelAuthority(tx, owned.channelId, member.userId); }
@@ -82,7 +84,8 @@ async function roomAuthority(name: string) {
         ...(has(access.authority, Permission.Video) ? [TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] : []),
       ] });
     }
-    if (members.some(member => member.leaseExpiresAt <= new Date())) valid = false;
+    const cutoff = new Date();
+    if (members.some(member => member.leaseExpiresAt <= cutoff) || sessionExpiries.some(expiresAt => expiresAt <= cutoff)) valid = false;
     if (!valid) { await retire(tx, name); return { owned: { ...owned, status: "retired" as const }, members: null }; }
     return { owned, members: allowed };
   });
