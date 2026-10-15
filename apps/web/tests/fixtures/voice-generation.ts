@@ -9,6 +9,37 @@ export type Receipt = { generation: number; disposition: "processed-current" | "
 type Pending = { request: NativeRequest; reject: (error: Error) => void };
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 class GenerationInterrupted extends Error {}
+const generationControl = z.object({
+  purpose: z.literal("voice-generation-proof"), call: z.uuid(), generation: z.number().int().positive(), epoch: z.uuid(),
+  sender: z.string(), senderDevice: z.uuid(), recipient: z.string(), recipientDevice: z.uuid(),
+  audience: z.array(z.uuid()).length(2), transaction: z.uuid(), action: z.literal("prepared"),
+}).strict();
+const GENERATION_CONTROL = "app.opendiscord.voice.generation-proof";
+
+/** Normal native encryption of a benign purpose-bound control, no media keys. */
+export async function encryptGenerationControl(sender: EphemeralVoice, recipient: EphemeralVoice, generation: number, epoch: string): Promise<C.ToDeviceRequest> {
+  const claim = await sender.machine.getMissingSessions([new C.UserId(recipient.binding.user)]);
+  if (claim) await sender.out(claim);
+  const content = generationControl.parse({ purpose: "voice-generation-proof", call: sender.binding.call, generation, epoch, sender: sender.binding.user, senderDevice: sender.binding.device, recipient: recipient.binding.user, recipientDevice: recipient.binding.device, audience: [sender.binding.member, recipient.binding.member], transaction: randomUUID(), action: "prepared" });
+  const encrypted = await (await sender.device(recipient)).encryptToDeviceEvent(GENERATION_CONTROL, content, C.CollectStrategy.onlyTrustedDevices());
+  const id = randomUUID();
+  return new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [recipient.binding.user]: { [recipient.binding.device]: JSON.parse(encrypted) } } }));
+}
+
+/** Apply current app bindings after genuine native decryption, before any readiness effect. */
+export async function receiveGenerationControls(recipient: EphemeralVoice, sender: EphemeralVoice, events: ReturnType<VoiceTransport["take"]>, generation: number, epoch: string): Promise<number> {
+  const processed = await recipient.machine.receiveSyncChanges(JSON.stringify(events.events), new C.DeviceLists([], []), new Map([["signed_curve25519", events.count]]), new Set(events.fallback ? ["signed_curve25519"] : []), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
+  let accepted = 0;
+  for (const item of processed) {
+    if (!(item instanceof C.DecryptedToDeviceEvent) || !item.encryptionInfo.isSenderVerified()) throw new Error("Genuine verified decryption required.");
+    const event = z.object({ sender: z.string(), type: z.literal(GENERATION_CONTROL), content: generationControl }).parse(JSON.parse(item.rawEvent));
+    const payload = event.content;
+    if (event.sender !== sender.binding.user || item.encryptionInfo.sender.toString() !== sender.binding.user || item.encryptionInfo.senderDevice?.toString() !== sender.binding.device || payload.sender !== sender.binding.user || payload.senderDevice !== sender.binding.device || payload.recipient !== recipient.binding.user || payload.recipientDevice !== recipient.binding.device || payload.call !== recipient.binding.call || !recipient.transport.owns(sender.binding) || !recipient.isAdmitted(sender.binding)) throw new Error("Exact control binding required.");
+    if (payload.generation !== generation || payload.epoch !== epoch || payload.audience.join() !== [sender.binding.member, recipient.binding.member].join()) continue;
+    accepted++;
+  }
+  return accepted;
+}
 
 export function identity(owner: EphemeralVoice) {
   return createHash("sha256").update(JSON.stringify([owner.machine.identityKeys.curve25519.toBase64(), owner.machine.identityKeys.ed25519.toBase64()])).digest("hex");
@@ -154,6 +185,13 @@ export class GenerationDispatcher {
     return new Promise((resolve) => { this.pause = { matches: (request) => request.type === type, resolve }; });
   }
   async send(request: NativeRequest): Promise<void> {
+    try { await this.dispatch(request); }
+    catch (error) {
+      if (!(error instanceof GenerationInterrupted)) this.owner.close();
+      throw error;
+    }
+  }
+  private async dispatch(request: NativeRequest): Promise<void> {
     if (this.pause?.matches(request)) {
       const pause = this.pause; this.pause = undefined;
       await new Promise<void>((_resolve, reject) => { this.pending = { request, reject }; pause.resolve(this.pending); });

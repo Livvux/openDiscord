@@ -2,9 +2,33 @@ import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { EphemeralVoice, verifyPair } from "./fixtures/ephemeral-voice";
-import { GenerationServer, GenerationDispatcher, identity } from "./fixtures/voice-generation";
+import { GenerationServer, GenerationDispatcher, encryptGenerationControl, identity, receiveGenerationControls } from "./fixtures/voice-generation";
 
 describe("isolated native generation retirement candidate", () => {
+  it("rejects a genuinely decrypted old-generation control and requires an actual current peer receipt", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await verifyPair(a, b); await a.admit(b); await b.admit(a);
+      const oldEpoch = randomUUID();
+      await a.out(await encryptGenerationControl(a, b, server.generation, oldEpoch));
+      const fetchedBeforeTransition = server.take(b);
+      expect(fetchedBeforeTransition.events).toHaveLength(1);
+      server.advance();
+      const epoch = randomUUID();
+      expect(await receiveGenerationControls(b, a, fetchedBeforeTransition, server.generation, epoch)).toBe(0);
+      const retired = await encryptGenerationControl(a, b, server.generation, epoch);
+      await dispatcher.retire(retired);
+      expect(await receiveGenerationControls(b, a, server.take(b), server.generation, epoch)).toBe(0);
+      const current = await encryptGenerationControl(a, b, server.generation, epoch);
+      await a.out(current);
+      expect(server.queued(b)).toBe(1);
+      expect(await receiveGenerationControls(b, a, server.take(b), server.generation, epoch)).toBe(1);
+    } finally { dispatcher.release(); a.close(); b.close(); }
+  }, 30_000);
+
   it("fences late committed HTTP responses and completes original native work exactly once", async () => {
     await C.initAsync();
     const server = new GenerationServer();
