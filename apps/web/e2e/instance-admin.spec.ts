@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { Pool } from "pg";
-import { expectNoA11yViolations, newUserPage } from "./helpers";
+import { CAPTCHA_HEADER, expectNoA11yViolations, newUserPage } from "./helpers";
 
 test("global administration works without 2FA and applies reports and suspensions", async ({ browser, baseURL }, testInfo) => {
   test.setTimeout(120_000);
@@ -10,7 +10,7 @@ test("global administration works without 2FA and applies reports and suspension
   const suffix = `${testInfo.project.name}-${randomUUID()}`;
   const password = "correct horse battery";
   const email = `instance-admin-${suffix}@example.test`;
-  const adminSignup = await page.request.post("/api/auth/sign-up/email", { headers: { Origin: baseURL! }, data: { email, password, name: "QA Instance Admin" } });
+  const adminSignup = await page.request.post("/api/auth/sign-up/email", { headers: { Origin: baseURL!, ...CAPTCHA_HEADER }, data: { email, password, name: "QA Instance Admin" } });
   expect(adminSignup.ok()).toBe(true);
   const adminId: string = (await adminSignup.json()).user.id;
   const chatter = await newUserPage(browser);
@@ -31,7 +31,7 @@ test("global administration works without 2FA and applies reports and suspension
     await expectNoA11yViolations(page);
 
     const chatterEmail = `chatter-${suffix}@example.test`;
-    const signup = await chatter.request.post("/api/auth/sign-up/email", { headers: { Origin: baseURL! }, data: { email: chatterEmail, password, name: "QA Chatter" } });
+    const signup = await chatter.request.post("/api/auth/sign-up/email", { headers: { Origin: baseURL!, ...CAPTCHA_HEADER }, data: { email: chatterEmail, password, name: "QA Chatter" } });
     expect(signup.ok()).toBe(true);
     chatterId = (await signup.json()).user.id;
     await chatter.goto("/app");
@@ -60,7 +60,7 @@ test("global administration works without 2FA and applies reports and suspension
     await expect(chatter.getByRole("heading", { name: "This page could not be found" })).toBeVisible();
     await chatter.goto(channelUrl);
 
-    await page.reload();
+    await page.goto("/app/admin?tab=reports");
     await expect(page.getByText("QA message abuse report", { exact: true })).toBeVisible();
     await expect(page.getByText("QA reported private message", { exact: true })).toHaveCount(0);
     const report = page.locator("#reports li").filter({ hasText: "QA message abuse report" });
@@ -78,7 +78,8 @@ test("global administration works without 2FA and applies reports and suspension
     const log = await db.query("select count(*)::int as total from instance_audit_log where actor_id=$1 and action='report.content.view'", [adminId]);
     expect(log.rows[0].total).toBe(1);
 
-    await page.getByLabel("Search users (name or email) and communities (name)").fill(chatterEmail);
+    await page.goto("/app/admin?tab=users");
+    await page.getByLabel("Search users by name or email").fill(chatterEmail);
     await page.getByRole("button", { name: "Search", exact: true }).click();
     const userRow = page.locator("#users li").filter({ hasText: chatterEmail });
     await userRow.getByRole("button", { name: "Suspend user", exact: true }).click();
@@ -91,13 +92,14 @@ test("global administration works without 2FA and applies reports and suspension
     await userRow.getByRole("button", { name: "Unsuspend user", exact: true }).click();
     await page.getByLabel("Reason", { exact: true }).fill("QA suspension appeal");
     await page.getByRole("button", { name: "Confirm unsuspend user", exact: true }).click();
-    await expect(page.locator("#users")).toContainText("Active");
+    await expect(userRow).toContainText("Active");
     await chatter.getByLabel("Email", { exact: true }).fill(chatterEmail);
     await chatter.getByLabel("Password", { exact: true }).fill(password);
     await chatter.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(chatter).toHaveURL(/\/app\/c\//);
 
-    await page.getByLabel("Search users (name or email) and communities (name)").fill(`QA moderation ${suffix}`);
+    await page.goto("/app/admin?tab=communities");
+    await page.getByLabel("Search communities by name").fill(`QA moderation ${suffix}`);
     await page.getByRole("button", { name: "Search", exact: true }).click();
     const communityRow = page.locator("#communities li").filter({ hasText: suffix });
     await communityRow.getByRole("button", { name: "Suspend community", exact: true }).click();

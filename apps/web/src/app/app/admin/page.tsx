@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { AdminPanel } from "@/components/app/settings/instance-admin";
+import { ADMIN_TABS, type AdminTab, AdminPanel } from "@/components/app/admin/admin-panel";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
-import { adminDashboard, requireInstanceAdmin } from "@/server/instance-admin";
+import { adminDashboard, requireInstanceAdmin, USER_FILTERS, type UserFilter } from "@/server/instance-admin";
 import { orNotFound } from "@/server/pages";
 import { requirePageUser } from "@/server/session";
 
@@ -28,7 +28,11 @@ async function Administration({ searchParams }: Pick<PageProps<"/app/admin">, "s
   await orNotFound(requireInstanceAdmin(actor));
   const params = await searchParams;
   const search = typeof params.q === "string" ? params.q.slice(0, 100) : "";
-  const status = typeof params.status === "string" && ["open", "dismissed", "removed"].includes(params.status) ? params.status : "open";
-  const data = await adminDashboard(actor, search, status);
-  return <AdminPanel data={data} search={search} status={status} />;
+  const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+    typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+  const status = pick(params.status, ["open", "dismissed", "removed"], "open");
+  const tab = pick<AdminTab>(params.tab, ADMIN_TABS, "overview");
+  const filter = pick<UserFilter>(params.filter, USER_FILTERS, "all");
+  const data = await adminDashboard(actor, search, status, filter);
+  return <AdminPanel data={data} tab={tab} search={search} status={status} />;
 }
