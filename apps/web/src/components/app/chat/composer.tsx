@@ -344,7 +344,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           maxLength={MESSAGE_MAX_LENGTH}
           placeholder={placeholder ?? `Message #${channelName}`}
           aria-describedby={remaining < 200 ? `${id}-remaining` : undefined}
-          className={`field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400 ${mediaEnabled ? "" : "pl-2"}`}
+          className={`field-sizing-content max-h-48 min-h-10 min-w-0 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400 ${mediaEnabled ? "" : "pl-2"}`}
         />
         {remaining < 200 && (
           <span id={`${id}-remaining`} className="pb-2.5 text-[11px] text-zinc-400">

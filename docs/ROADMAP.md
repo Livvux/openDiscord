@@ -21,12 +21,12 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP and merged releases #12–#29 and #31–#36 in production
+`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#38 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
 
-Encrypted DMs remain in draft PR #30 and have not passed full runtime/browser acceptance. Public
+Encrypted DMs merged in PR #30 after exact-head CI38785473940 passed 268 unit/integration tests and 43 browser tests, including desktop/mobile SAS, recovery, transfer and identity reset. Production deployment acceptance is recorded separately in the release ledger. Public
 operator policies and required 16-year signup self-attestation shipped in PR #34. Voice E2EE, TURN, physical-device media, real Web Push delivery, external
 security/legal review and the remaining product items below are still open.
 
@@ -48,7 +48,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Minimise IPs, logs, metadata | ✅ | IPs not stored with sessions; Caddy access logs off; app logs errors only |
 | Encryption in transit | ✅ | HTTPS + HSTS; official instance uses Cloudflare/Traefik, standalone deployment uses Caddy |
 | Encryption at rest | 🟡 | TOTP secrets and backup codes encrypted by Better Auth; database relies on disk encryption (documented). Column-level encryption is not planned for message content because the server must read it to serve it |
-| E2EE for private communication | 🟡 | **P1**: Matrix crypto integration in draft #30, not deployed or externally audited. Production text/voice are not E2EE |
+| E2EE for private communication | 🟡 | Matrix crypto DMs merged in #30 with desktop/mobile runtime acceptance; no external integration audit. Community text and voice are not E2EE |
 | Private content out of search engines and public APIs | ✅ | `robots.txt`, `noindex` on `/app` and `/invite`; all APIs require membership |
 
 ### 2. Data ownership and self-hosting
@@ -58,7 +58,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Independent instances | ✅ | Docker Compose stack verified end-to-end (TLS, auth, SSE through Caddy) |
 | No mandatory proprietary services | ✅ | SMTP optional; no external APIs |
 | Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh`, round trip tested |
-| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. Attachments are not included |
+| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachments. Complete file archives are implemented in draft PR #39, pending browser acceptance and release |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
 | Federation research | ✅ research only | [DECISIONS.md D13](DECISIONS.md#d13-federation-research-retain-instance-boundaries): retain instance boundaries; future opt-in Matrix bridge requires separate consent, permissions and acceptance. No federation implemented |
@@ -170,7 +170,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (TURN not bundled; TCP fallback) |
-| Direct messages with audited E2EE | 🟡 **draft #30** | Matrix crypto WASM18.9.0 chosen; device verification, ciphertext transport and bounded recovery in implementation. Exact-head runtime/browser acceptance and an external integration audit remain open. No plaintext fallback |
+| Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |

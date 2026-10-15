@@ -78,6 +78,7 @@ export async function createInviteLink(page: Page): Promise<string> {
 
 /** WCAG 2.2 A/AA automated checks. Automated checks catch a subset; manual review is still needed. */
 export async function expectNoA11yViolations(page: Page) {
+  await expect(page).toHaveTitle(/\S/);
   // Measure the settled UI: entrance animations would make contrast checks nondeterministic.
   await page.emulateMedia({ reducedMotion: "reduce" });
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();

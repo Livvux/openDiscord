@@ -1,4 +1,8 @@
 // Requires a migrated database at DATABASE_URL.
+import { randomUUID } from "node:crypto";
+import { eq, inArray, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { attachment, community, instanceSettings, session, user, userSuspension } from "@/db/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createCategory, setChannelCategory } from "@/server/categories";
 import { exportCommunity, importCommunity, type CommunityExport } from "@/server/community-export";
@@ -31,7 +35,11 @@ beforeAll(async () => {
   await setPinned(owner, root.id, true);
   await updateCommunityRules(owner, communityId, { text: "Respect the community.", required: true });
 });
-afterAll(() => users.cleanup());
+const stagedIds: string[] = [];
+afterAll(async () => {
+  if (stagedIds.length) await db.delete(attachment).where(inArray(attachment.id, stagedIds));
+  await users.cleanup();
+});
 
 describe("community export", () => {
   it("is owner-only and audited", async () => {
@@ -109,4 +117,97 @@ describe("community import", () => {
     await expect(importCommunity(importer, { ...exported, messages: [{ ...exported.messages[0], channelKey: "missing" }] })).rejects.toThrow("doesn't contain");
     await expect(importCommunity(importer, { ...exported, channels: [] })).rejects.toThrow();
   });
+});
+
+
+describe("private archive staging commit", () => {
+  async function fixture() {
+    const id = await users.create("Archive importer");
+    const sessionId = randomUUID();
+    await db.insert(session).values({ id: sessionId, userId: id, token: randomUUID(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 60_000) });
+    const data = { ...exported, messages: exported.messages.map((m, index) => ({ ...m, attachments: index === 0 ? 1 : 0 })) };
+    return { id, sessionId, data };
+  }
+  async function staged(uploaderId: string) {
+    const [row] = await db.insert(attachment).values({ uploaderId, key: `attachments/${randomUUID()}.bin`, contentType: "application/octet-stream", filename: "private.bin", size: 3, width: 0, height: 0 }).returning({ id: attachment.id });
+    stagedIds.push(row.id);
+    return row.id;
+  }
+  it("atomically links owned staged files without a missing-file note", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    await importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] });
+    const [linked] = await db.select().from(attachment).where(eq(attachment.id, file));
+    expect(linked.messageId).not.toBeNull(); expect(linked.channelId).not.toBeNull(); expect(linked.linkedAt).not.toBeNull();
+    const messages = await listMessages(id, linked.channelId);
+    expect(messages.messages.some((m) => m.content.includes("attachment not imported"))).toBe(false);
+  });
+  it("rejects foreign staged IDs and rolls back the new community", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(owner);
+    await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("no longer available");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+    expect((await db.select().from(attachment).where(eq(attachment.id, file)))[0].messageId).toBeNull();
+  });
+  it("rejects a revoked session before creating the community", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    await db.delete(session).where(eq(session.id, sessionId));
+    await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("Sign in again");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+  });
+  it.each(["revoke", "suspend"])("rechecks %s after waiting for the importing user lock", async (change) => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    const holder: { pending?: Promise<PromiseSettledResult<string>> } = {};
+    await db.transaction(async (tx) => {
+      await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
+      holder.pending = importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] }).then(
+        (value): PromiseSettledResult<string> => ({ status: "fulfilled", value }),
+        (reason: unknown): PromiseSettledResult<string> => ({ status: "rejected", reason }),
+      );
+      await expect.poll(async () => (await db.execute<{ waiting: boolean }>(sql`
+        select exists(select 1 from pg_stat_activity where wait_event_type = 'Lock'
+          and query like '%from "user"%for update%') as waiting
+      `)).rows[0]?.waiting).toBe(true);
+      if (change === "revoke") await tx.delete(session).where(eq(session.id, sessionId));
+      else await tx.insert(userSuspension).values({ userId: id, reason: "Concurrent suspension" });
+    });
+    if (!holder.pending) throw new Error("Import was not started");
+    const result = await holder.pending;
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") expect(result.reason).toMatchObject({ code: change === "revoke" ? "unauthorized" : "forbidden" });
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+  });
+  it("serializes the owned-community cap with a concurrent normal create", async () => {
+    const { id, data } = await fixture();
+    const [previous] = await db.select().from(instanceSettings).where(eq(instanceSettings.id, "instance"));
+    await db.insert(instanceSettings).values({ id: "instance", ownedCommunities: 1 }).onConflictDoUpdate({ target: instanceSettings.id, set: { ownedCommunities: 1 } });
+    try {
+      const results = await Promise.allSettled([createCommunity(id, "Concurrent create"), importCommunity(id, { ...data, messages: [] })]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      for (const result of results) if (result.status === "rejected") expect(String(result.reason)).toContain("at most 1");
+      expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(1);
+    } finally {
+      if (previous) await db.update(instanceSettings).set({ ownedCommunities: previous.ownedCommunities }).where(eq(instanceSettings.id, "instance"));
+      else await db.delete(instanceSettings).where(eq(instanceSettings.id, "instance"));
+    }
+  });
+  it("rolls back all earlier link batches when a later staged file is foreign", async () => {
+    const { id, sessionId, data } = await fixture();
+    const rows = await db.insert(attachment).values(Array.from({ length: 1001 }, (_, index) => ({
+      uploaderId: index === 1000 ? owner : id, key: `attachments/${randomUUID()}.bin`, contentType: "application/octet-stream", filename: "staged.bin", size: 1, width: 0, height: 0,
+    }))).returning({ id: attachment.id, uploaderId: attachment.uploaderId });
+    stagedIds.push(...rows.map((row) => row.id));
+    const foreign = rows.find((row) => row.uploaderId === owner);
+    if (!foreign) throw new Error("Foreign fixture missing");
+    const ordered = [...rows.filter((row) => row.uploaderId === id), foreign];
+    const messages = ordered.map((_, index) => ({ ...data.messages[0], key: `batch-${index}`, replyToKey: null, threadKey: null, attachments: 1 }));
+    await expect(importCommunity(id, { ...data, messages }, { sessionId, attachments: ordered.map((row, index) => ({ id: row.id, messageKey: messages[index].key })) })).rejects.toThrow("no longer available");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+    const unchanged = await db.select().from(attachment).where(inArray(attachment.id, ordered.map((row) => row.id)));
+    expect(unchanged).toHaveLength(ordered.length);
+    expect(unchanged.every((row) => row.messageId === null && row.channelId === null && row.linkedAt === null)).toBe(true);
+  });
+
 });

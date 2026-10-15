@@ -136,13 +136,21 @@ the previous release.
 
 Community owners can download an export in *Community settings → Export* and import it on another
 instance from *Create a community*. Messages keep their author names and times (marked as imported,
-owned by the importer); members, accounts and attachments don't move. To move a whole instance, use the
-backup below.
+owned by the importer); members and accounts don't move. The JSON export excludes files. Choose
+*Download archive with files* for a gzip archive containing the newest 100,000 messages and their
+files (at most 4,096 files and 256 MiB of file data). Exceeding a limit or encountering a missing file
+fails the archive instead of silently omitting files. Concurrent edits can change an export; it is
+not a transactional snapshot. Gzip compresses the archive but does not encrypt it. Store it privately.
+
+Imports revalidate files through the normal upload processing and optional scanner. Failed imports
+can leave private, unlinked files eligible for cleanup after one hour; they remain charged against
+the upload quota until cleanup. If confirmation fails, check the community list before retrying.
+To move a whole instance, use the backup below.
 
 ## Moving to another server
 
-Back up on the old host, install on the new host with the same `.env` (same `BETTER_AUTH_SECRET`, or
-sessions and TOTP enrolments are lost), restore, then switch DNS.
+Back up on the old host, install on the new host with the same `.env` (same `BETTER_AUTH_SECRET` and all retained
+`BETTER_AUTH_SECRETS` versions, or sessions and encrypted TOTP enrolments may become inaccessible), restore, then switch DNS.
 
 ## Local development
 

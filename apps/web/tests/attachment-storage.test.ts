@@ -26,6 +26,12 @@ describe("private local attachment storage", () => {
     expect(await storage.remove(key)).toBe(true);
     expect((await storage.read(key)).status).toBe(404);
   });
+  it("does not publish an aborted private write", async () => {
+    const { storage, key } = await fixture();
+    const controller = new AbortController(); controller.abort();
+    await expect(storage.put(key, new Uint8Array([1, 2, 3]), "application/octet-stream", controller.signal)).rejects.toThrow();
+    expect((await storage.read(key)).status).toBe(404);
+  });
   it("rejects traversal, arbitrary file names, relative roots and leaf symlinks", async () => {
     const { directory, storage, key } = await fixture();
     expect(() => localAttachmentStorage("public/uploads")).toThrow();
