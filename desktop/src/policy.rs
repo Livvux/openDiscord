@@ -23,7 +23,8 @@ pub fn same_origin(instance: &Url, target: &Url) -> bool {
 
 pub fn allowed_origin(instance: &Url, target: &Url) -> bool {
     same_origin(instance, target)
-        || (target.scheme() == "blob" && target.origin() == instance.origin())
+        || (target.scheme() == "blob"
+            && Url::parse(target.path()).is_ok_and(|inner| same_origin(instance, &inner)))
 }
 
 #[cfg(test)]
@@ -43,6 +44,7 @@ mod tests {
             "data:text/plain,x",
             "blob:https://opendiscord.app:444/123",
             "blob:http://opendiscord.app/123",
+            "blob:https://user@opendiscord.app/123",
         ] {
             assert!(!allowed_origin(&base, &Url::parse(target).unwrap()));
         }
