@@ -18,7 +18,7 @@ import { testUsers } from "./helpers";
 const users = testUsers();
 const owners = new Set<VoiceCryptoOwner>();
 type Dispatch = Parameters<VoiceOwnerTransport>[0];
-type Endpoint = { userId: string; sessionId: string; anchorDeviceId: string; anchorSecret: string; secret: string; snapshot: VoiceSnapshot; owner: VoiceCryptoOwner; fence: ReturnType<typeof vi.fn>; lifetime: AbortController; calls: Dispatch[]; before?: (input: Dispatch) => Promise<void>; after?: (input: Dispatch, response: unknown) => Promise<void> };
+type Endpoint = { userId: string; sessionId: string; anchorDeviceId: string; anchorSecret: string; secret: string; snapshot: VoiceSnapshot; owner: VoiceCryptoOwner; fence: ReturnType<typeof vi.fn<(reason: string) => void>>; lifetime: AbortController; calls: Dispatch[]; before?: (input: Dispatch) => Promise<void>; after?: (input: Dispatch, response: unknown) => Promise<void> };
 const auth = (e: Endpoint) => ({ userId: e.userId, sessionId: e.sessionId, memberId: e.snapshot.memberId, secret: e.secret });
 const binding = (e: Endpoint) => ({ callId: e.snapshot.callId, memberId: e.snapshot.memberId, joinNonce: e.snapshot.joinNonce, expectedGeneration: e.snapshot.generation });
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
@@ -43,7 +43,11 @@ async function fixture(count = 2, nativeOwners = count) {
   for (const account of accounts) {
     const secret = randomBytes(32).toString("hex");
     const snapshot = await joinVoiceControl(account, { channelId: ch.id, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: secret, consent: true });
-    endpoints.push({ ...account, secret, snapshot, calls: [], fence: vi.fn(), lifetime: new AbortController() } as Endpoint);
+    let nativeOwner: VoiceCryptoOwner | undefined;
+    endpoints.push({ ...account, secret, snapshot, calls: [], fence: vi.fn<(reason: string) => void>(), lifetime: new AbortController(),
+      get owner() { if (!nativeOwner) throw new Error("Endpoint has no native owner yet."); return nativeOwner; },
+      set owner(value: VoiceCryptoOwner) { nativeOwner = value; },
+    });
   }
   for (const endpoint of endpoints) endpoint.snapshot = await heartbeatVoiceControl(auth(endpoint), binding(endpoint));
   for (const endpoint of endpoints.slice(0, nativeOwners)) {
