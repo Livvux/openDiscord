@@ -373,3 +373,19 @@ export const integration = pgTable(
   },
   (t) => [index("integration_community_idx").on(t.communityId), index("integration_user_idx").on(t.userId)],
 );
+
+/** A browser's Web Push subscription (one per device). Payloads are encrypted for that browser (RFC 8291). */
+export const pushSubscription = pgTable(
+  "push_subscription",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull().unique(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("push_subscription_user_idx").on(t.userId)],
+);

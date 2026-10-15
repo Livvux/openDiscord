@@ -44,6 +44,10 @@ export default defineConfig({
       R2_BUCKET: process.env.R2_BUCKET ?? "",
       R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID ?? "",
       R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY ?? "",
+      // Web Push (VAPID); the push spec skips without keys.
+      VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? "",
+      VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY ?? "",
+      VAPID_SUBJECT: process.env.VAPID_SUBJECT ?? "",
     },
   },
 });

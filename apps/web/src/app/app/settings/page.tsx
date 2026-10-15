@@ -12,6 +12,8 @@ import { SignOutButton } from "@/app/app/sign-out-button";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
 import { listBlocked } from "@/server/blocks";
 import { presenceVisible } from "@/server/presence";
+import { pushEnabled, vapidPublicKey } from "@/server/push";
+import { PushSettings } from "@/components/app/settings/push-settings";
 import { PresenceSettings } from "@/components/app/settings/presence-settings";
 import { requirePageUser } from "@/server/session";
 
@@ -58,6 +60,7 @@ async function Settings() {
       </Section>
       <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
         <NotificationSettings />
+        {pushEnabled && vapidPublicKey && <PushSettings publicKey={vapidPublicKey} />}
       </Section>
       <Section title="Online status" description="Off by default. When on, members of your communities see a dot while you have openDiscord open.">
         <PresenceSettings visible={showPresence} />
