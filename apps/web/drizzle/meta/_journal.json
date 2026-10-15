@@ -113,6 +113,13 @@
       "when": 1792070886033,
       "tag": "0015_voice_channels",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792072162657,
+      "tag": "0016_video_permission",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Room } from "livekit-client";
+import type { Room, Track as LiveKitTrack } from "livekit-client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { joinVoice } from "@/app/app/actions";
 
@@ -14,13 +14,25 @@ export interface VoicePeer {
 
 export type VoiceStatus = "idle" | "connecting" | "connected";
 
+export interface VideoTile {
+  key: string;
+  name: string;
+  isLocal: boolean;
+  screen: boolean;
+  track: LiveKitTrack;
+}
+
 interface VoiceValue {
   status: VoiceStatus;
   /** The voice channel we're connected (or connecting) to. */
   channel: { id: string; name: string; href: string } | null;
   peers: VoicePeer[];
+  videos: VideoTile[];
   muted: boolean;
   canSpeak: boolean;
+  canVideo: boolean;
+  cameraOn: boolean;
+  sharing: boolean;
   error: string | null;
   /** The browser blocked autoplay of remote audio; `startAudio` (from a click) unblocks it. */
   audioBlocked: boolean;
@@ -28,10 +40,13 @@ interface VoiceValue {
   join: (channel: { id: string; name: string; href: string }) => Promise<void>;
   leave: () => void;
   toggleMute: () => Promise<void>;
+  toggleCamera: () => Promise<void>;
+  toggleScreenShare: () => Promise<void>;
 }
 
 const VoiceContext = createContext<VoiceValue | null>(null);
-/** `livekit.TrackSource.MICROPHONE` in LiveKit's protocol, as used in participant permissions. */
+/** `livekit.TrackSource` values in LiveKit's protocol, as used in participant permissions. */
+const PROTO_CAMERA = 1;
 const PROTO_MICROPHONE = 2;
 
 export function useVoice(): VoiceValue {
@@ -52,6 +67,22 @@ function peersOf(room: Room): VoicePeer[] {
   }));
 }
 
+/** Camera and screen tracks that are playing (published locally or subscribed remotely). */
+function videosOf(room: Room): VideoTile[] {
+  const local = room.localParticipant;
+  return [local, ...room.remoteParticipants.values()].flatMap((p) =>
+    [...p.trackPublications.values()]
+      .filter((pub) => pub.kind === "video" && pub.track && !pub.isMuted)
+      .map((pub) => ({
+        key: `${p.identity}:${pub.trackSid}`,
+        name: p.name || "Member",
+        isLocal: p === local,
+        screen: pub.source === "screen_share",
+        track: pub.track!,
+      })),
+  );
+}
+
 /** App-wide, so a voice call survives navigating to text channels (like a phone call in the background). */
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const room = useRef<Room | null>(null);
@@ -61,6 +92,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [channel, setChannel] = useState<VoiceValue["channel"]>(null);
   const [peers, setPeers] = useState<VoicePeer[]>([]);
+  const [videos, setVideos] = useState<VideoTile[]>([]);
+  const [canVideo, setCanVideo] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [muted, setMuted] = useState(true);
   const [canSpeak, setCanSpeak] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +109,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setStatus("idle");
     setChannel(null);
     setPeers([]);
+    setVideos([]);
+    setCameraOn(false);
+    setSharing(false);
     if (audio.current) audio.current.replaceChildren();
   }, []);
 
@@ -98,7 +136,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       if (stale()) return;
       const next = new Room({ adaptiveStream: true, dynacast: true });
       room.current = next;
-      const refresh = () => room.current === next && setPeers(peersOf(next));
+      const refresh = () => {
+        if (room.current !== next) return;
+        setPeers(peersOf(next));
+        setVideos(videosOf(next));
+        setCameraOn(next.localParticipant.isCameraEnabled);
+        setSharing(next.localParticipant.isScreenShareEnabled);
+      };
       next
         .on(RoomEvent.ParticipantConnected, refresh)
         .on(RoomEvent.ParticipantDisconnected, refresh)
@@ -106,6 +150,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         .on(RoomEvent.TrackMuted, refresh)
         .on(RoomEvent.TrackUnmuted, refresh)
         .on(RoomEvent.LocalTrackPublished, refresh)
+        .on(RoomEvent.LocalTrackUnpublished, refresh)
+        .on(RoomEvent.TrackPublished, refresh)
+        .on(RoomEvent.TrackUnpublished, refresh)
         .on(RoomEvent.TrackSubscribed, (track) => {
           if (track.kind === Track.Kind.Audio) audio.current?.appendChild(track.attach());
           refresh();
@@ -121,6 +168,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           const sources = permissions?.canPublishSources ?? [];
           const speak = !!permissions?.canPublish && (sources.length === 0 || sources.includes(PROTO_MICROPHONE));
           setCanSpeak(speak);
+          setCanVideo(!!permissions?.canPublish && (sources.length === 0 || sources.includes(PROTO_CAMERA)));
           if (!speak) setMuted(true);
           refresh();
         })
@@ -144,6 +192,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setCanSpeak(result.data.canSpeak);
+      setCanVideo(result.data.canVideo);
       setStatus("connected");
       // Autoplay rules may block remote audio until a user gesture; offer a button then.
       setAudioBlocked(!next.canPlaybackAudio);
@@ -175,6 +224,32 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setPeers(peersOf(current));
   }, [canSpeak, muted]);
 
+  const toggleCamera = useCallback(async () => {
+    const current = room.current;
+    if (!current || !canVideo) return;
+    try {
+      await current.localParticipant.setCameraEnabled(!current.localParticipant.isCameraEnabled);
+      setError(null);
+    } catch {
+      setError("Camera access was blocked or no camera was found.");
+    }
+    setCameraOn(current.localParticipant.isCameraEnabled);
+    setVideos(videosOf(current));
+  }, [canVideo]);
+
+  const toggleScreenShare = useCallback(async () => {
+    const current = room.current;
+    if (!current || !canVideo) return;
+    try {
+      await current.localParticipant.setScreenShareEnabled(!current.localParticipant.isScreenShareEnabled, { audio: true });
+      setError(null);
+    } catch {
+      // Cancelling the browser's picker lands here too; that's not worth an error message.
+    }
+    setSharing(current.localParticipant.isScreenShareEnabled);
+    setVideos(videosOf(current));
+  }, [canVideo]);
+
   const startAudio = useCallback(async () => {
     await room.current?.startAudio();
     setAudioBlocked(!(room.current?.canPlaybackAudio ?? true));
@@ -183,8 +258,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => () => void room.current?.disconnect(), []);
 
   const value = useMemo(
-    () => ({ status, channel, peers, muted, canSpeak, error, audioBlocked, startAudio, join, leave, toggleMute }),
-    [status, channel, peers, muted, canSpeak, error, audioBlocked, startAudio, join, leave, toggleMute],
+    () => ({
+      status, channel, peers, videos, muted, canSpeak, canVideo, cameraOn, sharing, error, audioBlocked,
+      startAudio, join, leave, toggleMute, toggleCamera, toggleScreenShare,
+    }),
+    [status, channel, peers, videos, muted, canSpeak, canVideo, cameraOn, sharing, error, audioBlocked,
+      startAudio, join, leave, toggleMute, toggleCamera, toggleScreenShare],
   );
   return (
     <VoiceContext.Provider value={value}>

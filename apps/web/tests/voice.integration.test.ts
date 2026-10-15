@@ -36,17 +36,19 @@ describe.runIf(voiceEnabled)("voice channels", () => {
     expect(await listMessages(member, voiceId)).toEqual({ messages: [], hasMore: false });
   });
 
-  it("issues a short-lived (60 s) token for this room only, microphone only, no data channel", async () => {
+  it("issues a short-lived (60 s) token for this room only, with media by permission and no data channel", async () => {
     const c = await claims(member, voiceId);
     expect(c.sub).toBe(member);
     expect(c.name).toBe("Member");
     expect(c.video).toMatchObject({ room: voiceId, roomJoin: true, canPublish: true, canPublishData: false });
-    expect(c.video.canPublishSources).toEqual(["microphone"]);
+    expect(c.video.canPublishSources).toEqual(["microphone", "camera", "screen_share", "screen_share_audio"]);
     expect(c.exp - Date.now() / 1000).toBeLessThanOrEqual(65);
   });
 
-  it("enforces Connect and Speak per channel", async () => {
-    await setChannelOverride(owner, voiceId, everyone, 0, Permission.Speak);
+  it("enforces Connect, Speak and Video per channel", async () => {
+    await setChannelOverride(owner, voiceId, everyone, 0, Permission.Video);
+    expect((await claims(member, voiceId)).video.canPublishSources).toEqual(["microphone"]);
+    await setChannelOverride(owner, voiceId, everyone, 0, Permission.Speak | Permission.Video);
     expect((await claims(member, voiceId)).video).toMatchObject({ canPublish: false, canPublishSources: [] });
     await setChannelOverride(owner, voiceId, everyone, 0, Permission.Connect);
     await expect(createVoiceToken(member, voiceId)).rejects.toThrow("permission");

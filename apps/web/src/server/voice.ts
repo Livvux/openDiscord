@@ -35,6 +35,15 @@ export interface VoiceJoin {
   url: string;
   token: string;
   canSpeak: boolean;
+  canVideo: boolean;
+}
+
+/** What a member may publish, from their channel permissions. */
+function publishSources(authority: Parameters<typeof has>[0]): TrackSource[] {
+  return [
+    ...(has(authority, Permission.Speak) ? [TrackSource.MICROPHONE] : []),
+    ...(has(authority, Permission.Video) ? [TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] : []),
+  ];
 }
 
 export async function createVoiceToken(userId: string, rawChannelId: unknown): Promise<VoiceJoin> {
@@ -43,18 +52,23 @@ export async function createVoiceToken(userId: string, rawChannelId: unknown): P
   const { channel: ch, authority } = await requireChannel(db, channelId, userId, Permission.Connect);
   if (ch.kind !== "voice") throw new AppError("invalid", "This isn't a voice channel.");
   const [me] = await db.select({ name: user.name }).from(user).where(eq(user.id, userId));
-  const canSpeak = has(authority, Permission.Speak);
+  const sources = publishSources(authority);
   const at = new AccessToken(apiKey, apiSecret, { identity: userId, name: me?.name, ttl: TOKEN_TTL_SECONDS });
   at.addGrant({
     room: ch.id,
     roomJoin: true,
     canSubscribe: true,
-    canPublish: canSpeak,
-    canPublishSources: canSpeak ? [TrackSource.MICROPHONE] : [],
+    canPublish: sources.length > 0,
+    canPublishSources: sources,
     // No data channel: chat stays in text channels, where it is moderated.
     canPublishData: false,
   });
-  return { url: url!, token: await at.toJwt(), canSpeak };
+  return {
+    url: url!,
+    token: await at.toJwt(),
+    canSpeak: sources.includes(TrackSource.MICROPHONE),
+    canVideo: sources.includes(TrackSource.CAMERA),
+  };
 }
 
 export interface VoiceParticipant {
@@ -73,7 +87,7 @@ export async function listVoiceParticipants(userId: string, rawChannelId: unknow
 
 /**
  * Re-checks everyone in the community's voice rooms: people who can no longer connect are removed,
- * people who can no longer speak are muted. Best effort, so moderation never fails because LiveKit is down.
+ * people who lost Speak or Video can no longer publish those tracks. Best effort, so moderation never fails because LiveKit is down.
  */
 export async function reconcileVoice(communityId: string): Promise<void> {
   if (!voiceEnabled) return;
@@ -91,10 +105,17 @@ export async function reconcileVoice(communityId: string): Promise<void> {
       const access = await loadChannelAuthority(db, ch.id, p.identity).catch(() => null);
       if (!access || !has(access.authority, Permission.Connect)) {
         await client.removeParticipant(ch.id, p.identity).catch(() => {});
-      } else if (!has(access.authority, Permission.Speak) && p.permission?.canPublish) {
-        await client
-          .updateParticipant(ch.id, p.identity, { permission: { canSubscribe: true, canPublish: false, canPublishData: false } })
-          .catch(() => {});
+      } else {
+        // Narrow what they may publish when Speak or Video was taken away; LiveKit unpublishes the rest.
+        const allowed = publishSources(access.authority);
+        const current = p.permission?.canPublishSources ?? [];
+        if (current.some((source) => !allowed.includes(source)) || (allowed.length === 0 && p.permission?.canPublish)) {
+          await client
+            .updateParticipant(ch.id, p.identity, {
+              permission: { canSubscribe: true, canPublish: allowed.length > 0, canPublishSources: allowed, canPublishData: false },
+            })
+            .catch(() => {});
+        }
       }
     }
   }

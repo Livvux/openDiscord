@@ -87,7 +87,8 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 
 Voice channels ✅ on self-hosted LiveKit as an optional compose profile ([DECISIONS.md](DECISIONS.md) D8): permission-checked
 short-lived tokens, *Join voice*/*Speak* per channel, removal on loss of access, calls survive navigation.
-Video and screen sharing are P2. Voice is not end-to-end encrypted (SFU relays DTLS-SRTP).
+Video calls and screen sharing ✅ in voice channels (separate *Video* permission, per channel). Not end-to-end
+encrypted (the SFU relays DTLS-SRTP).
 
 ### 5. Security
 
@@ -177,7 +178,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P2 — important improvements
 
-Screen sharing and video calls, threads, channel categories, non-image file attachments, bot accounts,
+~~Screen sharing and video calls~~ ✅, threads, channel categories, non-image file attachments, bot accounts,
 incoming webhooks and a versioned public API (OpenAPI), Web Push notifications (VAPID, no third-party
 service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).
