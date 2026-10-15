@@ -114,6 +114,14 @@ describe("private encrypted conversations", () => {
     await handleCryptoRequest(authA(), send(content));
     await expect(handleCryptoRequest(authA(), send({ ...content, method: "m.qr_code.show.v1" }))).rejects.toThrow();
   });
+  it("preserves the pinned SDK encrypted-message ID extension and bounds its shape", async () => {
+    const messageId = randomUUID().replaceAll("-", "");
+    const content = { algorithm: "m.olm.v1.curve25519-aes-sha2", sender_key: "a".repeat(43), "org.matrix.msgid": messageId, ciphertext: { ["b".repeat(43)]: { type: 0, body: "c".repeat(96) } } };
+    const send = (value: unknown) => ({ kind: "send", requestId: randomUUID(), eventType: "m.room.encrypted", body: { messages: { [matrix(bob)]: { [bDevice]: value } } } });
+    await handleCryptoRequest(authA(), send(content));
+    expect(JSON.stringify((await handleCryptoRequest(authB(), { kind: "sync" })).events)).toContain(messageId);
+    await expect(handleCryptoRequest(authA(), send({ ...content, "org.matrix.msgid": "x".repeat(200) }))).rejects.toThrow();
+  });
   it("caps nested work before shared locks and refuses nonexistent signature targets", async () => {
     const huge = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [String(i), "signed_curve25519"]));
     await expect(handleCryptoRequest(authA(), { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(bob)]: huge } } })).rejects.toThrow("Too many target");

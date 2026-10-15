@@ -163,7 +163,7 @@ const verificationSchemas: Record<string, z.ZodType<Record<string, unknown>>> = 
   cancel: z.object({ transaction_id: transaction, code: z.string().max(100), reason: z.string().max(256) }).strict(),
 };
 function parseDeviceEvent(type: string, input: unknown): Record<string, unknown> {
-  if (type === "m.room.encrypted") return parse(z.object({ algorithm: z.literal("m.olm.v1.curve25519-aes-sha2"), sender_key: base64Schema.max(64), ciphertext: z.record(base64Schema.max(64), z.object({ type: z.union([z.literal(0), z.literal(1)]), body: base64Schema.max(450_000) }).strict()) }).strict(), input);
+  if (type === "m.room.encrypted") return parse(z.object({ algorithm: z.literal("m.olm.v1.curve25519-aes-sha2"), sender_key: base64Schema.max(64), "org.matrix.msgid": z.string().regex(/^[a-f0-9]{32}$/).optional(), ciphertext: z.record(base64Schema.max(64), z.object({ type: z.union([z.literal(0), z.literal(1)]), body: base64Schema.max(450_000) }).strict()) }).strict(), input);
   const verification = verificationSchemas[type.replace("m.key.verification.", "")];
   if (type.startsWith("m.key.verification.") && verification) return parse(verification, input);
   const common = { action: z.enum(["request", "request_cancellation"]), requesting_device_id: uuid, request_id: transaction };
