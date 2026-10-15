@@ -1,0 +1,15 @@
+{
+  "name": "opendiscord",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@12.9.1",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint",
+    "typecheck": "pnpm --filter web typecheck",
+    "test": "pnpm --filter web test",
+    "db:generate": "pnpm --filter web db:generate",
+    "db:migrate": "pnpm --filter web db:migrate"
+  }
+}

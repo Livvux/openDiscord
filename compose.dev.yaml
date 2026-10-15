@@ -1,0 +1,14 @@
+# Local development database only: docker compose -f compose.dev.yaml up -d
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: opendiscord
+      POSTGRES_PASSWORD: opendiscord
+      POSTGRES_DB: opendiscord
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pgdata-dev:/var/lib/postgresql
+
+volumes:
+  pgdata-dev:

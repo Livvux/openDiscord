@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opendiscord
+          POSTGRES_PASSWORD: opendiscord
+          POSTGRES_DB: opendiscord
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/opendiscord
+      BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+      BETTER_AUTH_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm db:migrate
+      - run: pnpm test
+      - run: pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build --target web -t opendiscord-web .
