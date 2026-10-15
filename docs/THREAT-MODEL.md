@@ -29,7 +29,8 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 ## Trust boundaries
 
 1. Browser ↔ Caddy (internet, TLS).
-2. Caddy ↔ web (Docker network). `web` trusts `X-Forwarded-For` from Caddy for rate limiting; `web` is
+2. Caddy ↔ web (Docker network). `web` trusts `X-Forwarded-For` from Caddy for rate limiting (Caddy
+   overwrites it with the client IP, honouring `Cf-Connecting-Ip` only from `TRUSTED_PROXIES`); `web` is
    not published on a host port, so clients can't spoof it. **Operators who expose `web` directly
    must strip `X-Forwarded-For` at their own proxy.**
 3. web ↔ Postgres (Docker network, password auth, not exposed).

@@ -39,8 +39,14 @@ Optional integrations (see `.env.example`):
 ## Security notes
 
 - `web` is not published on a host port; only Caddy is. Keep it that way: rate limiting trusts the
-  `X-Forwarded-For` header that Caddy sets. If you use another reverse proxy, make sure it overwrites
-  (not appends to) `X-Forwarded-For` and that `web` is unreachable from outside.
+  `X-Forwarded-For` header that Caddy sets. Caddy overwrites it with the one client IP it resolved.
+  If you use another reverse proxy, make sure it overwrites (not appends to) `X-Forwarded-For` and
+  that `web` is unreachable from outside.
+- **Behind Cloudflare (proxied DNS):** set `TRUSTED_PROXIES` to Cloudflare's ranges, otherwise every
+  visitor looks like a Cloudflare edge IP and shares one rate limit. Only those peers may supply
+  `Cf-Connecting-Ip`; anyone reaching the server directly can't spoof it:
+  `TRUSTED_PROXIES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | tr '\n' ' ')"`.
+  Cloudflare changes these ranges rarely; refresh them when it announces changes.
 - If you put a CDN such as Cloudflare in front, it terminates TLS and can see traffic; tell your users.
 - `BETTER_AUTH_SECRET` signs sessions and encrypts TOTP secrets. Rotating it signs everyone out and
   invalidates enrolled authenticator apps (users must set 2FA up again). Rotate it if it leaks.

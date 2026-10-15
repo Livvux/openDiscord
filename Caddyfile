@@ -1,9 +1,20 @@
+{
+	servers {
+		# Only these peers may tell Caddy the real client IP. Default: none from the internet.
+		# Behind Cloudflare, set TRUSTED_PROXIES to Cloudflare's ranges (docs/SELF-HOSTING.md).
+		trusted_proxies static {$TRUSTED_PROXIES:private_ranges}
+		client_ip_headers Cf-Connecting-Ip X-Forwarded-For
+	}
+}
+
 {$DOMAIN} {
 	encode zstd gzip
 	header Strict-Transport-Security "max-age=31536000"
 	# Server-Sent Events: flush immediately instead of buffering.
 	reverse_proxy web:3000 {
 		flush_interval -1
+		# Rate limiting in `web` reads this; overwrite it with the one IP Caddy resolved, never append.
+		header_up X-Forwarded-For {client_ip}
 	}
 	# Don't keep client IP addresses in access logs (Caddy logs nothing by default).
 }
