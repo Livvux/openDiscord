@@ -21,10 +21,10 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP and merged releases #12–#29 and #31–#34 in production
+`main` runs the text-chat MVP and merged releases #12–#29 and #31–#36 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
-cost-backed funding disclosure and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
+cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
 
 Encrypted DMs remain in draft PR #30 and have not passed full runtime/browser acceptance. Public
 operator policies and required 16-year signup self-attestation shipped in PR #34. Voice E2EE, TURN, physical-device media, real Web Push delivery, external
@@ -103,7 +103,7 @@ encrypted (the SFU relays DTLS-SRTP).
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
 | Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
-| Secret management and key rotation | 🟡 | Env secrets; rotation procedure documented. Rotating `BETTER_AUTH_SECRET` invalidates sessions and TOTP secrets: multi-key rotation P2 |
+| Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |
 | Responsible disclosure | ✅ | [SECURITY.md](../SECURITY.md) |
 | Secure-by-default deployment | ✅ | Secrets required, DB not exposed, non-root container, HTTPS only |
@@ -185,5 +185,5 @@ Published operator rules and minimum-age attestation shipped in #34; legal revie
 ### P3 — later
 
 Custom emojis and stickers, native app shells,
-opt-in public indexable channels and community discovery, secret multi-key rotation. Automated
+opt-in public indexable channels and community discovery. Native auth multi-key rotation and automated
 license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.
