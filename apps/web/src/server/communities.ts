@@ -10,6 +10,8 @@ import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Pe
 import { publish } from "./realtime";
 import { listCategories, type CategorySummary } from "./categories";
 import { afterAccessChange, closeVoiceRoom, voiceEnabled } from "./voice";
+import { lockVoiceLifecycle } from "./voice-locks";
+import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { NOTHING_UNREAD, unreadState } from "./unread";
 import { z } from "zod";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
@@ -113,14 +115,17 @@ export async function renameCommunity(userId: string, rawId: unknown, rawName: u
 
 export async function deleteCommunity(userId: string, rawId: unknown) {
   const communityId = parse(uuid, rawId);
-  const { authority } = await requireMember(db, communityId, userId);
-  if (!authority.isOwner) throw forbidden("Only the owner can delete a community.");
-  const voiceRooms = await db.select({ id: channel.id }).from(channel).where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
-  // Bot and webhook accounts exist only for this community; their messages go with it anyway.
-  const botUsers = await db.select({ id: integration.userId }).from(integration).where(eq(integration.communityId, communityId));
-  await db.transaction(async (tx) => {
+  const voiceRooms = await db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx, "auth");
+    await lockCommunity(tx, communityId);
+    const { authority } = await requireMember(tx, communityId, userId);
+    if (!authority.isOwner) throw forbidden("Only the owner can delete a community.");
+    const rooms = await tx.select({ id: channel.id }).from(channel).where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
+    const botUsers = await tx.select({ id: integration.userId }).from(integration).where(eq(integration.communityId, communityId));
+    await invalidateVoiceMembership(tx, { communityId }, "community-deleted");
     await tx.delete(community).where(eq(community.id, communityId));
-    if (botUsers.length) await tx.delete(user).where(inArray(user.id, botUsers.map((b) => b.id)));
+    if (botUsers.length) await tx.delete(user).where(inArray(user.id, botUsers.map(b => b.id)));
+    return rooms;
   });
   await publish({ type: "community.deleted", communityId });
   await Promise.all(voiceRooms.map((r) => closeVoiceRoom(r.id)));
@@ -128,9 +133,14 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
 
 export async function leaveCommunity(userId: string, rawId: unknown) {
   const communityId = parse(uuid, rawId);
-  const { authority } = await requireMember(db, communityId, userId);
-  if (authority.isOwner) throw forbidden("Owners can't leave. Delete the community instead.");
-  await db.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+  await db.transaction(async tx => {
+    await lockVoiceLifecycle(tx);
+    await lockCommunity(tx, communityId);
+    const { authority } = await requireMember(tx, communityId, userId);
+    if (authority.isOwner) throw forbidden("Owners can't leave. Delete the community instead.");
+    await invalidateVoiceMembership(tx, { communityId, userId }, "community-left");
+    await tx.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+  });
   await publish({ type: "member.removed", communityId, userId });
   afterAccessChange(communityId);
 }
@@ -171,11 +181,13 @@ export async function deleteChannel(userId: string, rawChannelId: unknown) {
   const channelId = parse(uuid, rawChannelId);
   const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
   await db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     await lockCommunity(tx, ch.communityId);
     await requireChannel(tx, channelId, userId, Permission.ManageChannels);
     const [{ total }] = await tx.select({ total: count() }).from(channel).where(eq(channel.communityId, ch.communityId));
     if (total <= 1) throw forbidden("A community needs at least one channel.");
     const targetId = await auditChannelName(tx, ch);
+    await invalidateVoiceMembership(tx, { channelId }, "channel-deleted");
     await tx.delete(channel).where(eq(channel.id, channelId));
     await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.delete", targetId });
   });
@@ -234,6 +246,7 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
   const deny = parse(overrideBits, rawDeny);
   if (allow & deny) throw invalid("A permission can't be both allowed and denied.");
   const communityId = await db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     // A channel's community never changes, so locking after the first read is safe; authority is re-read under the lock.
     const [ref] = await tx.select({ communityId: channel.communityId }).from(channel).where(eq(channel.id, channelId));
     if (ref) await lockCommunity(tx, ref.communityId);
@@ -242,12 +255,14 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
     if (!r) throw notFound("Role not found.");
     // Same escalation rule as editing the role itself: only roles below you, only bits you hold in this channel.
     if (!canManageRole(authority, r.position, allow | deny) || !has(authority, allow | deny)) throw forbidden();
+    const beforeVoice = await captureVoiceCapabilities(tx, { channelId });
     if (allow === 0 && deny === 0) {
       await tx.delete(channelOverride).where(and(eq(channelOverride.channelId, channelId), eq(channelOverride.roleId, roleId)));
     } else {
       await tx.insert(channelOverride).values({ channelId, roleId, allow, deny })
         .onConflictDoUpdate({ target: [channelOverride.channelId, channelOverride.roleId], set: { allow, deny } });
     }
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     const targetId = await auditChannelName(tx, ch);
     await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.permissions", targetId, reason: r.name });
     return ch.communityId;

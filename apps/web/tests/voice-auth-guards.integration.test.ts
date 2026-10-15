@@ -68,3 +68,59 @@ describe("unreleased unconditional ordered native auth guards", () => {
     await db.$client.query('update public."user" set name = $1 where id = $2', [`Profile ${randomUUID()}`, id]);
   });
 });
+
+async function blockedBy(pid: number, blocker: number) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const { rows } = await db.$client.query<{ blocked: boolean }>("select $2 = any(pg_blocking_pids($1)) as blocked", [pid, blocker]);
+    if (rows[0].blocked) return;
+  }
+  throw new Error(`Backend ${pid} did not reach blocker ${blocker}`);
+}
+function sqlState(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+describe("real PostgreSQL rejected and ordered native guard lock graphs", () => {
+  for (const ordered of [false, true]) {
+    it(`${ordered ? "resolves" : "reproduces"} DM upload versus native user cascade deadlock`, async () => {
+      const schema = `voice_guard_probe_${randomUUID().replaceAll("-", "")}`;
+      const dm = await db.$client.connect(), native = await db.$client.connect();
+      let cascade: Promise<unknown> | undefined, upload: Promise<unknown> | undefined;
+      try {
+        await db.$client.query(`create schema "${schema}";
+          create table "${schema}".actor (id int primary key);
+          create table "${schema}".device (id int primary key, actor int references "${schema}".actor on delete cascade, value int default 0);
+          insert into "${schema}".actor values (1); insert into "${schema}".device(id,actor) values(1,1);
+          create function "${schema}".guard() returns trigger language plpgsql as $$ begin
+            ${ordered ? "perform pg_advisory_xact_lock(810025);" : ""}
+            perform pg_advisory_xact_lock(810030); return null; end; $$;
+          create trigger guard before delete on "${schema}".actor for each statement execute function "${schema}".guard();
+          create trigger guard before update on "${schema}".device for each statement execute function "${schema}".guard();`);
+        for (const c of [dm, native]) {
+          await c.query("begin");
+          await c.query("set local lock_timeout = '5s'");
+          await c.query("set local statement_timeout = '6s'");
+        }
+        const { rows: [{ pid: dmPid }] } = await dm.query<{ pid: number }>("select pg_backend_pid() as pid");
+        const { rows: [{ pid: nativePid }] } = await native.query<{ pid: number }>("select pg_backend_pid() as pid");
+        await dm.query("select pg_advisory_xact_lock(810025)");
+        await dm.query(`select * from "${schema}".device where id = 1 for share`);
+        cascade = native.query(`delete from "${schema}".actor where id = 1`).then(async () => { await native.query("commit"); return null; }, async (error: unknown) => { await native.query("rollback"); return error; });
+        if (ordered) await waitingFor(nativePid, 810025);
+        else await blockedBy(nativePid, dmPid);
+        upload = dm.query(`update "${schema}".device set value = 1 where id = 1`).then(async () => { await dm.query("commit"); return null; }, async (error: unknown) => { await dm.query("rollback"); return error; });
+        const results = await Promise.all([cascade, upload]);
+        if (ordered) expect(results).toEqual([null, null]);
+        else expect(results.map(sqlState).filter(Boolean)).toEqual(["40P01"]);
+        const { rows } = await db.$client.query<{ count: number }>(`select count(*)::int as count from "${schema}".actor`);
+        expect(rows[0].count).toBe(ordered ? 0 : results[0] === null ? 0 : 1);
+      } finally {
+        await Promise.all([cascade, upload]);
+        await dm.query("rollback"); await native.query("rollback");
+        dm.release(); native.release();
+        await db.$client.query(`drop schema if exists "${schema}" cascade`);
+      }
+    }, 12000);
+  }
+});

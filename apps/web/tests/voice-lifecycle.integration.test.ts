@@ -6,9 +6,13 @@ import { channel, member, role, session } from "@/db/schema";
 import { voiceCall, voiceCallMember } from "@/db/voice-schema";
 import { createCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
 import { registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
-import { heartbeatVoiceControl, joinVoiceControl } from "@/server/voice-control";
+import { heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
 import { blockUser, unblockUser } from "@/server/blocks";
 import { Permission } from "@/server/permissions";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as schema from "@/db/schema";
 import { runMaintenance } from "@/server/maintenance";
 import { testUsers } from "./helpers";
 
@@ -112,4 +116,79 @@ describe("atomic product mutation invalidation", () => {
     const [after] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
     expect(after.status).toBe("closed");
   });
+});
+
+describe("bounded Voice maintenance progress", () => {
+  it("skips a healthy prefix before LIMIT and progresses across bounded repeated runs", async () => {
+    const healthy = await fixture();
+    const tails = [await fixture(), await fixture(), await fixture()];
+    // Isolate this test's eligibility using a historical reference time.
+    const now = new Date("2001-01-01T00:00:00Z");
+    for (const f of tails) await db.update(voiceCallMember).set({ leaseExpiresAt: new Date("2000-01-01T00:00:00Z") }).where(eq(voiceCallMember.id, f.snapshot.memberId));
+    const dry = await sweepVoiceLifecycle({ apply: false, now, batchSize: 1, maxBatches: 1 });
+    expect(dry.scanned).toBe(3);
+    for (const f of tails) expect(await state(f.snapshot.memberId)).toBe("waiting");
+    for (let i = 0; i < tails.length; i++) {
+      const result = await sweepVoiceLifecycle({ apply: true, now, batchSize: 1, maxBatches: 1 });
+      expect(result.scanned).toBe(1);
+      expect(result.closed).toBe(1);
+      expect(result.removed).toBe(1);
+    }
+    expect((await sweepVoiceLifecycle({ apply: true, now, batchSize: 1, maxBatches: 1 })).scanned).toBe(0);
+    expect(await state(healthy.snapshot.memberId)).toBe("waiting");
+    for (const f of tails) expect(await state(f.snapshot.memberId)).toBe("left");
+  });
+});
+
+async function observeVoiceWait(pid: number) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const { rows } = await db.$client.query<{ waiting: boolean }>("select exists(select 1 from pg_locks where pid = $1 and locktype = 'advisory' and classid = 0 and objid = 810030 and not granted) as waiting", [pid]);
+    if (rows[0].waiting) return;
+  }
+  throw new Error("Native adapter did not reach the observed Voice barrier");
+}
+describe("pinned BetterAuth1.7.7 PostgreSQL adapter boundaries", () => {
+  for (const model of ["session", "user"] as const) {
+    it(`serializes actual native adapter ${model} deletion before a queued peer heartbeat`, async () => {
+      const f = await fixture(), p = await peer(f), blocker = await db.$client.connect();
+      const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, application_name: `voice-native-${randomUUID()}`, statement_timeout: 6000, lock_timeout: 5000 });
+      const statements: string[] = [];
+      const nativeDb = drizzle(pool, { schema, logger: { logQuery(query) { statements.push(query); } } });
+      const native = drizzleAdapter(nativeDb, { provider: "pg", schema })({});
+      let deleting: Promise<unknown> | undefined;
+      try {
+        const { rows: [{ pid }] } = await pool.query<{ pid: number }>("select pg_backend_pid() as pid");
+        await blocker.query("begin");
+        await blocker.query("select pg_advisory_xact_lock(810030)");
+        deleting = native.delete({ model, where: [{ field: "id", value: model === "session" ? p.sessionId : p.userId }] });
+        const deletion = deleting.then(() => null, (error: unknown) => error);
+        await observeVoiceWait(pid);
+        // The native statement is already queued at Voice; release only after observing overlap.
+        const heartbeat = heartbeatVoiceControl({ userId: p.userId, sessionId: p.sessionId, memberId: p.snapshot.memberId, secret: p.secret }, { callId: p.snapshot.callId, memberId: p.snapshot.memberId, joinNonce: p.snapshot.joinNonce, expectedGeneration: p.snapshot.generation });
+        const outcome = heartbeat.then(value => ({ value }), (error: unknown) => ({ error }));
+        const deadline = Date.now() + 4000;
+        let overlapping = false;
+        while (Date.now() < deadline) {
+          const { rows } = await db.$client.query<{ count: number }>("select count(*)::int as count from pg_locks where locktype = 'advisory' and classid = 0 and objid = 810030 and not granted");
+          if (rows[0].count >= 2) { overlapping = true; break; }
+        }
+        expect(overlapping).toBe(true);
+        await blocker.query("commit");
+        expect(await deletion).toBeNull();
+        expect(await outcome).toHaveProperty("error");
+        expect(await state(p.snapshot.memberId)).toBeUndefined();
+        const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
+        expect(call.generation).toBe(p.snapshot.generation + 1);
+        expect(await state(f.snapshot.memberId)).toBe("waiting");
+        // Default configured adapter emits standalone DELETE, not an imagined request-wide transaction.
+        expect(statements).toHaveLength(1);
+        expect(statements[0]).toMatch(/^delete from/);
+      } finally {
+        await blocker.query("rollback");
+        await deleting?.catch(() => {});
+        blocker.release(); await pool.end();
+      }
+    });
+  }
 });

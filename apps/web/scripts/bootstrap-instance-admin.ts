@@ -1,3 +1,4 @@
+import { lockVoiceLifecycle } from "../src/server/voice-locks";
 // Operator-only bootstrap. Existing admins must grant further rights through the admin UI.
 import { eq, sql } from "drizzle-orm";
 import { db } from "../src/db";
@@ -10,6 +11,7 @@ if (!email || !reason || reason.trim().length < 3 || reason.length > 512) {
 async function main() {
   try {
     await db.transaction(async (tx) => {
+      await lockVoiceLifecycle(tx, "auth");
       await tx.execute(sql`select pg_advisory_xact_lock(187412, 1)`);
       const existing = await tx.select({ id: instanceAdmin.userId }).from(instanceAdmin).limit(1);
       if (existing.length) throw new Error("An instance administrator already exists. Use instance administration to grant rights.");

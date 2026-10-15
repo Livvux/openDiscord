@@ -1,5 +1,7 @@
+import { lockVoiceLifecycle } from "./voice-locks";
+import { invalidateVoiceMembership } from "./voice-control";
 import { createHash } from "node:crypto";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { dmBackup, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmSignature, instanceAuditLog, session, user } from "@/db/schema";
@@ -30,12 +32,13 @@ export function dmResetState(actor: string, sessionId: string): Promise<DmResetS
 /** Called only after route-level password and, when enabled, TOTP verification. */
 export async function resetDmIdentity(actor: string, sessionId: string, expected: { identity: string; twoFactorEnabled: boolean }): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    await lockVoiceLifecycle(tx, "auth");
     // Account mutations consistently lock the user before any session rows.
     await tx.select({ id: user.id }).from(user).where(eq(user.id, actor)).for("update");
     const current = await readState(tx, actor, sessionId);
     if (!current.freshSession) throw forbidden("Sign in again within five minutes before resetting encryption.");
     if (!current.identity || current.identity !== expected.identity || current.twoFactorEnabled !== expected.twoFactorEnabled) throw new AppError("conflict", "Account security changed. Reopen the reset form and verify again.");
+    await invalidateVoiceMembership(tx, { userId: actor }, "identity-reset");
     const ownDevices = tx.select({ id: dmDevice.id }).from(dmDevice).where(eq(dmDevice.userId, actor));
     await tx.update(dmDevice).set({ revokedAt: new Date(), keys: null }).where(eq(dmDevice.userId, actor));
     await tx.delete(dmKey).where(inArray(dmKey.deviceId, ownDevices));

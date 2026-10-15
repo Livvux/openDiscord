@@ -12,6 +12,7 @@ import { assertActiveUser } from "./instance-policy";
 import { consume } from "./limits";
 import { has, Permission } from "./permissions";
 import { parse } from "./validation";
+import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Call = typeof voiceCall.$inferSelect;
@@ -33,12 +34,8 @@ function matchesSecret(hash: string, secret: string): boolean {
 }
 const participant = (id: string) => `v1:${id}`;
 const namespace = (id: string) => `@voice_${id}:${VOICE_DOMAIN}`;
-async function lockVoice(tx: Tx) { await tx.execute(sql`select pg_advisory_xact_lock(810030)`); }
-
-// Draft ordering: voice advisory -> sorted community -> sorted call -> user/session/anchor SHARE.
-// Existing DM revoke/reset uses its independent810025 lock, then UPDATEs; SHARE prevents changes
-// during a voice transaction. Existing mutations DO NOT call this draft. Cascades alone do not
-// rekey: future native-session/cross-call lock integration still needs its own review and tests.
+// Voice-only order: advisory -> sorted community -> sorted call -> user/session/anchor SHARE.
+// Never acquire DM or mutate guarded auth tables after entering this scope.
 async function accountSession(tx: Tx, userId: string, sessionId: string, now: Date) {
   const [account] = await tx.select({ id: user.id }).from(user).where(eq(user.id, userId)).for("share");
   const [current] = await tx.select({ id: session.id, expiresAt: session.expiresAt }).from(session)
@@ -98,7 +95,9 @@ async function expireAndRevalidate(tx: Tx, call: Call, now: Date): Promise<Voice
     }
     if (!valid) stale.push(m);
   }
-  return markLeft(tx, call, stale, "authorization-or-lease-expired", now);
+  const effects = await markLeft(tx, call, stale, "authorization-or-lease-expired", now);
+  await closeEmptyVoiceCall(tx, call, now);
+  return effects;
 }
 async function snapshot(tx: Tx, call: Call, own: Member, now: Date, removals: VoiceRemoval[] = []): Promise<VoiceSnapshot> {
   const members = await liveMembers(tx, call.id);
@@ -202,22 +201,113 @@ export async function leaveVoiceControl(rawAuth: unknown, input: unknown): Promi
   return result;
 }
 
-const selectorSchema = z.union([z.object({ callId: z.uuid() }).strict(), z.object({ memberId: z.uuid() }).strict(), z.object({ sessionId: z.string().min(1).max(128) }).strict(), z.object({ anchorDeviceId: z.uuid() }).strict(), z.object({ userId: z.string().min(1).max(128) }).strict(), z.object({ channelId: z.uuid() }).strict()]);
-/** Internal-only transactional building block. Intentionally UNWIRED from all product mutations.
- * Caller must acquire this ordering before its own locks and dispatch returned effects after commit.
- * Returned effects are inert data: no network, SFU, timers or native session mutation happens here. */
+const selectorSchema = z.union([
+  z.object({ communityId: z.uuid(), userId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ callId: z.uuid() }).strict(), z.object({ memberId: z.uuid() }).strict(),
+  z.object({ sessionId: z.string().min(1).max(128) }).strict(), z.object({ anchorDeviceId: z.uuid() }).strict(),
+  z.object({ userId: z.string().min(1).max(128) }).strict(), z.object({ channelId: z.uuid() }).strict(),
+]);
+type Selector = z.infer<typeof selectorSchema>;
+async function selectedVoiceMembers(tx: Tx, selector?: Selector) {
+  const predicate = !selector ? undefined : "communityId" in selector ? and(eq(channel.communityId, selector.communityId), selector.userId ? eq(voiceCallMember.userId, selector.userId) : undefined)
+    : "callId" in selector ? eq(voiceCallMember.callId, selector.callId) : "memberId" in selector ? eq(voiceCallMember.id, selector.memberId)
+    : "sessionId" in selector ? eq(voiceCallMember.sessionId, selector.sessionId) : "anchorDeviceId" in selector ? eq(voiceCallMember.anchorDeviceId, selector.anchorDeviceId)
+    : "userId" in selector ? eq(voiceCallMember.userId, selector.userId) : eq(voiceCall.channelId, selector.channelId);
+  const selected = await tx.select({ member: voiceCallMember, call: voiceCall, communityId: channel.communityId }).from(voiceCallMember)
+    .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).innerJoin(channel, eq(channel.id, voiceCall.channelId))
+    .where(and(predicate, eq(voiceCall.status, "active"), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCall.id), asc(voiceCallMember.id));
+  for (const communityId of [...new Set(selected.map(r => r.communityId))].sort()) await lockCommunity(tx, communityId);
+  for (const callId of [...new Set(selected.map(r => r.call.id))].sort()) await tx.select({ id: voiceCall.id }).from(voiceCall).where(eq(voiceCall.id, callId)).for("update");
+  return selected;
+}
+/** Internal transactional invalidation. Caller enters Voice (or DM -> Voice) BEFORE its own locks.
+ * Effects remain inert until call-id/member-id SFU runtime integration is reviewed and activated. */
 export async function invalidateVoiceMembership(tx: Tx, rawSelector: unknown, rawReason: unknown): Promise<VoiceRemoval[]> {
   const selector = parse(selectorSchema, rawSelector), reason = parse(z.string().min(1).max(64), rawReason);
   await lockVoice(tx);
-  const predicate = "callId" in selector ? eq(voiceCallMember.callId, selector.callId) : "memberId" in selector ? eq(voiceCallMember.id, selector.memberId) : "sessionId" in selector ? eq(voiceCallMember.sessionId, selector.sessionId) : "anchorDeviceId" in selector ? eq(voiceCallMember.anchorDeviceId, selector.anchorDeviceId) : "userId" in selector ? eq(voiceCallMember.userId, selector.userId) : eq(voiceCall.channelId, selector.channelId);
-  const selected = await tx.select({ member: voiceCallMember, call: voiceCall, communityId: channel.communityId }).from(voiceCallMember).innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).innerJoin(channel, eq(channel.id, voiceCall.channelId)).where(and(predicate, ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCall.id), asc(voiceCallMember.id));
-  for (const communityId of [...new Set(selected.map((r) => r.communityId))].sort()) await lockCommunity(tx, communityId);
-  const effects: VoiceRemoval[] = [];
-  for (const callId of [...new Set(selected.map((r) => r.call.id))].sort()) {
+  const selected = await selectedVoiceMembers(tx, selector), effects: VoiceRemoval[] = [];
+  for (const callId of [...new Set(selected.map(r => r.call.id))].sort()) {
     const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, callId)).for("update");
-    effects.push(...await markLeft(tx, call, selected.filter((r) => r.call.id === callId).map((r) => r.member), reason, new Date()));
+    effects.push(...await markLeft(tx, call, selected.filter(r => r.call.id === callId).map(r => r.member), reason, new Date()));
   }
   return effects;
+}
+const voiceCapabilities = Permission.ViewChannels | Permission.Connect | Permission.Speak | Permission.Video;
+async function capabilities(tx: Tx, channelId: string, userId: string) {
+  try { return (await loadChannelAuthority(tx, channelId, userId))?.authority.permissions ?? 0; }
+  catch (error) { if (error instanceof AppError) return 0; throw error; }
+}
+/** Snapshot actual effective capabilities under the same serialized mutation transaction. */
+export async function captureVoiceCapabilities(tx: Tx, selector?: Selector) {
+  await lockVoice(tx);
+  const rows = await selectedVoiceMembers(tx, selector);
+  return Promise.all(rows.map(async ({ member, call }) => ({ memberId: member.id, userId: member.userId, channelId: call.channelId, permissions: await capabilities(tx, call.channelId, member.userId) })));
+}
+export async function invalidateLostVoiceCapabilities(tx: Tx, before: Awaited<ReturnType<typeof captureVoiceCapabilities>>) {
+  const effects: VoiceRemoval[] = [];
+  for (const m of before) {
+    const after = await capabilities(tx, m.channelId, m.userId);
+    if ((m.permissions & voiceCapabilities & ~after) !== 0) effects.push(...await invalidateVoiceMembership(tx, { memberId: m.memberId }, "capability-lost"));
+  }
+  return effects;
+}
+/** A block closes exactly calls in which both accounts currently coexist. Unblock never restores. */
+export async function invalidateBlockedVoicePair(tx: Tx, first: string, second: string) {
+  await lockVoice(tx);
+  const rows = await selectedVoiceMembers(tx, { userId: first });
+  for (const callId of [...new Set(rows.map(r => r.call.id))]) {
+    const peers = await liveMembers(tx, callId);
+    if (peers.some(m => m.userId === second)) await invalidateVoiceMembership(tx, { callId }, "blocked-pair");
+  }
+}
+async function closeEmptyVoiceCall(tx: Tx, call: Call, now: Date) {
+  if (call.status !== "active" || (await liveMembers(tx, call.id)).length) return;
+  await tx.update(voiceCall).set({ status: "closed", closedAt: now }).where(eq(voiceCall.id, call.id));
+  await tx.delete(voiceControlMailbox).where(eq(voiceControlMailbox.callId, call.id));
+  const ids = (await tx.select({ id: voiceCallMember.id }).from(voiceCallMember).where(eq(voiceCallMember.callId, call.id))).map(m => m.id);
+  if (ids.length) {
+    await tx.delete(voiceControlReceipt).where(inArray(voiceControlReceipt.senderMemberId, ids));
+    await tx.delete(voicePrekey).where(inArray(voicePrekey.memberId, ids));
+    await tx.delete(voiceSignature).where(or(inArray(voiceSignature.signerMemberId, ids), inArray(voiceSignature.targetMemberId, ids)));
+    await tx.delete(voiceIdentity).where(inArray(voiceIdentity.memberId, ids));
+  }
+  call.status = "closed"; call.closedAt = now;
+}
+// Filter before LIMIT: healthy calls never occupy the bounded repair population.
+const voiceRepairEligible = (now: Date) => sql`(
+  not exists (select 1 from public.voice_call_member m where m.call_id = ${voiceCall.id} and m.state <> 'left')
+  or exists (
+    select 1 from public.voice_call_member m
+    left join public.session s on s.id = m.session_id
+    left join public.dm_device d on d.id = m.anchor_device_id
+    where m.call_id = ${voiceCall.id} and m.state <> 'left'
+      and (m.lease_expires_at <= ${now} or s.id is null or s.expires_at <= ${now} or d.id is null or d.revoked_at is not null)
+  )
+)`;
+/** Separate DB-only Voice batches; eligibility and keyset prevent healthy-prefix starvation. */
+export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }: { apply: boolean; now: Date; batchSize: number; maxBatches: number }) {
+  if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, limited: false };
+  let cursor: string | undefined, scanned = 0, closed = 0, removed = 0;
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const result = await db.transaction(async tx => {
+      await lockVoice(tx);
+      const calls = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId))
+        .where(and(eq(voiceCall.status, "active"), voiceRepairEligible(now), cursor ? gt(voiceCall.id, cursor) : undefined)).orderBy(asc(voiceCall.id)).limit(batchSize);
+      for (const id of [...new Set(calls.map(c => c.communityId))].sort()) await lockCommunity(tx, id);
+      let closed = 0, removed = 0;
+      for (const row of calls) {
+        const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, row.call.id)).for("update");
+        if (call.status !== "active") continue;
+        removed += (await expireAndRevalidate(tx, call, now)).length;
+        if (call.status === "closed") closed++;
+      }
+      return { calls, closed, removed };
+    });
+    scanned += result.calls.length; closed += result.closed; removed += result.removed;
+    cursor = result.calls.at(-1)?.call.id;
+    if (result.calls.length < batchSize) return { scanned, closed, removed, limited: false };
+  }
+  return { scanned, closed, removed, limited: true };
 }
 
 const keyRecord = z.record(z.string().regex(/^signed_curve25519:[A-Za-z0-9+/_=-]{1,100}$/), voicePrekeySchema);
