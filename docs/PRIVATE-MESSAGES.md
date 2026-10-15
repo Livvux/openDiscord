@@ -44,7 +44,7 @@ arrives, the sender retries with a fresh Olm message and the same transfer ID, i
 this recovers a consumed Olm delivery if the receiver crashed or ran out of storage. Import tombstones
 prevent duplicate archive writes. Three transfers may remain pending, with eight automatic attempts
 and a backoff capped at one minute. The interface shows pending or paused delivery and permits retry
-or cancellation. Cancellation stops future retries; it cannot recall a delivery already sent. The
+or **Stop transfer retries**. Stopping retries cannot recall a delivery already sent. The
 sender's browser must be open to retry. Large snapshots use the encrypted backup path instead.
 
 **Create encrypted recovery backup** exports the SDK's cross-signing secrets together with a bounded
@@ -74,7 +74,10 @@ imports never replace another archive or live message history.
 public identity in an isolated SDK store and requires it to match the current account master key before
 changing the live SDK state. An archive from a previous identity remains readable but cannot silently
 replace the current identity. New live sessions still require the normal SDK authentication path.
-Incoming own-device transfers also require this explicit identity action.
+Incoming own-device transfers also require this explicit identity action. Pending identity bundles are
+encrypted in browser storage and committed atomically with the archive and import marker. Reload
+retains the pending identity action. The pending bundle is removed after successful explicit restore
+or when its local archive is deleted; it is never implicitly installed as the current identity.
 
 Local verified-copy caches and recovered archives are stored as encrypted attachments in IndexedDB,
 with unlocking information in the same browser origin. This is not protection against endpoint or

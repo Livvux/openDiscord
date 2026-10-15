@@ -27,8 +27,8 @@ export class HistoryStore {
   private constructor(private database: IDBDatabase, private C: typeof Matrix) {}
   static async open(userId: string, deviceId: string, C: typeof Matrix): Promise<HistoryStore> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(`opendiscord-dm-history-${userId}-${deviceId}`, 4);
-      request.onupgradeneeded = () => { for (const name of ["encrypted", "seen", "imports", "outgoing"]) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" }); };
+      const request = indexedDB.open(`opendiscord-dm-history-${userId}-${deviceId}`, 5);
+      request.onupgradeneeded = () => { for (const name of ["encrypted", "seen", "imports", "outgoing", "identities"]) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" }); };
       request.onerror = () => reject(new Error("Encrypted history storage is unavailable."));
       request.onsuccess = () => resolve(new HistoryStore(request.result, C));
     });
@@ -56,24 +56,52 @@ export class HistoryStore {
     for (const raw of await this.rows()) { const row = this.decode(raw); if (row.id !== "verified-cache") archives.push(archiveSchema.parse(row.value)); }
     return archives.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  async put(id: string, value: HistoryEntry[] | HistoryArchive, immutable = false): Promise<void> {
+  async put(id: string, value: HistoryEntry[] | HistoryArchive, recovery?: RecoverySnapshot): Promise<void> {
+    const immutable = recovery !== undefined;
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     if (bytes.length > DM_MAX_BACKUP_BYTES) throw new Error("Encrypted archive exceeds the 4 MB limit.");
     const encrypted = this.C.Attachment.encrypt(bytes);
     const row = { id, ciphertext: encrypted.encryptedData, information: encrypted.mediaEncryptionInfo };
     encrypted.free();
+    let identityRow: { id: string; ciphertext: Uint8Array; information: string } | undefined;
+    if (recovery) {
+      const snapshot = recoverySnapshotSchema.parse(recovery);
+      if (snapshot.id !== id) throw new Error("Recovery archive ID mismatch.");
+      const identityBytes = new TextEncoder().encode(JSON.stringify({ snapshot, importedAt: Date.now() }));
+      if (identityBytes.length > DM_MAX_BACKUP_BYTES) throw new Error("Recovery exceeds the 4 MB limit.");
+      const attachment = this.C.Attachment.encrypt(identityBytes);
+      identityRow = { id, ciphertext: attachment.encryptedData, information: attachment.mediaEncryptionInfo };
+      attachment.free();
+    }
     return new Promise((resolve, reject) => {
-      const transaction = this.database.transaction(immutable ? ["encrypted", "imports"] : "encrypted", "readwrite");
+      const transaction = this.database.transaction(immutable ? ["encrypted", "imports", "identities"] : "encrypted", "readwrite");
       const store = transaction.objectStore("encrypted");
       const found = (immutable ? transaction.objectStore("imports") : store).get(id);
       found.onsuccess = () => {
         if (immutable && found.result) return;
         const count = store.count();
-        count.onsuccess = () => { if (!found.result && id !== "verified-cache" && count.result >= 10) transaction.abort(); else { store.put(row); if (immutable) transaction.objectStore("imports").add({ id }); } };
+        count.onsuccess = () => { if (!found.result && id !== "verified-cache" && count.result >= 10) transaction.abort(); else { store.put(row); if (identityRow) { transaction.objectStore("identities").add(identityRow); transaction.objectStore("imports").add({ id }); } } };
       };
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(new Error("Archive was not saved. Remove an old local archive or free browser storage."));
       transaction.onerror = () => reject(new Error("Cannot persist encrypted history."));
+    });
+  }
+  async pendingIdentity(): Promise<RecoverySnapshot | null> {
+    const rows: unknown[] = await new Promise((resolve, reject) => {
+      const request = this.database.transaction("identities", "readonly").objectStore("identities").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(new Error("Cannot read pending identity recovery."));
+    });
+    return rows.map((row) => z.object({ snapshot: recoverySnapshotSchema, importedAt: z.number() }).strict().parse(this.decode(row).value))
+      .sort((a, b) => b.importedAt - a.importedAt)[0]?.snapshot ?? null;
+  }
+  async removePendingIdentity(id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const transaction = this.database.transaction("identities", "readwrite");
+      transaction.objectStore("identities").delete(id);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = transaction.onerror = () => reject(new Error("Cannot update identity recovery status."));
     });
   }
   async outgoing(): Promise<PendingTransfer[]> {
@@ -109,7 +137,7 @@ export class HistoryStore {
       const transaction = this.database.transaction("outgoing", "readwrite");
       transaction.objectStore("outgoing").delete(id);
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error("Cannot update encrypted transfer status."));
+      transaction.onabort = transaction.onerror = () => reject(new Error("Cannot update encrypted transfer status."));
     });
   }
   /** SDK Megolm authenticates content, not transport event IDs. Pin each signed transaction once. */
@@ -139,10 +167,11 @@ export class HistoryStore {
   }
   async remove(id: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const transaction = this.database.transaction("encrypted", "readwrite");
+      const transaction = this.database.transaction(["encrypted", "identities"], "readwrite");
       transaction.objectStore("encrypted").delete(id);
+      transaction.objectStore("identities").delete(id);
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(new Error("Cannot remove the local archive."));
+      transaction.onabort = transaction.onerror = () => reject(new Error("Cannot remove the local archive."));
     });
   }
 }

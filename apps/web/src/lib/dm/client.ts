@@ -103,6 +103,7 @@ export class PrivateMessaging {
       history = client.historyStore;
       client.verifiedHistory = new Map((await client.historyStore.cached()).map((entry) => [entry.envelope.id, entry]));
       client.recoveredArchives = await client.historyStore.archives();
+      client.pendingRecovery = await client.historyStore.pendingIdentity();
       await dmFetch("/api/dm", { action: "register", input: { id: metadata.id, secret: metadata.secret, name: "Web browser" } });
       await client.flush();
       await client.query([userId]);
@@ -292,13 +293,13 @@ export class PrivateMessaging {
     const { secrets, ...archive } = snapshot;
     // Validate the SDK bundle before any persistent mutation, without importing it into the live store.
     this.C.SecretsBundle.from_json(secrets).free();
-    await this.historyStore.put(snapshot.id, archiveSchema.parse(archive), true);
+    await this.historyStore.put(snapshot.id, archiveSchema.parse(archive), snapshot);
     this.recoveredArchives = await this.historyStore.archives();
-    this.pendingRecovery = snapshot;
+    this.pendingRecovery = await this.historyStore.pendingIdentity();
   }
   archives(): Promise<HistoryArchive[]> { return this.serial(async () => this.recoveredArchives); }
   hasPendingIdentity(): boolean { return this.pendingRecovery !== null; }
-  removeArchive(id: string): Promise<void> { return this.serial(async () => { await this.historyStore.remove(id); this.recoveredArchives = this.recoveredArchives.filter((archive) => archive.id !== id); if (this.pendingRecovery?.id === id) this.pendingRecovery = null; }); }
+  removeArchive(id: string): Promise<void> { return this.serial(async () => { await this.historyStore.remove(id); this.recoveredArchives = this.recoveredArchives.filter((archive) => archive.id !== id); this.pendingRecovery = await this.historyStore.pendingIdentity(); }); }
   restorePendingIdentity(): Promise<void> {
     return this.serial(async () => {
       const snapshot = this.pendingRecovery;
@@ -316,7 +317,8 @@ export class PrivateMessaging {
       } finally { probe.close(); }
       await this.machine.importSecretsBundle(this.C.SecretsBundle.from_json(snapshot.secrets));
       await this.bootstrap();
-      this.pendingRecovery = null;
+      await this.historyStore.removePendingIdentity(snapshot.id);
+      this.pendingRecovery = await this.historyStore.pendingIdentity();
     });
   }
   async createBackup(): Promise<RecoveryFile> {

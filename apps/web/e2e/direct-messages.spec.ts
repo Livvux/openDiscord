@@ -98,6 +98,8 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await archive.locator("summary").click();
   await expect(archive.getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(archive.getByText(offline, { exact: true })).toBeVisible();
+  await restored.reload();
+  await restored.getByRole("button", { name: "Devices and recovery", exact: true }).click();
   restored.once("dialog", (dialog) => dialog.accept());
   await restored.getByRole("button", { name: "Restore current encryption identity", exact: true }).click();
   await expect(restored.getByRole("button", { name: "Restore current encryption identity", exact: true })).toHaveCount(0);
@@ -130,6 +132,8 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expect(alice.getByText("No pending encrypted transfers.", { exact: true })).toBeVisible({ timeout: 30_000 });
   await restored.reload();
   await expect(restored.getByRole("region", { name: "Recovered history archives" }).locator("summary")).toHaveCount(2);
+  await restored.getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await expect(restored.getByRole("button", { name: "Restore current encryption identity", exact: true })).toBeVisible();
   await expectNoA11yViolations(restored);
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
 
