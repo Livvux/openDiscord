@@ -29,3 +29,19 @@ test("sends the security headers on every page, with or without a TLS proxy in f
   expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
   expect(headers["x-content-type-options"]).toBe("nosniff");
 });
+
+
+test("funding page publishes the operator cost total and works on small screens", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("link", { name: "Funding and running costs", exact: true }).click();
+  await expect(page).toHaveURL(/\/funding$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("What it costs to keep us online.");
+  await expect(page.getByRole("region", { name: "Monthly running costs" })).toContainText("€250");
+  await expect(page.getByRole("region", { name: "Our funding goal" })).toContainText("€250 monthly");
+  await expect(page.getByRole("link", { name: "Contribute on GitHub" })).toHaveAttribute("href", "https://github.com/Livvux/openDiscord/blob/main/CONTRIBUTING.md");
+  await expectNoA11yViolations(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
