@@ -2,7 +2,7 @@
 // database: we hand out short-lived room tokens after the usual permission checks, and remove people
 // from rooms when they lose access (kick, ban, role or channel changes).
 import { and, eq } from "drizzle-orm";
-import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, TokenVerifier, TrackSource } from "livekit-server-sdk";
 import { db } from "@/db";
 import { channel, user } from "@/db/schema";
 import { loadChannelAuthority, requireChannel } from "./access";
@@ -86,7 +86,12 @@ export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) 
   token.addGrant({ room: grant.roomName, roomJoin: true, canSubscribe: true, canPublish: grant.sources.length > 0, canPublishSources: grant.sources.map(source => sourceTypes[source]), canPublishData: false, canUpdateOwnMetadata: false });
   const signingDeadline = Math.min(expiresAt, (Math.floor(Date.now() / 1000) + ttl) * 1000);
   const jwt = await token.toJwt();
-  if (Date.now() >= signingDeadline) throw new AppError("forbidden", "This voice enrollment has ended.");
+  // The SDK sets exp relative to its own signing-time clock. A synchronous pause before that
+  // point can outlive the conservative TTL calculation, so verify the actual signed claims.
+  const claims = await new TokenVerifier(apiKey!, apiSecret!).verify(jwt, 0).catch(() => {
+    throw new AppError("forbidden", "This voice enrollment has ended.");
+  });
+  if (typeof claims.exp !== "number" || !Number.isSafeInteger(claims.exp) || claims.exp > Math.floor(expiresAt / 1000) || claims.exp * 1000 <= Date.now() || Date.now() >= signingDeadline) throw new AppError("forbidden", "This voice enrollment has ended.");
   return { url: url!, token: jwt, ...grant };
 }
 
