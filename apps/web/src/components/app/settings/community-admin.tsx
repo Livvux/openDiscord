@@ -61,7 +61,7 @@ export function InviteList({ invites }: { invites: InviteSummary[] }) {
             <code className="min-w-0 flex-1 truncate font-mono">{i.code}</code>
             <span className="text-muted-foreground">
               {i.uses}
-              {i.maxUses !== null ? ` / ${i.maxUses}` : ""} uses
+              {i.maxUses !== null ? ` / ${i.maxUses}` : ""} {(i.maxUses ?? i.uses) === 1 ? "use" : "uses"}
             </span>
             <span className="text-muted-foreground" suppressHydrationWarning>
               {i.expiresAt ? `expires ${i.expiresAt.toLocaleString()}` : "never expires"}
