@@ -142,6 +142,31 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(await b.owner.receive()).toEqual([]);
   }, 30_000);
 
+  it("re-dispatches a genuine pending native claim into actual current-generation absence during transition", async () => {
+    const [a, b] = await fixture(); await verify(a, b); const epoch = await context(a, b);
+    const entered = deferred(), release = deferred(); let paused = false;
+    const responses: { input: Dispatch; response: unknown }[] = [];
+    a.before = async input => {
+      if (input.request.kind === "claim" && !paused) { paused = true; entered.resolve(); await release.promise; }
+    };
+    a.after = async (input, response) => { if (input.request.kind === "claim") responses.push({ input, response }); };
+    const send = a.owner.sendControl(material(a, b, epoch));
+    const outcome = send.then(() => undefined, error => error as unknown);
+    await entered.promise;
+    const old = a.calls.find(c => c.request.kind === "claim")!;
+    await leaveVoiceControl(auth(b), binding(b));
+    a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
+    await a.owner.transition(a.snapshot);
+    const fresh = responses.find(item => item.input.binding.expectedGeneration === a.snapshot.generation);
+    expect(fresh?.response).toEqual({ one_time_keys: {}, failures: {} });
+    if (!fresh || old.request.kind !== "claim" || fresh.input.request.kind !== "claim") throw new Error("Missing genuine native claim re-dispatch.");
+    expect(fresh.input.request.nativeRequestId).toBe(old.request.nativeRequestId);
+    expect(fresh.input.request.body).toEqual(old.request.body);
+    expect(fresh.input.request.requestId).not.toBe(old.request.requestId);
+    release.resolve(); expect(await outcome).toMatchObject({ code: "conflict" });
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+  }, 30_000);
+
   it("processes genuine native query device absence without invented keys or a busy loop", async () => {
     const [a, unbootstrapped] = await fixture(2, 1);
     const responses: unknown[] = [];
