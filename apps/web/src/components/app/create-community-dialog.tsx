@@ -58,6 +58,34 @@ export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" |
             <Button type="submit" disabled={pending}>{pending ? "Creating…" : "Create"}</Button>
           </DialogFooter>
         </form>
+        <div className="grid gap-1.5 border-t pt-4">
+          <Label htmlFor="community-import">Or import an export file</Label>
+          <input
+            id="community-import"
+            type="file"
+            accept="application/json,.json"
+            disabled={pending}
+            aria-describedby="community-import-help"
+            className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:text-zinc-100"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              startTransition(async () => {
+                setError(null);
+                const res = await fetch("/api/communities/import", { method: "POST", body: file, headers: { "Content-Type": "application/json" } });
+                const body = (await res.json().catch(() => null)) as { communityId?: string; error?: string } | null;
+                if (!res.ok || !body?.communityId) return setError(body?.error ?? "The import failed.");
+                setOpen(false);
+                router.push(`/app/c/${body.communityId}`);
+                router.refresh();
+              });
+            }}
+          />
+          <p id="community-import-help" className="text-xs text-muted-foreground">
+            A community export from openDiscord (owner&apos;s settings). Messages keep their original author names, marked as imported.
+          </p>
+        </div>
       </DialogContent>
     </Dialog>
   );

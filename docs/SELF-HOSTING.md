@@ -111,6 +111,13 @@ docker compose up -d --build
 Migrations are forward-only. To roll back, restore the backup taken before the upgrade and check out
 the previous release.
 
+## Moving one community
+
+Community owners can download an export in *Community settings → Export* and import it on another
+instance from *Create a community*. Messages keep their author names and times (marked as imported,
+owned by the importer); members, accounts and attachments don't move. To move a whole instance, use the
+backup below.
+
 ## Moving to another server
 
 Back up on the old host, install on the new host with the same `.env` (same `BETTER_AUTH_SECRET`, or

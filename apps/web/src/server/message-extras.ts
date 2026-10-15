@@ -1,5 +1,5 @@
 // Read-side extras of a message view: reactions and the preview of the message it replies to.
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { message, reaction, user } from "@/db/schema";
@@ -16,6 +16,8 @@ export interface ReplyPreview {
   id: string;
   authorId: string;
   authorName: string;
+  /** The original author of an imported message (the name isn't an account here). */
+  authorImported: boolean;
   excerpt: string;
 }
 
@@ -51,7 +53,10 @@ export async function reactionsFor(messageIds: string[]): Promise<Map<string, Re
 export async function replyPreviews(ids: string[]): Promise<Map<string, ReplyPreview>> {
   if (ids.length === 0) return new Map();
   const rows = await db
-    .select({ id: message.id, authorId: message.authorId, authorName: user.name, content: message.content })
+    .select({
+      id: message.id, authorId: message.authorId, authorName: sql<string>`coalesce(${message.importedAuthor}, ${user.name})`,
+      authorImported: sql<boolean>`${message.importedAuthor} is not null`, content: message.content,
+    })
     .from(message)
     .innerJoin(user, eq(user.id, message.authorId))
     .where(inArray(message.id, ids));

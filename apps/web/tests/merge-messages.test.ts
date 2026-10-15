@@ -8,6 +8,7 @@ const m = (id: string, content = id): MessageView => ({
   authorId: "a",
   authorName: "A",
   authorBot: false,
+  authorImported: false,
   content,
   createdAt: "2026-01-01T00:00:00.000Z",
   editedAt: null,

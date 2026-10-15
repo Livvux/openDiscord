@@ -24,6 +24,8 @@ export interface MessageView {
   authorName: string;
   /** Posted by a bot or webhook. */
   authorBot: boolean;
+  /** Imported from another instance; `authorName` is the original name. */
+  authorImported: boolean;
   content: string;
   createdAt: string;
   editedAt: string | null;
@@ -42,7 +44,9 @@ const viewColumns = {
   id: message.id,
   channelId: message.channelId,
   authorId: message.authorId,
-  authorName: user.name,
+  // Imported messages show their original author's name.
+  authorName: sql<string>`coalesce(${message.importedAuthor}, ${user.name})`,
+  authorImported: sql<boolean>`${message.importedAuthor} is not null`,
   authorBot: sql<boolean>`exists (select 1 from ${integration} where ${integration.userId} = ${message.authorId})`,
   content: message.content,
   createdAt: message.createdAt,
@@ -52,7 +56,7 @@ const viewColumns = {
   threadId: message.threadId,
 };
 
-interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "authorBot" | "content" | "threadId"> {
+interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "authorBot" | "authorImported" | "content" | "threadId"> {
   createdAt: Date;
   editedAt: Date | null;
   replyToId: string | null;
@@ -206,6 +210,8 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   // Muted members (no SendMessages) can't rewrite their history either.
   const { authority } = await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   if (row.message.authorId !== userId) throw forbidden("You can only edit your own messages.");
+  // The importer owns imported rows, but the words are someone else's.
+  if (row.message.importedAuthor) throw forbidden("Imported messages can't be edited.");
   await enforceAutomod(row.communityId, userId, authority, content);
   // Edits update who is mentioned but never notify: otherwise editing a mention out and back in re-pings.
   await db.transaction(async (tx) => {

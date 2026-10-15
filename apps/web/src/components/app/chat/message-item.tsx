@@ -177,14 +177,17 @@ export function MessageItem(props: MessageItemProps) {
           >
             <CornerUpLeftIcon aria-hidden className="size-3 shrink-0" />
             <span className="sr-only">Reply to </span>
-            <span className={`font-medium ${nameColor(message.replyTo.authorId)}`}>{message.replyTo.authorName}</span>
+            <span className={`font-medium ${nameColor(message.replyTo.authorImported ? message.replyTo.authorName : message.replyTo.authorId)}`}>{message.replyTo.authorName}</span>
+            {message.replyTo.authorImported && <span className="text-[10px] text-zinc-500">(imported)</span>}
             <span className="truncate">{replyBlocked ? "Message from a blocked person" : message.replyTo.excerpt || "an image"}</span>
           </button>
         )}
         {!grouped && (
           <p className="flex items-baseline gap-2">
-            <span className={`font-medium ${nameColor(message.authorId)}`}>{message.authorName}</span>
+            {/* Imported authors share the importer's account, so colour them by name instead. */}
+            <span className={`font-medium ${nameColor(message.authorImported ? message.authorName : message.authorId)}`}>{message.authorName}</span>
             {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
+            {message.authorImported && <span className="rounded bg-white/10 px-1 text-[10px] font-semibold text-zinc-300" title="Imported from another instance">IMPORTED</span>}
             <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-[11px] text-zinc-400" suppressHydrationWarning>
               {dateTimeFormat.format(created)}
             </time>
