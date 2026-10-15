@@ -1,9 +1,10 @@
 // Blocking is personal: the blocked person isn't told, keeps seeing the blocker's messages, and can
 // still be seen by everyone else. For the blocker, their messages collapse and their mentions are silent.
 import { and, asc, count, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { user, userBlock } from "@/db/schema";
+import { member, user, userBlock } from "@/db/schema";
 import { enforceCap } from "./limits";
 import { invalid, notFound } from "./errors";
 import { parse } from "./validation";
@@ -20,7 +21,14 @@ export interface BlockedUser {
 export async function blockUser(actorId: string, rawTargetId: unknown): Promise<void> {
   const targetId = parse(userId, rawTargetId);
   if (targetId === actorId) throw invalid("You can't block yourself.");
-  const [target] = await db.select({ id: user.id }).from(user).where(eq(user.id, targetId));
+  // Only people you share a community with: otherwise this would confirm arbitrary account ids.
+  const shared = alias(member, "shared");
+  const [target] = await db
+    .select({ id: member.userId })
+    .from(member)
+    .innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actorId)))
+    .where(eq(member.userId, targetId))
+    .limit(1);
   if (!target) throw notFound("Account not found.");
   const [{ total }] = await db.select({ total: count() }).from(userBlock).where(eq(userBlock.blockerId, actorId));
   enforceCap(total, MAX_BLOCKS, `You can block at most ${MAX_BLOCKS} people.`);

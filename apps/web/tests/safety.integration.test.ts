@@ -2,7 +2,7 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { member, user } from "@/db/schema";
+import { community, member, user } from "@/db/schema";
 import { exportUserData } from "@/server/account";
 import { blockedIds, blockUser, listBlocked, unblockUser } from "@/server/blocks";
 import {
@@ -37,6 +37,9 @@ describe("blocking", () => {
   it("blocks and unblocks, refusing yourself and unknown accounts", async () => {
     await expect(blockUser(alice, alice)).rejects.toThrow("yourself");
     await expect(blockUser(alice, "no-such-user")).rejects.toThrow("Account not found.");
+    // No shared community: indistinguishable from a missing account.
+    const stranger = await users.create("Stranger");
+    await expect(blockUser(alice, stranger)).rejects.toThrow("Account not found.");
     await blockUser(alice, troll);
     await blockUser(alice, troll); // idempotent
     expect(await blockedIds(alice)).toEqual([troll]);
@@ -99,15 +102,22 @@ describe("community safety", () => {
     const { communityId: target } = await createCommunity(owner, "Raid target");
     await updateCommunitySafety(owner, target, { ...safe, raidJoinLimit: 10 });
     const code = await createInvite(owner, target, { expiresInHours: 24, maxUses: null });
-    // The owner counts as a recent join; nine more reach the limit of ten.
-    const raiders = await Promise.all(Array.from({ length: 10 }, (_, i) => users.create(`Raider ${i}`)));
+    // The owner doesn't count: ten joins reach the limit, the eleventh trips it.
+    const raiders = await Promise.all(Array.from({ length: 11 }, (_, i) => users.create(`Raider ${i}`)));
     const results = await Promise.allSettled(raiders.map((r) => acceptInvite(r, code)));
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(9);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(10);
     expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
     expect((await getCommunitySafety(owner, target)).invitesPaused).toBe(true);
     expect((await listAuditLog(owner, target)).map((e) => e.action)).toContain("invites.auto_pause");
     const late = await users.create("Late");
     await expect(acceptInvite(late, code)).rejects.toThrow("paused");
-    expect(await db.$count(member, eq(member.communityId, target))).toBe(10);
+    expect(await db.$count(member, eq(member.communityId, target))).toBe(11);
+  });
+
+  it("keeps an automatic pause when a stale form saves other fields", async () => {
+    const { communityId: target } = await createCommunity(owner, "Stale form");
+    await db.update(community).set({ invitesPausedAt: new Date() }).where(eq(community.id, target));
+    await updateCommunitySafety(owner, target, { minAccountAgeHours: 1 });
+    expect(await getCommunitySafety(owner, target)).toMatchObject({ invitesPaused: true, minAccountAgeHours: 1 });
   });
 });

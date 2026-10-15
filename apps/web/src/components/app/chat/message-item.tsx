@@ -83,7 +83,7 @@ export function MessageItem({ message, currentUserId, blocked, grouped, canEdit,
         <div className="w-8 shrink-0" />
         <p>
           Message from a blocked person.{" "}
-          <button type="button" className="underline hover:text-zinc-200" onClick={() => setRevealed(true)}>Show</button>
+          <button type="button" aria-label="Show blocked message" className="underline hover:text-zinc-200" onClick={() => setRevealed(true)}>Show</button>
         </p>
       </li>
     );

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, count, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLog, ban, channel, channelOverride, community, invite, member, role, user } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
@@ -293,6 +293,9 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
   return { code, communityId: row.invite.communityId, communityName: row.communityName, memberCount, paused: row.pausedAt !== null };
 }
 
+// Pauses only end when a moderator resumes invites, so "try again later" would mislead.
+const PAUSED_MESSAGE = "Invites to this community are paused. Ask a moderator of the community.";
+
 /** Raid protection counts joins in this window. */
 export const RAID_WINDOW_MINUTES = 10;
 
@@ -318,7 +321,7 @@ export async function acceptInvite(userId: string, rawCode: unknown): Promise<st
       .where(and(eq(member.communityId, row.communityId), eq(member.userId, userId)));
     // Already a member: nothing to check and don't burn a use.
     if (existing) return { communityId: row.communityId };
-    if (c.invitesPausedAt) throw forbidden("Invites to this community are paused. Try again later.");
+    if (c.invitesPausedAt) throw forbidden(PAUSED_MESSAGE);
     if (c.minAccountAgeHours > 0) {
       const [me] = await tx.select({ createdAt: user.createdAt }).from(user).where(eq(user.id, userId));
       if (me && me.createdAt.getTime() > Date.now() - c.minAccountAgeHours * 3_600_000) {
@@ -328,7 +331,7 @@ export async function acceptInvite(userId: string, rawCode: unknown): Promise<st
     if (c.raidJoinLimit > 0) {
       const since = new Date(Date.now() - RAID_WINDOW_MINUTES * 60_000);
       const [{ recent }] = await tx.select({ recent: count() }).from(member)
-        .where(and(eq(member.communityId, c.id), gt(member.joinedAt, since)));
+        .where(and(eq(member.communityId, c.id), gt(member.joinedAt, since), ne(member.userId, c.ownerId)));
       if (recent >= c.raidJoinLimit) {
         await tx.update(community).set({ invitesPausedAt: new Date() }).where(eq(community.id, c.id));
         await tx.insert(auditLog).values({ communityId: c.id, actorId: null, action: "invites.auto_pause", reason: `${recent} joins in ${RAID_WINDOW_MINUTES} minutes` });
@@ -340,7 +343,7 @@ export async function acceptInvite(userId: string, rawCode: unknown): Promise<st
     await tx.update(invite).set({ uses: sql`${invite.uses} + 1` }).where(eq(invite.code, code));
     return { communityId: row.communityId };
   });
-  if ("raid" in result) throw forbidden("Invites to this community are paused. Try again later.");
+  if ("raid" in result) throw forbidden(PAUSED_MESSAGE);
   return result.communityId;
 }
 
@@ -355,11 +358,12 @@ export interface CommunitySafety {
 export const ACCOUNT_AGE_OPTIONS = [0, 1, 24, 168] as const;
 export const RAID_LIMIT_OPTIONS = [0, 10, 30, 100] as const;
 
+// Partial: forms send only what changed, so a stale form can't undo an automatic raid pause.
 const safetyInput = z.object({
   invitesPaused: z.boolean(),
   minAccountAgeHours: z.union(ACCOUNT_AGE_OPTIONS.map((n) => z.literal(n))),
   raidJoinLimit: z.union(RAID_LIMIT_OPTIONS.map((n) => z.literal(n))),
-});
+}).partial();
 
 export async function getCommunitySafety(userId: string, rawCommunityId: unknown): Promise<CommunitySafety> {
   const communityId = parse(uuid, rawCommunityId);
@@ -368,21 +372,25 @@ export async function getCommunitySafety(userId: string, rawCommunityId: unknown
 }
 
 export async function updateCommunitySafety(userId: string, rawCommunityId: unknown, rawInput: unknown): Promise<void> {
+  // Partial updates: omitted fields keep their current value.
   const communityId = parse(uuid, rawCommunityId);
   const input = parse(safetyInput, rawInput);
   await db.transaction(async (tx) => {
     await lockCommunity(tx, communityId);
     const { community: c } = await requireMember(tx, communityId, userId, Permission.ManageCommunity);
-    const invitesPausedAt = input.invitesPaused ? (c.invitesPausedAt ?? new Date()) : null;
-    await tx.update(community).set({ invitesPausedAt, minAccountAgeHours: input.minAccountAgeHours, raidJoinLimit: input.raidJoinLimit })
+    const wasPaused = c.invitesPausedAt !== null;
+    const paused = input.invitesPaused ?? wasPaused;
+    const minAccountAgeHours = input.minAccountAgeHours ?? c.minAccountAgeHours;
+    const raidJoinLimit = input.raidJoinLimit ?? c.raidJoinLimit;
+    await tx.update(community).set({ invitesPausedAt: paused ? (c.invitesPausedAt ?? new Date()) : null, minAccountAgeHours, raidJoinLimit })
       .where(eq(community.id, communityId));
-    if (input.invitesPaused !== (c.invitesPausedAt !== null)) {
-      await tx.insert(auditLog).values({ communityId, actorId: userId, action: input.invitesPaused ? "invites.pause" : "invites.resume" });
+    if (paused !== wasPaused) {
+      await tx.insert(auditLog).values({ communityId, actorId: userId, action: paused ? "invites.pause" : "invites.resume" });
     }
-    if (input.minAccountAgeHours !== c.minAccountAgeHours || input.raidJoinLimit !== c.raidJoinLimit) {
+    if (minAccountAgeHours !== c.minAccountAgeHours || raidJoinLimit !== c.raidJoinLimit) {
       await tx.insert(auditLog).values({
         communityId, actorId: userId, action: "community.safety",
-        reason: `minimum account age ${input.minAccountAgeHours} h, raid limit ${input.raidJoinLimit || "off"}`,
+        reason: `minimum account age ${minAccountAgeHours} h, raid limit ${raidJoinLimit || "off"}`,
       });
     }
   });

@@ -58,7 +58,7 @@ export const markChannelRead = async (channelId: string, messageId: string) =>
 
 export const blockUser = async (userId: string) => run((u) => blocks.blockUser(u, userId));
 export const unblockUser = async (userId: string) => run((u) => blocks.unblockUser(u, userId));
-export const updateCommunitySafety = async (communityId: string, input: communities.CommunitySafety) =>
+export const updateCommunitySafety = async (communityId: string, input: Partial<communities.CommunitySafety>) =>
   run((u) => communities.updateCommunitySafety(u, communityId, input));
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>

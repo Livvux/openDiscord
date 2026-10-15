@@ -22,10 +22,13 @@ export function SafetySettings({ communityId, safety }: { communityId: string; s
       onSubmit={(e) => {
         e.preventDefault();
         const data = new FormData(e.currentTarget);
+        const minAccountAgeHours = Number(data.get("minAccountAgeHours"));
+        const raidJoinLimit = Number(data.get("raidJoinLimit"));
+        // Only what changed: raid protection may have paused invites since this page loaded.
         const input = {
-          invitesPaused: paused,
-          minAccountAgeHours: Number(data.get("minAccountAgeHours")),
-          raidJoinLimit: Number(data.get("raidJoinLimit")),
+          ...(paused !== safety.invitesPaused && { invitesPaused: paused }),
+          ...(minAccountAgeHours !== safety.minAccountAgeHours && { minAccountAgeHours }),
+          ...(raidJoinLimit !== safety.raidJoinLimit && { raidJoinLimit }),
         };
         startTransition(async () => {
           const result = await updateCommunitySafety(communityId, input);

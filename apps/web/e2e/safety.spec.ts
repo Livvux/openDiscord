@@ -18,7 +18,7 @@ test.describe("safety controls", () => {
     await spam.getByRole("button", { name: "Block Toby Troll" }).click();
     await expect(owner.getByText("Message from a blocked person.")).toBeVisible();
     await expect(owner.getByRole("log").getByText("buy cheap followers")).toHaveCount(0);
-    await owner.getByRole("button", { name: "Show" }).click();
+    await owner.getByRole("button", { name: "Show blocked message" }).click();
     await expect(owner.getByRole("log").getByText("buy cheap followers")).toBeVisible();
 
     // The blocked person isn't told and still sees the community normally.
