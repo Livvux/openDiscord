@@ -66,7 +66,7 @@ describe("verified email correction", () => {
   it("rejects signed-out and stale sessions", async () => {
     await expect(auth.api.changeEmail({ body: { newEmail: address("unauthenticated") } })).rejects.toThrow();
     const account = await verifiedAccount(address("stale"));
-    await db.update(session).set({ createdAt: new Date(Date.now() - 86_400_000) }).where(eq(session.userId, account.id));
+    await db.update(session).set({ createdAt: new Date(Date.now() - 61 * 60_000) }).where(eq(session.userId, account.id));
     await expect(auth.api.changeEmail({ body: { newEmail: address("fresh-required") }, headers: account.headers })).rejects.toThrow();
   });
 });
