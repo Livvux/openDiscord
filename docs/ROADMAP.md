@@ -71,12 +71,12 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Categories | ❌ | P2 |
 | Direct messages | ❌ | **P1** (with E2EE) |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
-| Replies, mentions, reactions | ❌ | Mentions **P0**; replies and reactions P1 |
+| Replies, mentions, reactions | 🟡 | Mentions with autocomplete, badges and opt-in desktop notifications ✅; replies and reactions P1 |
 | Threads | ❌ | P2 |
 | Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P2 |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ❌ | P1: Postgres full-text search, membership-scoped |
-| Notification preferences | ❌ | P1 (depends on mentions and unread state) |
+| Notification preferences | 🟡 | Opt-in desktop notifications per browser ✅; per-community all/mentions/nothing P1 |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | 🟡 | Expiring, limited-use invites ✅; rules/onboarding screen P2 |
 | Presence and status | ❌ | P1 |
@@ -159,7 +159,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
-| Unread state, @mentions, notifications | ❌ | Unread markers per channel and community; mentions notify only members who can read the channel; opt-in desktop notifications |
+| Unread state, @mentions, notifications | ✅ | Unread markers per channel and community; mentions notify only members who can read the channel; opt-in desktop notifications |
 | Blocking, anti-raid, invite controls | ❌ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
 | Production readiness | ❌ | Lint, types, unit/integration, build, Playwright and Docker build green; deployment smoke-tested |
 

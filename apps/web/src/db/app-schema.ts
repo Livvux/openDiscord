@@ -140,6 +140,35 @@ export const message = pgTable(
   (t) => [index("message_channel_idx").on(t.channelId, t.id), index("message_author_idx").on(t.authorId, t.createdAt)],
 );
 
+/** A member mentioned in a message (`<@userId>` in the content). */
+export const mention = pgTable(
+  "mention",
+  {
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => message.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.messageId, t.userId] }), index("mention_user_idx").on(t.userId, t.messageId)],
+);
+
+/** The newest message a person has read in a channel; everything after it is unread. */
+export const channelReadState = pgTable(
+  "channel_read_state",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channel.id, { onDelete: "cascade" }),
+    lastReadId: uuid("last_read_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.channelId] })],
+);
+
 export const invite = pgTable(
   "invite",
   {

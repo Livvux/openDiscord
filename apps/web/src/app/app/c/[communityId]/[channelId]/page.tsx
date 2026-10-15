@@ -55,6 +55,8 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         canSend={has(channel, Permission.SendMessages)}
         canModerate={has(channel, Permission.ManageMessages)}
         mediaEnabled={mediaEnabled}
+        communityId={view.id}
+        lastReadId={channel.lastReadId}
       />
     </>
   );

@@ -32,7 +32,7 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
       <ul className="flex-1 space-y-0.5 overflow-y-auto px-3">
         {view.channels.map((c) => (
           <li key={c.id}>
-            <ChannelLink href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} />
+            <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} />
           </li>
         ))}
       </ul>

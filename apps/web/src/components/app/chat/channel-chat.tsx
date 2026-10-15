@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { sendMessage } from "@/app/app/actions";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { markChannelRead, sendMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
 import type { MessagePage } from "@/server/messages";
+import { decodeMentions, type Mention } from "@/lib/mentions";
 import { useRealtime } from "../realtime-provider";
+import { useClearUnread } from "../unread-provider";
 import { Composer } from "./composer";
 import { MessageItem, PendingItem } from "./message-item";
 import { useChannelMessages } from "./use-channel-messages";
@@ -17,18 +19,22 @@ interface ChannelChatProps {
   canSend: boolean;
   canModerate: boolean;
   mediaEnabled: boolean;
+  communityId: string;
+  /** Read marker when the channel was opened, for the "new messages" divider. */
+  lastReadId: string | null;
 }
 
 interface Pending {
   tempId: string;
   content: string;
+  mentions: Mention[];
   images: number;
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 120;
 
-export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled }: ChannelChatProps) {
+export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId }: ChannelChatProps) {
   const { state } = useRealtime();
   const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -37,6 +43,26 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
   const scroller = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const heightBeforeOlder = useRef<number | null>(null);
+  const [dividerAfter] = useState(lastReadId);
+  const firstUnread = dividerAfter ? messages.find((m) => m.id > dividerAfter && m.authorId !== currentUserId)?.id : undefined;
+  const clearUnread = useClearUnread();
+  const newest = messages.at(-1)?.id;
+
+  // Reading the newest message while the tab is visible marks the channel read.
+  useEffect(() => {
+    if (!newest) return;
+    const mark = () => {
+      if (document.visibilityState !== "visible") return;
+      clearUnread?.(channel.id);
+      void markChannelRead(channel.id, newest);
+    };
+    const timer = setTimeout(mark, 500);
+    document.addEventListener("visibilitychange", mark);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", mark);
+    };
+  }, [newest, channel.id, clearUnread]);
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
@@ -60,11 +86,11 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     await loadOlder();
   }
 
-  async function onSend(content: string, attachmentIds: string[]): Promise<boolean> {
+  async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
     const tempId = crypto.randomUUID();
     setSendError(null);
     nearBottom.current = true;
-    setPending((p) => [...p, { tempId, content, images: attachmentIds.length }]);
+    setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
     const result = await sendMessage(channel.id, content, attachmentIds);
     setPending((p) => p.filter((x) => x.tempId !== tempId));
     if (result.ok) {
@@ -73,7 +99,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     }
     setSendError(result.error);
     // Put the text back unless the person already started a new message.
-    setDraft((d) => (d.trim() ? d : content));
+    setDraft((d) => (d.trim() ? d : decodeMentions(content, mentions)));
     return false;
   }
 
@@ -120,18 +146,26 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
                 prev.authorId === m.authorId &&
                 Date.parse(m.createdAt) - Date.parse(prev.createdAt) < GROUP_WINDOW_MS;
               return (
+                <Fragment key={m.id}>
+                {m.id === firstUnread && (
+                  <li role="separator" aria-label="New messages" className="mx-5 my-2 flex items-center gap-2 text-[11px] font-semibold text-red-400 uppercase">
+                    <span className="h-px flex-1 bg-red-500/50" />
+                    New
+                  </li>
+                )}
                 <MessageItem
-                  key={m.id}
                   message={m}
-                  grouped={grouped}
+                  currentUserId={currentUserId}
+                  grouped={grouped && m.id !== firstUnread}
                   canEdit={m.authorId === currentUserId}
                   canDelete={m.authorId === currentUserId || canModerate}
                   onDeleted={remove}
                 />
+                </Fragment>
               );
             })}
             {pending.map((p) => (
-              <PendingItem key={p.tempId} content={p.content} images={p.images} />
+              <PendingItem key={p.tempId} content={p.content} mentions={p.mentions} images={p.images} />
             ))}
           </ol>
           </div>
@@ -150,6 +184,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
           setDraft={setDraft}
           onSend={onSend}
           mediaEnabled={mediaEnabled}
+          communityId={communityId}
         />
       ) : (
         <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>

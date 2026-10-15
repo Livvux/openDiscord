@@ -4,6 +4,7 @@ import { auditLog, channel, message, user } from "@/db/schema";
 import { requireChannel } from "./access";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
+import { mentionsFor, syncMentions, type MentionView } from "./mentions";
 import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
 import { messageContent, parse, uuid } from "./validation";
@@ -21,6 +22,7 @@ export interface MessageView {
   createdAt: string;
   editedAt: string | null;
   attachments: AttachmentView[];
+  mentions: MentionView[];
 }
 
 const viewColumns = {
@@ -33,13 +35,21 @@ const viewColumns = {
   editedAt: message.editedAt,
 };
 
-type MessageRow = { createdAt: Date; editedAt: Date | null } & Omit<MessageView, "createdAt" | "editedAt" | "attachments">;
-function toView(row: MessageRow, attachments: AttachmentView[] = []): MessageView {
-  return { ...row, createdAt: row.createdAt.toISOString(), editedAt: row.editedAt?.toISOString() ?? null, attachments };
-}
+type MessageRow = { createdAt: Date; editedAt: Date | null } & Omit<MessageView, "createdAt" | "editedAt" | "attachments" | "mentions">;
 async function toViews(rows: MessageRow[]): Promise<MessageView[]> {
-  const byMessage = await attachmentsFor(rows.map((r) => r.id));
-  return rows.map((r) => toView(r, byMessage.get(r.id)));
+  const ids = rows.map((r) => r.id);
+  const [attachments, mentions] = await Promise.all([attachmentsFor(ids), mentionsFor(ids)]);
+  return rows.map((r) => ({
+    ...r,
+    createdAt: r.createdAt.toISOString(),
+    editedAt: r.editedAt?.toISOString() ?? null,
+    attachments: attachments.get(r.id) ?? [],
+    mentions: mentions.get(r.id) ?? [],
+  }));
+}
+
+async function notifyMentions(userIds: string[], communityId: string, channelId: string, messageId: string) {
+  for (const userId of userIds) await publish({ type: "mention.created", userId, communityId, channelId, messageId });
 }
 
 export interface MessagePage {
@@ -93,13 +103,14 @@ export async function sendMessage(userId: string, rawChannelId: unknown, rawCont
     .where(and(eq(message.authorId, userId), gt(message.createdAt, since)));
   if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "You're sending messages too quickly. Wait a moment.");
 
-  const row = await db.transaction(async (tx) => {
+  const { row, mentioned } = await db.transaction(async (tx) => {
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content }).returning();
     await linkAttachments(tx, userId, channelId, created.id, ids);
-    return created;
+    return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
   });
   const [author] = await db.select({ name: user.name }).from(user).where(eq(user.id, userId));
   await publish({ type: "message.created", communityId: ch.communityId, channelId, messageId: row.id });
+  await notifyMentions(mentioned, ch.communityId, channelId, row.id);
   return (await toViews([{ ...row, authorName: author.name }]))[0];
 }
 
@@ -120,7 +131,11 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   // Muted members (no SendMessages) can't rewrite their history either.
   await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   if (row.message.authorId !== userId) throw forbidden("You can only edit your own messages.");
-  await db.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));
+  // Edits update who is mentioned but never notify: otherwise editing a mention out and back in re-pings.
+  await db.transaction(async (tx) => {
+    await tx.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));
+    await syncMentions(tx, row.communityId, row.message.id, userId, content);
+  });
   await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
 }
 
