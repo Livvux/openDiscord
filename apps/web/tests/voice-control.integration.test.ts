@@ -405,7 +405,7 @@ describe("pinned native18.9.0 public request compatibility", () => {
       const id = randomUUID();
       await a.out(new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [b.endpoint.snapshot.voiceUserId]: { [b.endpoint.snapshot.voiceDeviceId]: JSON.parse(encrypted) } } })));
       const decrypted = await b.sync();
-      expect(decrypted.some((item) => item instanceof C.DecryptedToDeviceEvent && item.isSenderVerified() && JSON.parse(item.rawEvent).content?.purpose === "voice-server-fixture")).toBe(true);
+      expect(decrypted.some((item) => item instanceof C.DecryptedToDeviceEvent && item.encryptionInfo.isSenderVerified() && JSON.parse(item.rawEvent).content?.purpose === "voice-server-fixture")).toBe(true);
       expect(await dmStateDigest(endpoints)).toBe(before);
       const sizes = [...a.sizes, ...b.sizes];
       expect(Math.max(...sizes)).toBeLessThan(VOICE_LIMITS.bootstrapBytes);
