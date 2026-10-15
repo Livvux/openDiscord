@@ -193,12 +193,12 @@ export function MessageItem(props: MessageItemProps) {
           </button>
         )}
         {!grouped && (
-          <p className="flex items-baseline gap-2">
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             {/* Imported authors share the importer's account, so colour them by name instead. */}
             <span className={`font-medium ${nameColor(message.authorImported ? message.authorName : message.authorId)}`}>{message.authorName}</span>
             {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
             {message.authorImported && <span className="rounded bg-white/10 px-1 text-[10px] font-semibold text-zinc-300" title="Imported from another instance">IMPORTED</span>}
-            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-[11px] text-zinc-400" suppressHydrationWarning>
+            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="shrink-0 text-[11px] whitespace-nowrap text-zinc-400" suppressHydrationWarning>
               {dateTimeFormat.format(created)}
             </time>
             {message.pinned && <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-400"><PinIcon aria-hidden className="size-3" />Pinned</span>}
@@ -292,9 +292,8 @@ export function MessageItem(props: MessageItemProps) {
         )}
         {picking && <ReactionPicker channelId={message.channelId} onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      </div>
       {!editing && (
-        <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:self-start max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+        <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
           {canReact && (
             <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
               <CornerUpLeftIcon />
@@ -340,6 +339,7 @@ export function MessageItem(props: MessageItemProps) {
           )}
         </div>
       )}
+      </div>
     </li>
   );
 }

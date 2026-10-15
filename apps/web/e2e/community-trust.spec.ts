@@ -30,7 +30,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await owner.goto(settingsPath);
   const rules = owner.locator('section[aria-labelledby="community-rules"]');
   await rules.getByRole("textbox", { name: "Community rules", exact: true }).fill("Be respectful. <b>Plain text rules</b>");
-  await rules.getByLabel("Require acknowledgement").check();
+  await rules.getByRole("checkbox", { name: "Require acknowledgement before joining or sending messages", exact: true }).check();
   await rules.getByRole("button", { name: "Save community rules" }).click();
   await expect(rules.getByRole("status")).toHaveText("Rules saved.");
 
