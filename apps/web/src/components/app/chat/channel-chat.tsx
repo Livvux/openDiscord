@@ -188,7 +188,7 @@ export function ChannelChat(props: ChannelChatProps) {
                   currentUserId={currentUserId}
                   blocked={blockedIds.includes(m.authorId)}
                   grouped={grouped && m.id !== firstUnread}
-                  canEdit={m.authorId === currentUserId}
+                  canEdit={m.authorId === currentUserId && !m.authorImported}
                   canDelete={m.authorId === currentUserId || canModerate}
                   canReact={canSend}
                   canPin={canModerate}

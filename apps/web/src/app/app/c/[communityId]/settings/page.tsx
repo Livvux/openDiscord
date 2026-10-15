@@ -33,6 +33,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "role.unassign": "removed a role from",
   "channel.delete": "deleted channel",
   "channel.permissions": "changed permissions of channel",
+  "community.export": "exported the community",
+  "community.import": "imported this community",
   "category.create": "created category",
   "category.rename": "renamed a category to",
   "category.delete": "deleted category",
@@ -53,7 +55,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (["role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block"].includes(e.action)) return null;
+  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -181,6 +183,17 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
       <Section id="notifications" title="Notifications" description="Applies to you only.">
         <NotificationLevel communityId={view.id} level={view.notifications} />
       </Section>
+      {view.isOwner && (
+        <Section id="export" title="Export" description="Download channels, roles, categories and messages as JSON to move this community to another instance. Includes every member's messages; the export is recorded in the audit log.">
+          <a
+            href={`/api/communities/${view.id}/export`}
+            download
+            className="inline-flex h-8 items-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
+          >
+            Download community export
+          </a>
+        </Section>
+      )}
       <Section id="danger" title={view.isOwner ? "Delete community" : "Leave community"}>
         <DangerZone communityId={view.id} name={view.name} isOwner={view.isOwner} />
       </Section>

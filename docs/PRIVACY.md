@@ -34,6 +34,7 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Online status (opt-in) and last-seen time | Show "online" to members of shared communities | Members of shared communities, only while the person has it switched on | `last_seen_at` is overwritten on each heartbeat (no history); deleted with the account |
 | Notification level per community | Mute communities | The person only | Until changed, leaving or account deletion |
 | Voice audio, camera video and screen shares | Live conversation in voice channels | People in the same voice channel | Never stored: relayed live by the operator's LiveKit server (encrypted in transit, not end-to-end) |
+| Community exports | Moving a community to another instance | The owner who downloads it | Not stored on the server; each export is recorded in the audit log. Contains members' display names and messages, never email addresses or account ids |
 | Bots and webhooks | Integrations a community set up | Members see their messages (labelled BOT); managers see name, target channel and last use | Until revoked; their accounts are deleted with the community |
 | Blocked people | Hide their messages, silence their mentions | The person only; the blocked person is not told | Until unblocked or either account is deleted; included in the data export |
 | Account approval status (Closed Alpha) | Access control | The person (on sign-in) and instance administrators | Until account deletion |

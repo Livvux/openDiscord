@@ -58,7 +58,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Independent instances | ✅ | Docker Compose stack verified end-to-end (TLS, auth, SSE through Caddy) |
 | No mandatory proprietary services | ✅ | SMTP optional; no external APIs |
 | Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh`, round trip tested |
-| Export per community (channels, messages, roles, settings) | ❌ | **P2** — whole-instance backup exists, per-community export does not |
+| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. Attachments are not included |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
 | Federation-ready design | 🟡 | UUID ids, no global user directory. Federation research P3 |
@@ -180,7 +180,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, ~~bot accounts,
 incoming webhooks and a versioned public API (OpenAPI)~~ ✅, Web Push notifications (VAPID, no third-party
-service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
+service), ~~per-community export/import~~ ✅, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).
 
 ### P3 — later

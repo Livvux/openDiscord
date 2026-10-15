@@ -180,6 +180,8 @@ export const message = pgTable(
     /** Thread messages point at their root (a top-level message in the same channel); deleting the root deletes the thread. */
     threadId: uuid("thread_id").references((): AnyPgColumn => message.id, { onDelete: "cascade" }),
     pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+    /** Imported from another instance: the original author's display name (the importer owns the row). */
+    importedAuthor: text("imported_author"),
     /** Full-text index; the "simple" configuration works for every language (no stemming). */
     search: tsvector("search").generatedAlwaysAs((): SQL => sql`to_tsvector('simple', ${message.content})`),
   },
