@@ -95,4 +95,4 @@ user agents with coarse browser/platform labels and removes legacy session IP fi
 open reports, accounts and messages are not deleted. Batch limits bound each run; a nonempty `limited`
 list means more work remains for the next run. New sessions and updates containing device metadata also minimize it; existing raw metadata is scrubbed by maintenance.
 
-Personal export version 7 includes community image upload attribution separately from personal messages. Custom image references in personal message exports become readable text. Library ownership remains with the community, independently of the uploader account.
+Personal export version 8 includes community image upload attribution separately from personal messages, the person's retained public post snapshots (including their send-time display name), and public-channel publication state for communities they currently own, including withdrawn publications. Other authors' snapshots are excluded. Custom image references in personal message exports become readable text. Library ownership remains with the community, independently of the uploader account.

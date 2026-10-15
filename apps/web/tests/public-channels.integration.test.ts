@@ -7,6 +7,7 @@ import { acceptInvite, createCommunity, createInvite, getCommunityView, updateCh
 import { exportCommunity, importCommunity } from "@/server/community-export";
 import { createIntegration, postWebhookMessage, requireBot } from "@/server/integrations";
 import { lockCommunity } from "@/server/access";
+import { exportUserData } from "@/server/account";
 import { deleteMessage, editMessage, listMessages, sendMessage } from "@/server/messages";
 import { createPublicChannel, listPublicChannels, publicChannelState, readPublicChannel, unpublishChannel } from "@/server/public-channels";
 import { reportContent } from "@/server/reports";
@@ -29,6 +30,27 @@ async function fixture() {
 const send = (f: Awaited<ReturnType<typeof fixture>>, text = "Public text") => sendMessage(f.owner, f.id, text, [], null, null, f.generation);
 
 describe("explicitly public text channels", () => {
+  it("exports own retained public identity snapshots and publication state without other authors' data", async () => {
+    const own = await fixture();
+    const other = await fixture();
+    const posted = await send(own, "Own public snapshot");
+    const foreign = await send(other, "Another person's public snapshot");
+    await db.update(user).set({ name: "Changed private profile name" }).where(eq(user.id, own.owner));
+    await unpublishChannel(own.owner, own.id);
+
+    const exported = await exportUserData(own.owner);
+    expect(exported.version).toBe(8);
+    expect(exported.profile.name).toBe("Changed private profile name");
+    expect(exported.publicPosts).toEqual([expect.objectContaining({ messageId: posted.id, channelId: own.id,
+      authorName: "Public author snapshot", content: "Own public snapshot", editedAt: null })]);
+    expect(exported.publicChannels).toEqual([expect.objectContaining({ channelId: own.id, communityId: own.communityId,
+      generation: own.generation, communityTitle: "Chosen public title", channelTitle: "public-text", unpublishedAt: expect.any(String) })]);
+    expect(JSON.stringify(exported.publicPosts)).not.toContain(foreign.id);
+    expect(JSON.stringify(exported.publicChannels)).not.toContain(other.id);
+    expect((await exportUserData(other.owner)).publicPosts.map((post) => post.messageId)).toEqual([foreign.id]);
+    expect((await exportUserData(own.outsider)).publicPosts).toEqual([]);
+    expect((await exportUserData(own.outsider)).publicChannels).toEqual([]);
+  });
   it("keeps existing channels private and requires owner consent for NEW channels only", async () => {
     const f = await fixture();
     await sendMessage(f.owner, f.channelId, "PRIVATE HISTORY");
