@@ -50,13 +50,14 @@ export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFo
     }
     setPending(true);
     setError(null);
+    setNotice(null);
 
     const { data, error } = isSignUp
       ? await authClient.signUp.email(
           { email, password, name: String(form.get("name")), callbackURL: next },
           { headers: captchaToken ? { "x-captcha-response": captchaToken } : undefined },
         )
-      : await authClient.signIn.email({ email, password });
+      : await authClient.signIn.email({ email, password, callbackURL: next });
 
     setPending(false);
     if (captchaRequired) {
@@ -66,6 +67,10 @@ export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFo
     }
     if (isSignUp && error?.code === "ACCOUNT_PENDING") {
       setAwaitingApproval(true);
+      return;
+    }
+    if (error?.code === "EMAIL_NOT_VERIFIED") {
+      setNotice("Please confirm your email address first. We've sent you a new link.");
       return;
     }
     if (error) {
