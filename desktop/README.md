@@ -4,7 +4,7 @@ A Tauri 2 WebView for the existing HTTPS application on Windows, macOS and Linux
 
 ## Build and instance configuration
 
-Use a Rust stable toolchain and Tauri 2's platform prerequisites: https://v2.tauri.app/start/prerequisites/. From this directory run `cargo install tauri-cli --version '^2' --locked`, then `cargo tauri build --ci`. Application dependencies are recorded in Cargo.lock; CI runs locked checks before bundling. The pnpm workspace and its lockfile are unchanged.
+Use a Rust stable toolchain and Tauri 2's platform prerequisites: https://v2.tauri.app/start/prerequisites/. From this directory run `cargo install tauri-cli --version '^2' --locked`, then `cargo tauri icon ../apps/web/public/brand/symbol-flat.svg` and `cargo tauri build --ci`. Application dependencies are recorded in Cargo.lock; CI runs locked checks before bundling. The pnpm workspace and its lockfile are unchanged.
 
 The default is `https://opendiscord.app`. Self-host operators set the build-time environment variable `OPENDISCORD_INSTANCE_URL=https://chat.example.org` before building. Only an HTTPS origin is accepted; an explicit port is allowed. Paths, credentials, queries and fragments are rejected at startup. This setting is compiled into the executable and cannot be changed by a remote page or runtime environment. Use a distinct application identifier when distributing a separate self-hosted client to avoid profile conflicts.
 
