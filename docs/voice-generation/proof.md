@@ -52,15 +52,17 @@ stored for that branch. Native response acceptance, queue behavior and unchanged
 pre-response trust are distinct assertions; valid prior local SAS can already
 have established trust before remote signature storage fails.
 
-Mixed current/noncurrent **normal** requests are rejected atomically in this
-candidate. Explicit retirement validates all targets before recording one
-zero-enqueue result for the unchanged whole body. The current single-device
-fixture does not yet establish a genuine native mixed-target fanout case. A
+ToDevice send and retirement support exactly one user/device target. Multi-target
+and wildcard output is rejected before any queue/receipt/native completion;
+the owner suspends rather than splitting or rewriting it. The contract-only
+rejection test does not manufacture a native queued request. This narrowed
+candidate follows root's explicit fail-closed ruling. Query/claim/signature
+multi-map semantics are separate; mixed current/noncurrent class handling remains
+unproven and currently fails closed in this fixture. A
 separate benign control schema does check recipient-side generation/epoch/exact
 audience rejection after real decryption of an old fetched event. The accepted
-shared control schema is unchanged. Mixed native fanout remains an explicit
-remaining proof gate, not an inferred success: a constructed combined request
-would not establish machine-owned queue semantics.
+shared control schema is unchanged. No constructed combined request is presented
+as evidence of machine-owned queue semantics.
 
 Remote CI is the only heavy execution environment. Initial RED results included
 fixture owner disposal and attempting retirement as a removed sender; those

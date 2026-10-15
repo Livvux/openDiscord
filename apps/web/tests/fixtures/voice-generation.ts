@@ -16,6 +16,17 @@ const generationControl = z.object({
 }).strict();
 const GENERATION_CONTROL = "app.opendiscord.voice.generation-proof";
 
+/** No splitting or partial processing of unsupported native ToDevice fanout. */
+export function validateGenerationToDevice(body: unknown, call: string): void {
+  const messages = z.object({ messages: z.record(z.string(), z.record(z.string(), z.unknown())) }).strict().parse(body).messages;
+  const targets = Object.entries(messages);
+  if (targets.length !== 1) throw new Error("Only single-target native ToDevice is supported.");
+  const [user, devices] = targets[0];
+  if (!new RegExp(`^@voice_${call}_${uuid}:opendiscord\\.invalid$`).test(user)) throw new Error("Same-call target required.");
+  const ids = Object.keys(devices);
+  if (ids.length !== 1 || !new RegExp(`^${uuid}$`).test(ids[0])) throw new Error("Only an exact single device is supported.");
+}
+
 /** Normal native encryption of a benign purpose-bound control, no media keys. */
 export async function encryptGenerationControl(sender: EphemeralVoice, recipient: EphemeralVoice, generation: number, epoch: string): Promise<C.ToDeviceRequest> {
   const claim = await sender.machine.getMissingSessions([new C.UserId(recipient.binding.user)]);
@@ -64,6 +75,7 @@ export class GenerationServer extends VoiceTransport {
     // Authorization and current generation precede receipt replay, including for retirement.
     if (!this.owns(owner.binding) || generation !== this.generation) throw new Error("Current sender/generation required.");
     if ((operation === "retire" && !request.id) || Buffer.byteLength(request.body) > 128_000) throw new Error("Bounded native request required.");
+    if (request instanceof C.ToDeviceRequest) validateGenerationToDevice(JSON.parse(request.body), this.call);
     const digest = createHash("sha256").update(JSON.stringify([owner.binding, generation, operation, request.id, request.type, request.body])).digest("hex");
     const key = `${owner.binding.member}:${transportId}`;
     const previous = this.generationReceipts.get(key);
@@ -76,16 +88,6 @@ export class GenerationServer extends VoiceTransport {
     if (operation === "retire") {
       if (!(request instanceof C.ToDeviceRequest)) throw new Error("Only ToDevice supports explicit retirement.");
       if (!/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(request.event_type) && request.event_type !== "m.room.encrypted") throw new Error("Unsupported retirement event.");
-      const body: unknown = JSON.parse(request.body);
-      if (!body || typeof body !== "object" || !("messages" in body) || !body.messages || typeof body.messages !== "object" || Array.isArray(body.messages)) throw new Error("Invalid retirement body.");
-      const targets = Object.entries(body.messages);
-      if (!targets.length || targets.length > 8) throw new Error("Retirement fanout bound.");
-      const scoped = new RegExp(`^@voice_${this.call}_${uuid}:opendiscord\\.invalid$`);
-      for (const [user, devices] of targets) {
-        if (!scoped.test(user) || !devices || typeof devices !== "object" || Array.isArray(devices)) throw new Error("Same-call retirement targets required.");
-        const entries = Object.entries(devices);
-        if (entries.length !== 1 || !new RegExp(`^${uuid}$`).test(entries[0][0])) throw new Error("Exact bounded device required.");
-      }
       // This branch cannot call submit/take or inspect any recipient's key record.
       nativeResponse = {};
     } else if (request instanceof C.KeysQueryRequest || request instanceof C.KeysClaimRequest || request instanceof C.SignatureUploadRequest) {

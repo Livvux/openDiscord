@@ -2,9 +2,17 @@ import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { EphemeralVoice, verifyPair } from "./fixtures/ephemeral-voice";
-import { GenerationServer, GenerationDispatcher, encryptGenerationControl, identity, receiveGenerationControls } from "./fixtures/voice-generation";
+import { GenerationServer, GenerationDispatcher, encryptGenerationControl, identity, receiveGenerationControls, validateGenerationToDevice } from "./fixtures/voice-generation";
 
 describe("isolated native generation retirement candidate", () => {
+  it("rejects unsupported ToDevice fanout before any processing without constructing native queue work", () => {
+    const call = randomUUID();
+    const user = `@voice_${call}_${randomUUID()}:opendiscord.invalid`;
+    const peer = `@voice_${call}_${randomUUID()}:opendiscord.invalid`;
+    expect(() => validateGenerationToDevice({ messages: { [user]: { [randomUUID()]: {} }, [peer]: { [randomUUID()]: {} } } }, call)).toThrow("single-target");
+    expect(() => validateGenerationToDevice({ messages: { [user]: { "*": {} } } }, call)).toThrow("single device");
+  });
+
   it("rejects a genuinely decrypted old-generation control and requires an actual current peer receipt", async () => {
     await C.initAsync();
     const server = new GenerationServer();
@@ -100,7 +108,7 @@ describe("isolated native generation retirement candidate", () => {
     const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server);
     const dispatcher = new GenerationDispatcher(a, server);
     try {
-      await verifyPair(a, c); await a.query([b]);
+      await verifyPair(a, b); await verifyPair(a, c);
       server.remove(b); server.advance();
       const claim = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
       if (!claim) throw new Error("Expected native missing session request.");
@@ -110,9 +118,10 @@ describe("isolated native generation retirement candidate", () => {
       expect(response.nativeResponse).toEqual({ one_time_keys: {}, failures: {} });
       expect(await server.process(a, claim, server.generation, "send", receiptId)).toBe(response);
       await a.machine.markRequestAsSent(claim.id, claim.type, JSON.stringify(response.nativeResponse));
-      // Genuine absence is not a session. It may request work again: bound retries rather than spin.
+      // Native 18.9 suppresses an immediate repeated empty claim. This is not session acquisition.
       const second = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
-      expect(second).toBeInstanceOf(C.KeysClaimRequest);
+      expect(second).toBeNull();
+      await expect((await a.device(b)).encryptToDeviceEvent("app.opendiscord.voice.proof", { purpose: "benign-empty-claim-proof" }, C.CollectStrategy.onlyTrustedDevices())).rejects.toThrow();
       const query = a.machine.queryKeysForUsers([new C.UserId(b.binding.user)]);
       const queryResponse = await server.process(a, query, server.generation, "send", randomUUID());
       expect(queryResponse.nativeResponse).toEqual({ device_keys: { [b.binding.user]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
@@ -157,8 +166,10 @@ describe("isolated native generation retirement candidate", () => {
   it("keeps the independent native DM baseline invariant", async () => {
     await C.initAsync();
     const dm = await C.OlmMachine.initialize(new C.UserId(`@dm_${randomUUID()}:opendiscord.invalid`), new C.DeviceId(randomUUID()));
-    const digest = async () => createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), counts: await dm.roomKeyCounts(), requests: (await dm.outgoingRequests()).map((r) => [r.type, r.body]) })).digest("hex");
+    const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)])) : value;
+    const digest = async () => createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), counts: await dm.roomKeyCounts(), requests: (await dm.outgoingRequests()).map((r) => ({ type: r.type, body: createHash("sha256").update(JSON.stringify(canonical(JSON.parse(r.body)))).digest("hex") })).sort((left, right) => left.type - right.type || left.body.localeCompare(right.body)) })).digest("hex");
     const before = await digest();
+    expect(await digest()).toBe(before);
     const server = new GenerationServer();
     const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
     try { await verifyPair(a, b); expect(await digest()).toBe(before); }
@@ -170,11 +181,11 @@ describe("isolated native generation retirement candidate", () => {
       it(`retires pending ${phase} to a ${removed ? "departed" : "current"} peer and verifies a fresh surviving peer`, async () => {
         await C.initAsync();
         const server = new GenerationServer();
-        const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server);
-        const dispatchers = [a, b, c].map((owner) => new GenerationDispatcher(owner, server));
+        const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server), d = await EphemeralVoice.open(server);
+        const dispatchers = [a, b, c, d].map((owner) => new GenerationDispatcher(owner, server));
         const before = identity(a);
         try {
-          await verifyPair(a, c);
+          await verifyPair(a, d);
           const [left] = dispatchers;
           const paused = left.pauseAt(phase);
           const oldFlow = (phase === "ready" ? verifyPair(b, a) : verifyPair(a, b)).then(() => "completed", () => "interrupted");
@@ -194,7 +205,7 @@ describe("isolated native generation retirement candidate", () => {
           expect(server.retired.length).toBeGreaterThan(0);
           expect(server.retired.every((receipt) => receipt.enqueued === 0 && receipt.disposition === "processed-retired")).toBe(true);
           expect(identity(a)).toEqual(before);
-          expect((await a.device(c)).isVerified()).toBe(true);
+          expect((await a.device(d)).isVerified()).toBe(true);
           for (const owner of [a, c]) expect((await owner.machine.outgoingRequests()).filter((r) => r.type === C.RequestType.ToDevice)).toHaveLength(0);
           await verifyPair(a, removed ? c : b);
           const peer = removed ? c : b;
@@ -206,7 +217,7 @@ describe("isolated native generation retirement candidate", () => {
           expect(peer.received).toHaveLength(1);
           expect(identity(a)).toEqual(before);
           expect(dispatchers.every((d) => [...d.completions.values()].every((count) => count === 1))).toBe(true);
-        } finally { dispatchers.forEach((d) => d.release()); [a, b, c].forEach((owner) => owner.close()); }
+        } finally { dispatchers.forEach((dispatcher) => dispatcher.release()); [a, b, c, d].forEach((owner) => owner.close()); }
       }, 30_000);
     }
   }
