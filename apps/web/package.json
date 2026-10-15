@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "auth:schema": "auth generate --config src/lib/auth.ts --output src/db/auth-schema.ts --yes"
+    "auth:schema": "auth generate --config src/lib/auth.ts --output src/db/auth-schema.ts --yes",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "better-auth": "1.7.7",
@@ -24,6 +25,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/nodemailer": "^8.0.2",
