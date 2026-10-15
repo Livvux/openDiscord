@@ -77,6 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-unsigned-${{ runner.os }}-${{ github.sha }}
+          include-hidden-files: true
           path: |
             desktop/target/release/bundle/
             desktop/SHA256SUMS
