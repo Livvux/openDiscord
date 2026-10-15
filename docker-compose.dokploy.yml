@@ -1,0 +1,52 @@
+# Deployment on Dokploy: its Traefik terminates TLS and routes the domain to `web:3000`, so there is
+# no Caddy here. Configure variables in Dokploy's environment tab (see .env.example), including
+# TRUSTED_PROXIES with Cloudflare's ranges when the domain is proxied by Cloudflare.
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opendiscord
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: opendiscord
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opendiscord"]
+      interval: 5s
+      retries: 10
+
+  migrate:
+    build: { context: ., target: migrate }
+    environment:
+      DATABASE_URL: postgres://opendiscord:${POSTGRES_PASSWORD}@db:5432/opendiscord
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    build: { context: ., target: web }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://opendiscord:${POSTGRES_PASSWORD}@db:5432/opendiscord
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: https://${DOMAIN:?set DOMAIN}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    # Traefik reaches `web` over dokploy-network; Postgres stays on the private default network.
+    networks: [default, dokploy-network]
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  pgdata:

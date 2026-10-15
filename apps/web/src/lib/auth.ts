@@ -22,6 +22,12 @@ function checkName(name: unknown) {
   }
 }
 
+// Proxies (CIDRs) whose X-Forwarded-For entries are trusted, e.g. Cloudflare in front of Traefik.
+// The client IP is the rightmost untrusted entry, so values a client prepends can't spoof it. Without
+// this, Better Auth only accepts single-entry headers and otherwise puts everyone in one shared bucket.
+// Non-CIDR tokens (Caddy's "private_ranges" keyword in the same variable) are ignored.
+export const trustedProxies = (process.env.TRUSTED_PROXIES ?? "").split(/\s+/).filter((entry) => entry.includes("/"));
+
 // Turnstile is optional for self-hosters; when configured, every sign-up needs a verified token.
 const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
 if (process.env.NODE_ENV === "production" && !turnstileSecret) {
@@ -56,6 +62,7 @@ export const auth = betterAuth({
       "/sign-up/email": { window: 600, max: 5 },
     },
   },
+  advanced: { ipAddress: { trustedProxies } },
   user: {
     additionalFields: {
       // Closed Alpha gate. Only the database hook and instance admins change it; clients can't set it.
