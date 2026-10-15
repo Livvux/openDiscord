@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, member, role, session, userBlock } from "@/db/schema";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
@@ -92,6 +92,40 @@ const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "s
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
+  it("rechecks lease time after an observed non-Voice user row-lock wait", async () => {
+    const { endpoints: [a] } = await fixture(1);
+    const writer = await db.$client.connect();
+    const start = Date.now();
+    await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(start + 10_000) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    let pending: Promise<unknown> | undefined;
+    try {
+      await writer.query("BEGIN");
+      const { rows: [{ pid }] } = await writer.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await writer.query('select id from "user" where id = $1 for update', [a.userId]);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(start);
+      pending = heartbeatVoiceControl(memberAuth(a), binding(a)).then(value => ({ value }), error => ({ error }));
+      let observed = false;
+      for (let i = 0; i < 100; i++) {
+        const { rows: [{ blocked }] } = await db.$client.query<{ blocked: boolean }>("select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))) as blocked", [pid]);
+        if (blocked) { observed = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(observed).toBe(true);
+      vi.setSystemTime(start + 20_000);
+      await writer.query("COMMIT");
+      expect(await pending).toMatchObject({ error: { code: "forbidden" } });
+      const [member] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
+      expect(member.state).toBe("left");
+      expect(member.leaseExpiresAt.getTime()).toBeLessThanOrEqual(start + 20_000);
+      expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(0);
+    } finally {
+      await writer.query("ROLLBACK");
+      await pending;
+      vi.useRealTimers();
+      writer.release();
+    }
+  });
   it("strictly separates single-target current enqueue from explicit nondelivery retirement", async () => {
     const { endpoints: [a, b] } = await fixture();
     await upload(a); await upload(b);
