@@ -14,12 +14,17 @@ type Listener = (event: ClientEvent) => void;
 export type ConnectionState = "connecting" | "open" | "reconnecting" | "closed";
 
 interface RealtimeContextValue {
-  subscribe: (listener: Listener) => () => void;
+  subscribe: (listener: Listener, options?: { replay?: boolean }) => () => void;
   state: ConnectionState;
 }
 
 /** Twice the server heartbeat plus slack. */
 const STALE_MS = 60_000;
+/**
+ * Message events are kept this long and replayed to new listeners: a page can render its first
+ * page of messages, then subscribe only after events for it already arrived (merges are idempotent).
+ */
+const REPLAY_MS = 30_000;
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 
@@ -33,10 +38,17 @@ export function useRealtime(): RealtimeContextValue {
 export function RealtimeProvider({ communityId, children }: { communityId: string; children: React.ReactNode }) {
   const router = useRouter();
   const listeners = useRef(new Set<Listener>());
+  const recent = useRef<{ at: number; event: ClientEvent }[]>([]);
   const [state, setState] = useState<ConnectionState>("connecting");
 
   useEffect(() => {
-    const emit = (event: ClientEvent) => listeners.current.forEach((l) => l(event));
+    const emit = (event: ClientEvent) => {
+      if (event.type !== "resync") {
+        const now = Date.now();
+        recent.current = [...recent.current.filter((r) => now - r.at < REPLAY_MS), { at: now, event }];
+      }
+      listeners.current.forEach((l) => l(event));
+    };
     let source: EventSource | null = null;
     let opened = false;
     let lastSeen = Date.now();
@@ -113,10 +125,20 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
     };
   }, [communityId, router]);
 
-  const subscribe = useCallback((listener: Listener) => {
+  const subscribe = useCallback((listener: Listener, options?: { replay?: boolean }) => {
     listeners.current.add(listener);
+    // Only for idempotent listeners (message lists); counters must not see an event twice.
+    if (options?.replay) {
+      const now = Date.now();
+      for (const r of recent.current) if (now - r.at < REPLAY_MS) listener(r.event);
+    }
     return () => void listeners.current.delete(listener);
   }, []);
   const value = useMemo(() => ({ state, subscribe }), [state, subscribe]);
-  return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
+    return (
+    <RealtimeContext.Provider value={value}>
+      {/* Exposes the connection state to tests and assistive tooling without affecting layout. */}
+      <div data-realtime={state} className="contents">{children}</div>
+    </RealtimeContext.Provider>
+  );
 }

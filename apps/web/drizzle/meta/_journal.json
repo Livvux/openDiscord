@@ -57,6 +57,13 @@
       "when": 1792063183520,
       "tag": "0007_auth_rate_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792067598668,
+      "tag": "0008_channel_overrides",
+      "breakpoints": true
     }
   ]
 }

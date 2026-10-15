@@ -28,6 +28,10 @@ export const createChannel = async (communityId: string, name: string) =>
   run((u) => communities.createChannel(u, communityId, name));
 export const updateChannel = async (channelId: string, name: string, topic: string) =>
   run((u) => communities.updateChannel(u, channelId, name, topic));
+export const listChannelOverrides = async (channelId: string) =>
+  run((u) => communities.listChannelOverrides(u, channelId), false);
+export const setChannelOverride = async (channelId: string, roleId: string, allow: number, deny: number) =>
+  run((u) => communities.setChannelOverride(u, channelId, roleId, allow, deny));
 export const deleteChannel = async (channelId: string) => run((u) => communities.deleteChannel(u, channelId));
 
 export const createInvite = async (communityId: string, options: { expiresInHours: number | null; maxUses: number | null }) =>

@@ -1,7 +1,7 @@
 // Server-Sent Events for one community. The browser's EventSource reconnects on its own;
 // connections are capped in lifetime so access is re-checked regularly.
 import { db } from "@/db";
-import { loadAuthority } from "@/server/access";
+import { loadAuthority, loadChannelAuthority } from "@/server/access";
 import { AppError, notFound } from "@/server/errors";
 import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
 import { getMessageForBroadcast } from "@/server/messages";
@@ -87,6 +87,8 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
       };
       const onEvent = async (event: HubEvent) => {
         if (!(await checkAccess())) return;
+        // Private channels: only readers of the channel learn that anything happened in it.
+        if ("channelId" in event && !(await loadChannelAuthority(db, event.channelId, userId))) return;
         switch (event.type) {
           case "message.created":
           case "message.updated": {

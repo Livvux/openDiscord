@@ -9,8 +9,15 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ChannelSummary } from "@/server/communities";
+import { ChannelPermissions } from "./channel-permissions";
 
-export function ChannelSettingsDialog({ channel, communityId }: { channel: ChannelSummary; communityId: string }) {
+interface ChannelSettingsDialogProps {
+  channel: ChannelSummary;
+  communityId: string;
+  canManagePermissions: boolean;
+}
+
+export function ChannelSettingsDialog({ channel, communityId, canManagePermissions }: ChannelSettingsDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +48,7 @@ export function ChannelSettingsDialog({ channel, communityId }: { channel: Chann
       <DialogTrigger render={<Button variant="ghost" size="icon" aria-label="Channel settings" />}>
         <SettingsIcon />
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         <form onSubmit={onSubmit} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Channel settings</DialogTitle>
@@ -62,6 +69,7 @@ export function ChannelSettingsDialog({ channel, communityId }: { channel: Chann
             <Button type="submit" disabled={pending}>Save</Button>
           </DialogFooter>
         </form>
+        {canManagePermissions && open && <ChannelPermissions channelId={channel.id} />}
       </DialogContent>
     </Dialog>
   );

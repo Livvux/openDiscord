@@ -48,9 +48,9 @@ describe("muted members", () => {
   it("can't edit their messages after losing SendMessages", async () => {
     const sent = await sendMessage(member, channelId, "before mute");
     const [defaultRole] = await db.select().from(role).where(eq(role.communityId, communityId)).then((r) => r.filter((x) => x.isDefault));
-    await updateRole(owner, defaultRole.id, "everyone", ["CreateInvites"]);
+    await updateRole(owner, defaultRole.id, "everyone", ["ViewChannels", "CreateInvites"]);
     await expect(editMessage(member, sent.id, "rewritten")).rejects.toMatchObject({ code: "forbidden" });
-    await updateRole(owner, defaultRole.id, "everyone", ["CreateInvites", "SendMessages"]);
+    await updateRole(owner, defaultRole.id, "everyone", ["ViewChannels", "CreateInvites", "SendMessages"]);
   });
 });
 
