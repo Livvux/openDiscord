@@ -26,11 +26,14 @@ describe("categories", () => {
     const social = await createCategory(owner, communityId, "Social");
     await setChannelCategory(owner, generalId, social);
     const view = await getCommunityView(member, communityId);
-    expect(view.categories).toEqual([{ id: projects, name: "Projects" }, { id: social, name: "Social" }]);
+    // Empty groups are only listed for managers.
+    expect(view.categories).toEqual([{ id: social, name: "Social" }]);
+    expect((await getCommunityView(owner, communityId)).categories).toEqual([{ id: projects, name: "Projects" }, { id: social, name: "Social" }]);
     expect(view.channels.find((c) => c.id === generalId)?.categoryId).toBe(social);
     await expect(setChannelCategory(member, generalId, null)).rejects.toThrow("permission");
     await renameCategory(owner, projects, "Work");
-    expect((await getCommunityView(member, communityId)).categories[0].name).toBe("Work");
+    expect((await getCommunityView(owner, communityId)).categories[0].name).toBe("Work");
+    expect((await listAuditLog(owner, communityId)).map((e) => e.action)).toEqual(expect.arrayContaining(["category.create", "category.rename"]));
   });
 
   it("refuses categories from another community and unknown ones", async () => {
@@ -56,6 +59,9 @@ describe("categories", () => {
     await setChannelOverride(owner, hidden, everyone, 0, Permission.ViewChannels);
     const view = await getCommunityView(member, communityId);
     expect(view.channels.some((c) => c.categoryId === staff)).toBe(false);
+    // Not even the group's name reaches members who can't see a channel in it.
+    expect(view.categories.map((c) => c.name)).not.toContain("Staff");
+    expect((await getCommunityView(owner, communityId)).categories.map((c) => c.name)).toContain("Staff");
   });
 
   it("caps categories per community", async () => {

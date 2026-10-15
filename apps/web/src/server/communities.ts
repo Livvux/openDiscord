@@ -95,7 +95,11 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
     .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
   return {
     id: c.id, name: c.name, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions",
-    categories: await listCategories(communityId), authority: ctx.authority, channels,
+    // Group names can be sensitive too: members only get groups with a channel they can see.
+    categories: (await listCategories(communityId)).filter(
+      (cat) => has(ctx.authority, Permission.ManageChannels) || channels.some((ch) => ch.categoryId === cat.id),
+    ),
+    authority: ctx.authority, channels,
   };
 }
 

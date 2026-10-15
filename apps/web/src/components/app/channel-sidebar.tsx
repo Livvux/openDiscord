@@ -51,8 +51,6 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
         )}
         {view.categories.map((cat) => {
           const inside = view.channels.filter((c) => c.categoryId === cat.id);
-          // Members only see groups with a channel they can open; managers also see empty ones.
-          if (inside.length === 0 && !canManageChannels) return null;
           return (
             <CategoryGroup key={cat.id} id={cat.id} name={cat.name} hrefs={inside.map((c) => `/app/c/${view.id}/${c.id}`)}>
               {inside.map(link)}

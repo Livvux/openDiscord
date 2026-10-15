@@ -31,6 +31,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "role.unassign": "removed a role from",
   "channel.delete": "deleted channel",
   "channel.permissions": "changed permissions of channel",
+  "category.create": "created category",
+  "category.rename": "renamed a category to",
   "category.delete": "deleted category",
   "invites.pause": "paused invites",
   "invites.resume": "resumed invites",
@@ -42,7 +44,7 @@ const AUDIT_LABELS: Record<string, string> = {
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
-  if (e.action === "role.delete" || e.action === "category.delete") return e.targetId;
+  if (["role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
   if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block"].includes(e.action)) return null;

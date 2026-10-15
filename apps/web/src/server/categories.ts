@@ -43,6 +43,7 @@ export async function createCategory(userId: string, rawCommunityId: unknown, ra
         position: sql`(select coalesce(max(${category.position}), 0) + 1 from ${category} where ${category.communityId} = ${communityId})`,
       })
       .returning({ id: category.id });
+    await tx.insert(auditLog).values({ communityId, actorId: userId, action: "category.create", targetId: name });
     return created.id;
   });
   await publish({ type: "channels.changed", communityId });
@@ -60,7 +61,10 @@ async function requireCategory(userId: string, rawId: unknown) {
 export async function renameCategory(userId: string, rawId: unknown, rawName: unknown): Promise<void> {
   const name = parse(categoryName, rawName);
   const row = await requireCategory(userId, rawId);
-  await db.update(category).set({ name }).where(eq(category.id, row.id));
+  await db.transaction(async (tx) => {
+    await tx.update(category).set({ name }).where(eq(category.id, row.id));
+    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: "category.rename", targetId: name, reason: row.name });
+  });
   await publish({ type: "channels.changed", communityId: row.communityId });
 }
 
