@@ -82,6 +82,14 @@ only over channels the person can view.
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every
 listener. Delivery is at-most-once; the resync on reconnect is the recovery path.
 
+## Voice
+
+Voice channels (`channel.kind = 'voice'`) use an optional LiveKit SFU. `server/voice.ts` issues room
+tokens after `requireChannel(…, Connect)`; the room name is the channel id and the identity the user id.
+Every access-changing mutation calls `afterAccessChange(communityId)`, which re-checks the community's
+voice rooms through LiveKit's server API and removes or mutes participants. The browser keeps one
+LiveKit connection in an app-wide provider, so a call continues while browsing text channels.
+
 ## Authentication
 
 Better Auth with email + password (min. 10 characters), optional email verification and password reset

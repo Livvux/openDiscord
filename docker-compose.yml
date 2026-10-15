@@ -37,8 +37,26 @@ services:
       R2_BUCKET: ${R2_BUCKET:-}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      # Server-to-server API calls (removing people from rooms) stay on the private network.
+      LIVEKIT_API_URL: http://livekit:7880
     depends_on:
       migrate: { condition: service_completed_successfully }
+
+  # Optional voice SFU: `docker compose --profile voice up -d`. Media needs these ports reachable
+  # from the internet: 7881/tcp and 7882/udp. Signalling goes through Caddy at /livekit.
+  livekit:
+    image: livekit/livekit-server:v1.13
+    profiles: [voice]
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports: ["7881:7881", "7882:7882/udp"]
 
   caddy:
     image: caddy:2-alpine

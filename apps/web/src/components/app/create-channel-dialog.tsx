@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function CreateChannelDialog({ communityId }: { communityId: string }) {
+export function CreateChannelDialog({ communityId, voiceEnabled }: { communityId: string; voiceEnabled: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,9 +17,11 @@ export function CreateChannelDialog({ communityId }: { communityId: string }) {
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const name = String(new FormData(event.currentTarget).get("name"));
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name"));
+    const kind = form.get("kind") === "voice" ? "voice" : "text";
     startTransition(async () => {
-      const result = await createChannel(communityId, name);
+      const result = await createChannel(communityId, name, kind);
       if (!result.ok) return setError(result.error);
       setOpen(false);
       router.push(`/app/c/${communityId}/${result.data}`);
@@ -40,6 +42,17 @@ export function CreateChannelDialog({ communityId }: { communityId: string }) {
             <Label htmlFor="channel-name">Channel name</Label>
             <Input id="channel-name" name="name" required maxLength={32} autoFocus autoComplete="off" placeholder="new-channel" />
           </div>
+          {voiceEnabled && (
+            <fieldset className="grid gap-1.5">
+              <legend className="mb-1 text-sm font-medium">Type</legend>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="kind" value="text" defaultChecked /> Text: messages, images and replies
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="kind" value="voice" /> Voice: talk together in real time
+              </label>
+            </fieldset>
+          )}
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={pending}>{pending ? "Creating…" : "Create channel"}</Button>

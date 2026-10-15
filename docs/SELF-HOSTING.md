@@ -49,6 +49,23 @@ Optional integrations (see `.env.example`):
   Cloudflare changes these ranges rarely; refresh them when it announces changes. `web` reads the same
   variable: it takes the rightmost untrusted `X-Forwarded-For` entry as the client IP.
 
+## Voice channels
+
+Voice is optional and runs on [LiveKit](https://livekit.io) (Apache-2.0), self-hosted next to the app:
+
+1. Set `LIVEKIT_API_KEY` (any name) and `LIVEKIT_API_SECRET` (`openssl rand -base64 32`), and
+   `LIVEKIT_URL=wss://<your domain>/livekit`.
+2. Open **7881/tcp** and **7882/udp** on the server's firewall (media). Signalling uses the HTTPS port
+   through Caddy, so no extra certificate or DNS name is needed.
+3. Start with the profile: `docker compose --profile voice up -d`.
+
+The app only hands out room tokens (10 minutes, microphone only, no data channel) after checking the
+*Join voice* and *Speak* permissions, and removes people from rooms when they are kicked, banned,
+suspended or lose access through roles or channel permissions. LiveKit never sees the database. Audio is
+relayed by your server (an SFU) and not recorded; it is encrypted in transit (DTLS-SRTP) but not
+end-to-end. Without the LiveKit settings, voice channels can't be created and the UI hides the option.
+Networks that block UDP fall back to TCP 7881; a TURN server is not bundled.
+
 ## Dokploy
 
 Use `docker-compose.dokploy.yml` (Git source, this repository): the same services without Caddy, since
@@ -58,6 +75,9 @@ set the variables from `.env.example` in Dokploy's environment tab. Behind Cloud
 entry points trust Cloudflare) and appends the edge address; without trusted proxies every visitor
 would share one rate limit. Create the first administrator from the build stage, which has the scripts:
 `docker compose -f docker-compose.dokploy.yml run --rm migrate pnpm --filter web exec tsx scripts/bootstrap-instance-admin.ts you@example.com "Initial instance owner"`.
+For voice on Dokploy, run LiveKit with `livekit.yaml` as its own service, route `/livekit` (path
+stripped) or a subdomain to its port 7880 in Traefik, open 7881/tcp and 7882/udp, and set
+`LIVEKIT_URL` accordingly plus `LIVEKIT_API_URL` to LiveKit's internal address.
 - If you put a CDN such as Cloudflare in front, it terminates TLS and can see traffic; tell your users.
 - `BETTER_AUTH_SECRET` signs sessions and encrypts TOTP secrets. Rotating it signs everyone out and
   invalidates enrolled authenticator apps (users must set 2FA up again). Rotate it if it leaks.

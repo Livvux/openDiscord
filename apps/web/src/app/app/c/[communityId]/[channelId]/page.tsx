@@ -3,6 +3,9 @@ import { Suspense } from "react";
 import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog";
 import { ChannelChat } from "@/components/app/chat/channel-chat";
 import { PinnedDialog } from "@/components/app/chat/pinned-dialog";
+import { VoiceRoom } from "@/components/app/voice/voice-room";
+import { voiceEnabled } from "@/server/voice";
+import { Volume2Icon } from "lucide-react";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
 import { blockedIds } from "@/server/blocks";
@@ -32,15 +35,15 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
     <>
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/5 px-3 md:px-5">
         <MobileNavToggle />
-        <h1 className="font-medium text-zinc-200">
-          <span aria-hidden className="text-zinc-400"># </span>
+        <h1 className="flex items-center gap-1 font-medium text-zinc-200">
+          {channel.kind === "voice" ? <Volume2Icon aria-hidden className="size-4 text-zinc-400" /> : <span aria-hidden className="text-zinc-400"># </span>}
           {channel.name}
         </h1>
         {channel.topic && (
           <p className="hidden truncate border-l border-white/10 pl-3 text-sm text-zinc-400 sm:block">{channel.topic}</p>
         )}
         <div className="ml-auto flex items-center">
-          <PinnedDialog channelId={channel.id} channelName={channel.name} />
+          {channel.kind === "text" && <PinnedDialog channelId={channel.id} channelName={channel.name} />}
           {has(view.authority, Permission.ManageChannels) && (
             <ChannelSettingsDialog
               channel={channel}
@@ -50,6 +53,14 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
           )}
         </div>
       </header>
+      {channel.kind === "voice" ? (
+        <VoiceRoom
+          key={channel.id}
+          channel={{ id: channel.id, name: channel.name }}
+          href={`/app/c/${view.id}/${channel.id}`}
+          canConnect={voiceEnabled && has(channel, Permission.Connect)}
+        />
+      ) : (
       <ChannelChat
         key={channel.id}
         channel={channel}
@@ -62,6 +73,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         lastReadId={channel.lastReadId}
         blockedIds={blocked}
       />
+      )}
     </>
   );
 }

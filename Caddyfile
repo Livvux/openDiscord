@@ -10,11 +10,17 @@
 {$DOMAIN} {
 	encode zstd gzip
 	# Security headers, including HSTS, come from the app itself (apps/web/next.config.ts).
-	# Server-Sent Events: flush immediately instead of buffering.
-	reverse_proxy web:3000 {
-		flush_interval -1
-		# Rate limiting in `web` reads this; overwrite it with the one IP Caddy resolved, never append.
-		header_up X-Forwarded-For {client_ip}
+	# Voice signalling (optional `voice` profile): wss://DOMAIN/livekit → LiveKit's port 7880.
+	handle_path /livekit/* {
+		reverse_proxy livekit:7880
+	}
+	handle {
+		# Server-Sent Events: flush immediately instead of buffering.
+		reverse_proxy web:3000 {
+			flush_interval -1
+			# Rate limiting in `web` reads this; overwrite it with the one IP Caddy resolved, never append.
+			header_up X-Forwarded-For {client_ip}
+		}
 	}
 	# Don't keep client IP addresses in access logs (Caddy logs nothing by default).
 }

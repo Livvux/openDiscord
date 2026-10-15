@@ -1,0 +1,10 @@
+# LiveKit for the optional `voice` compose profile. API keys come from LIVEKIT_KEYS (see docker-compose.yml).
+port: 7880
+rtc:
+  tcp_port: 7881
+  # One UDP port for all media (multiplexed), so only 7882/udp needs to be open.
+  udp_port: 7882
+  # Discover the public IP via STUN so clients behind NAT can reach the server.
+  use_external_ip: true
+logging:
+  level: warn

@@ -9,6 +9,7 @@ import { forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
 import { canManageRole, has, outranks, Permission, permissionsFromNames, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
+import { afterAccessChange } from "./voice";
 import { parse, reason as reasonSchema, roleName, uuid } from "./validation";
 import { z } from "zod";
 
@@ -94,6 +95,7 @@ export async function kickMember(actorId: string, rawCommunityId: unknown, rawTa
     await tx.insert(auditLog).values({ communityId, actorId, action: "member.kick", targetId, reason });
   });
   await publish({ type: "member.removed", communityId, userId: targetId });
+  afterAccessChange(communityId);
 }
 
 export async function banMember(actorId: string, rawCommunityId: unknown, rawTargetId: unknown, rawReason?: unknown) {
@@ -110,6 +112,7 @@ export async function banMember(actorId: string, rawCommunityId: unknown, rawTar
     await tx.insert(auditLog).values({ communityId, actorId, action: "member.ban", targetId, reason });
   });
   await publish({ type: "member.removed", communityId, userId: targetId });
+  afterAccessChange(communityId);
 }
 
 export interface BanSummary {
@@ -207,7 +210,8 @@ export async function updateRole(actorId: string, rawRoleId: unknown, rawName: u
     if (!canManageRole(authority, r.position, permissions)) throw forbidden("You can't grant permissions you don't have.");
     await tx.update(role).set({ name: r.isDefault ? r.name : name, permissions }).where(eq(role.id, roleId));
     await tx.insert(auditLog).values({ communityId: r.communityId, actorId, action: "role.update", targetId: roleId });
-  });
+    return r.communityId;
+  }).then(afterAccessChange);
 }
 
 export async function deleteRole(actorId: string, rawRoleId: unknown) {
@@ -217,7 +221,8 @@ export async function deleteRole(actorId: string, rawRoleId: unknown) {
     if (r.isDefault) throw forbidden("The default role can't be deleted.");
     await tx.delete(role).where(eq(role.id, roleId));
     await tx.insert(auditLog).values({ communityId: r.communityId, actorId, action: "role.delete", targetId: r.name });
-  });
+    return r.communityId;
+  }).then(afterAccessChange);
 }
 
 export async function setMemberRole(actorId: string, rawRoleId: unknown, rawTargetId: unknown, assigned: boolean) {
@@ -240,7 +245,8 @@ export async function setMemberRole(actorId: string, rawRoleId: unknown, rawTarg
       targetId,
       reason: r.name,
     });
-  });
+    return r.communityId;
+  }).then(afterAccessChange);
 }
 
 // --- Audit log --------------------------------------------------------------

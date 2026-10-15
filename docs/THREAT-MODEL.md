@@ -65,6 +65,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T23 | Malicious uploads | Images only; type decided by the decoder, not the client; re-encoded to WebP (no EXIF/GPS, no polyglots, no SVG); size checked before the body is read; pixel and frame caps; per-user upload rate and pending-upload caps; private bucket; served with `nosniff`, `Content-Security-Policy: sandbox` and membership checks | ✅ images (no malware scanning; ClamAV P1) |
 | T24 | Spam sign-ups / account farming | Cloudflare Turnstile verified server-side on sign-up (when configured); 5 sign-ups per 10 min per IP; optional Closed Alpha: new accounts need admin approval before any session is issued | ✅ (shared across replicas: D4) |
 | T24 | Account enumeration | Password reset answers identically for unknown emails. Sign-up reveals that an email is taken (accepted trade-off for usability) | 🟡 |
+| T26 | Voice: joining without permission, staying after removal, eavesdropping | Tokens only after channel checks (Join voice/Speak), 10-minute lifetime, microphone-only grants, no data channel; participants re-checked and removed on kick/ban/suspension/role or override changes; DTLS-SRTP in transit | 🟡 not end-to-end encrypted; removal is best effort if LiveKit is unreachable |
 | T25 | Child safety, grooming, harassment | Blocking and reporting ✅; age attestation and DM restrictions pending | 🟡 age attestation and DM restrictions required before public launch of the official instance |
 
 ## Residual risks we accept for the MVP

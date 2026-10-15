@@ -49,12 +49,16 @@ acting on peers or escalating themselves. Channel overrides (P1) will add allow/
 Components are copied into the repo (`components/ui`), so there's no runtime UI framework lock-in.
 `shadcn` is a dev dependency only (its CSS is compiled at build time).
 
-## D8. Voice and video: LiveKit (planned, P1)
+## D8. Voice and video: LiveKit (voice shipped)
 
 **Options considered:** LiveKit (Apache-2.0 SFU, Go, built-in TURN, client SDKs, E2EE support),
 mediasoup (library; we would build signalling and ops ourselves), Jitsi (complete but heavier and
 meeting-oriented). **Choice:** LiveKit as an optional compose profile. The web app issues short-lived
-room tokens after checking channel permissions, so LiveKit never needs our database.
+room tokens after checking channel permissions, so LiveKit never needs our database. When access
+changes (kick, ban, suspension, roles, channel overrides) the app lists each voice room's participants
+and removes or mutes those who lost access, best effort. Signalling is proxied at `/livekit` on the
+app's domain; the Content-Security-Policy is set per request (`src/proxy.ts`) so it can name the
+operator's LiveKit server, which a build-time header config can't know.
 
 ## D9. Attachments (images shipped; files and local volume planned)
 

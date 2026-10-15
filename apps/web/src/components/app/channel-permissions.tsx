@@ -5,11 +5,18 @@ import { listChannelOverrides, setChannelOverride } from "@/app/app/actions";
 import type { ChannelOverrideView } from "@/server/communities";
 import { Permission } from "@/server/permissions";
 
-const COLUMNS = [
-  { bit: Permission.ViewChannels, label: "View" },
-  { bit: Permission.SendMessages, label: "Send" },
-  { bit: Permission.ManageMessages, label: "Delete others'" },
-] as const;
+const COLUMNS = {
+  text: [
+    { bit: Permission.ViewChannels, label: "View" },
+    { bit: Permission.SendMessages, label: "Send" },
+    { bit: Permission.ManageMessages, label: "Delete others'" },
+  ],
+  voice: [
+    { bit: Permission.ViewChannels, label: "View" },
+    { bit: Permission.Connect, label: "Connect" },
+    { bit: Permission.Speak, label: "Speak" },
+  ],
+} as const;
 
 type State = "inherit" | "allow" | "deny";
 
@@ -18,7 +25,8 @@ function stateOf(o: ChannelOverrideView, bit: number): State {
 }
 
 /** Tri-state per role and permission. Owners and administrators always bypass these. */
-export function ChannelPermissions({ channelId }: { channelId: string }) {
+export function ChannelPermissions({ channelId, kind }: { channelId: string; kind: "text" | "voice" }) {
+  const columns = COLUMNS[kind];
   const [rows, setRows] = useState<ChannelOverrideView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -63,7 +71,7 @@ export function ChannelPermissions({ channelId }: { channelId: string }) {
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th scope="col" className="px-2 py-1.5 font-medium">Role</th>
-                {COLUMNS.map((c) => (
+                {columns.map((c) => (
                   <th key={c.bit} scope="col" className="px-2 py-1.5 font-medium">{c.label}</th>
                 ))}
               </tr>
@@ -72,7 +80,7 @@ export function ChannelPermissions({ channelId }: { channelId: string }) {
               {rows.map((r) => (
                 <tr key={r.roleId} className="border-b last:border-0">
                   <th scope="row" className="px-2 py-1 text-left font-normal">{r.isDefault ? "everyone" : r.roleName}</th>
-                  {COLUMNS.map((c) => (
+                  {columns.map((c) => (
                     <td key={c.bit} className="px-1 py-1">
                       <select
                         aria-label={`${c.label} for ${r.isDefault ? "everyone" : r.roleName}`}

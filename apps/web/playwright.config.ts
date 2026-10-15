@@ -8,7 +8,12 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  use: { baseURL: `http://localhost:${port}`, trace: "retain-on-failure" },
+  use: {
+    baseURL: `http://localhost:${port}`,
+    trace: "retain-on-failure",
+    // Voice tests: a synthetic microphone, granted without a prompt.
+    launchOptions: { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] },
+  },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] }, testIgnore: /closed-alpha\.spec/ },
     // Auth flow runs once: Better Auth rate-limits sign-in to 3 attempts per 10s per IP.
@@ -28,6 +33,10 @@ export default defineConfig({
       // Cloudflare's public Turnstile test keys: the widget always passes and the server accepts its dummy token.
       TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
       TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+      // LiveKit in dev mode (`livekit-server --dev`); the voice spec skips when it isn't running.
+      LIVEKIT_URL: process.env.LIVEKIT_URL ?? "ws://localhost:7880",
+      LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY ?? "devkey",
+      LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET ?? "secret",
     },
   },
 });

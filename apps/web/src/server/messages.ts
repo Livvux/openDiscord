@@ -85,7 +85,8 @@ export interface MessagePage {
 export async function listMessages(userId: string, rawChannelId: unknown, rawBefore?: unknown): Promise<MessagePage> {
   const channelId = parse(uuid, rawChannelId);
   const before = rawBefore ? parse(uuid, rawBefore) : undefined;
-  await requireChannel(db, channelId, userId);
+  const { channel: ch } = await requireChannel(db, channelId, userId);
+  if (ch.kind === "voice") return { messages: [], hasMore: false };
   const rows = await db
     .select(viewColumns)
     .from(message)
@@ -125,6 +126,7 @@ export async function sendMessage(
   // A message with images may have no text.
   const content = ids.length > 0 && typeof rawContent === "string" && !rawContent.trim() ? "" : parse(messageContent, rawContent);
   const { channel: ch, authority } = await requireChannel(db, channelId, userId, Permission.SendMessages);
+  if (ch.kind === "voice") throw new AppError("invalid", "Voice channels don't have messages.");
   await enforceAutomod(ch.communityId, userId, authority, content);
 
   const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);

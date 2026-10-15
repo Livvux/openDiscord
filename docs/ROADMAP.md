@@ -85,8 +85,9 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 
 ### 4. Voice, video and screen sharing
 
-All ❌. Voice channels are **P1** (LiveKit, see [DECISIONS.md](DECISIONS.md)); video and screen sharing P2.
-They are deliberately outside the text MVP: they bring an SFU, TURN and UDP ports to every deployment.
+Voice channels ✅ on self-hosted LiveKit as an optional compose profile ([DECISIONS.md](DECISIONS.md) D8): permission-checked
+short-lived tokens, *Join voice*/*Speak* per channel, removal on loss of access, calls survive navigation.
+Video and screen sharing are P2. Voice is not end-to-end encrypted (SFU relays DTLS-SRTP).
 
 ### 5. Security
 
@@ -167,7 +168,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 | Item | Depends on | Acceptance criteria |
 | --- | --- | --- |
-| Voice channels (LiveKit) | — | Optional compose profile with LiveKit + TURN; join/speak permissions enforced by short-lived server-issued tokens |
+| Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (TURN not bundled; TCP fallback) |
 | Direct messages with audited E2EE | blocking, audited protocol library ([D10](DECISIONS.md)) | Server stores ciphertext only; key verification UI; docs state guarantees and limits |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
