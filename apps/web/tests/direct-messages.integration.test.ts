@@ -50,7 +50,8 @@ describe("private encrypted conversations", () => {
   it("atomically claims one-time keys and safely retries the same claim", async () => {
     const request = { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(bob)]: { [bDevice]: "signed_curve25519" } } } };
     const replies = await Promise.all(Array.from({ length: 4 }, () => handleCryptoRequest(authA(), request)));
-    expect(replies.every((r) => JSON.stringify(r) === JSON.stringify(replies[0]))).toBe(true);
+    for (const reply of replies) expect(reply).toEqual(replies[0]);
+    await handleCryptoRequest(authB(), { kind: "upload", body: { device_keys: publicKeys(bob, bDevice), one_time_keys: { "signed_curve25519:one": { key: "d".repeat(43), signatures: {} } } } });
     const next = await handleCryptoRequest(authA(), { ...request, requestId: randomUUID() });
     expect(JSON.stringify(next)).not.toContain("signed_curve25519:one");
   });
@@ -94,6 +95,25 @@ describe("private encrypted conversations", () => {
     await handleCryptoRequest(authA(), request);
     await expect(handleCryptoRequest(authA(), { ...request, eventType: "m.key.verification.cancel" })).rejects.toThrow("cannot be reused");
     await expect(handleCryptoRequest(authA(), { ...request, requestId: randomUUID(), body: { messages: { [matrix(bob)]: { [bDevice]: { transaction_id: randomUUID(), body: "plaintext disguised as control" } } } } })).rejects.toThrow();
+  });
+  it("caps nested work before shared locks and refuses nonexistent signature targets", async () => {
+    const huge = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [String(i), "signed_curve25519"]));
+    await expect(handleCryptoRequest(authA(), { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(bob)]: huge } } })).rejects.toThrow("Too many target");
+    await expect(handleCryptoRequest(authA(), { kind: "signatures", body: { [matrix(bob)]: { absent: { user_id: matrix(bob), keys: {}, signatures: { [matrix(alice)]: {} } } } } })).rejects.toThrow("does not exist");
+  });
+  it("requires accepted conversation consent for device traffic and concurrent requests do not exhaust the pool", async () => {
+    const [sender, recipient] = await Promise.all([users.create("Consent sender"), users.create("Consent recipient")]);
+    const { communityId } = await createCommunity(sender, "Consent community");
+    await acceptInvite(recipient, await createInvite(sender, communityId, { expiresInHours: 24, maxUses: null }));
+    const ids = await Promise.all(Array.from({ length: 10 }, () => createDirectConversation(sender, recipient)));
+    expect(new Set(ids).size).toBe(1);
+    const deviceId = randomUUID(), secret = randomBytes(32).toString("hex");
+    await registerDmDevice(sender, { id: deviceId, secret, name: "Consent sender" });
+    const auth = { userId: sender, deviceId, secret };
+    const request = { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.done", body: { messages: { [matrix(recipient)]: { "*": { transaction_id: randomUUID() } } } } };
+    await expect(handleCryptoRequest(auth, request)).rejects.toThrow("not found");
+    await respondToDirectRequest(recipient, ids[0], "rejected");
+    await expect(handleCryptoRequest(auth, request)).rejects.toThrow("not found");
   });
   it("blocking stops delivery; revocation is terminal; deleting accounts cascades private stores", async () => {
     await blockUser(bob, alice);

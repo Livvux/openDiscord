@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizz
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, member, user, userBlock } from "@/db/schema";
+import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, instanceAuditLog, member, user, userBlock } from "@/db/schema";
 import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
@@ -39,13 +39,20 @@ async function reachable(tx: Tx | typeof db, actor: string, target: string): Pro
   if (!found.length && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length) throw notFound("Account not found.");
   if (await blocked(tx, actor, target)) throw notFound("Account not found.");
 }
+async function cryptoReachable(tx: Tx, actor: string, target: string): Promise<void> {
+  if (actor === target) return;
+  const [first, second] = pair(actor, target);
+  const [accepted] = await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), eq(dmConversation.status, "accepted"))).limit(1);
+  if (!accepted || await blocked(tx, actor, target)) throw notFound("Encrypted conversation not found.");
+  await assertActiveUser(target, tx);
+}
 async function conversationFor(tx: Tx | typeof db, actor: string, id: string, sending = false) {
   const [row] = await tx.select().from(dmConversation).where(and(eq(dmConversation.id, parse(uuid, id)), or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))));
   if (!row) throw notFound("Conversation not found.");
   const peer = row.firstId === actor ? row.secondId : row.firstId;
   if (sending) {
     if (row.status !== "accepted" || await blocked(tx, actor, peer)) throw forbidden("This conversation is not accepting messages.");
-    await assertActiveUser(peer);
+    await assertActiveUser(peer, tx);
   }
   return { ...row, peer };
 }
@@ -63,7 +70,7 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor}, 31))`);
     await reachable(tx, actor, target);
-    await assertActiveUser(target);
+    await assertActiveUser(target, tx);
     const [firstId, secondId] = pair(actor, target);
     const [existing] = await tx.select().from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId)));
     if (existing?.status === "rejected") throw forbidden("This person is not accepting this request.");
@@ -178,6 +185,21 @@ const cryptoRequest = z.discriminatedUnion("kind", [
 /** Exact Matrix wire shapes at the boundary; the application never processes private keys. */
 export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): Promise<Record<string, unknown>> {
   const data = parse(cryptoRequest, input);
+  // Bound attacker-controlled fan-out before acquiring the shared transaction lock.
+  if ("body" in data) {
+    if (data.kind === "upload" && data.body.device_keys && Buffer.byteLength(JSON.stringify(data.body.device_keys)) > 8192) throw invalid("Device keys exceed the size limit.");
+    if ((data.kind === "signing" || data.kind === "signatures") && Buffer.byteLength(JSON.stringify(data.body)) > 32_000) throw invalid("Signing request exceeds the size limit.");
+    const nested = data.kind === "query" ? data.body.device_keys : data.kind === "claim" ? data.body.one_time_keys : data.kind === "send" ? data.body.messages : data.kind === "signatures" ? data.body : undefined;
+    if (nested !== undefined) {
+      const entries = Object.entries(record(nested));
+      if (entries.length > 20) throw invalid("Too many target accounts.");
+      let total = 0;
+      for (const [, raw] of entries) {
+        const inner = data.kind === "query" ? parse(z.array(uuid).max(10), raw).length : Object.keys(record(raw)).length;
+        if (inner > 20 || (total += inner) > 40) throw invalid("Too many target keys or devices.");
+      }
+    }
+  }
   await consume(`dm-crypto:${auth.userId}`, 240, 60_000);
   return db.transaction(async (tx) => {
     // Short DB-only critical section: atomic claims, receipt replay and mailbox commit/cursor ordering.
@@ -185,13 +207,17 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     const own = await deviceFor(tx, auth), ownUser = matrixUser(auth.userId);
     if (data.kind === "sync") {
       const events = await tx.select().from(dmMailbox).where(eq(dmMailbox.deviceId, own.id)).orderBy(asc(dmMailbox.id)).limit(100);
-      const keys = await tx.select().from(dmKey).where(eq(dmKey.deviceId, own.id));
+      const keys = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, own.id), or(eq(dmKey.fallback, true), eq(dmKey.used, false))));
       const conversations = await tx.select().from(dmConversation).where(and(ne(dmConversation.status, "rejected"), or(eq(dmConversation.firstId, auth.userId), eq(dmConversation.secondId, auth.userId))));
-      return { cursor: String(events.at(-1)?.id ?? 0), events: events.map((e) => e.event), users: [...new Set([auth.userId, ...conversations.flatMap((r) => [r.firstId, r.secondId])])], oneTimeKeys: { signed_curve25519: keys.filter((k) => !k.fallback).length }, unusedFallbackKeys: keys.some((k) => k.fallback && !k.used) ? ["signed_curve25519"] : [] };
+      return { cursor: String(events.at(-1)?.id ?? 0), events: events.map((e) => e.event), users: [...new Set([auth.userId, ...conversations.flatMap((r) => [r.firstId, r.secondId])])], oneTimeKeys: { signed_curve25519: keys.filter((k) => !k.fallback && !k.used).length }, unusedFallbackKeys: keys.some((k) => k.fallback && !k.used) ? ["signed_curve25519"] : [] };
     }
     if (data.kind === "ack") { await tx.delete(dmMailbox).where(and(eq(dmMailbox.deviceId, own.id), lte(dmMailbox.id, Number(data.cursor)))); return {}; }
     const body = data.body;
     if (data.kind === "upload") {
+      const uploadId = `upload:${digest(canonical(body))}`;
+      const [uploaded] = await tx.select({ id: dmCryptoReceipt.requestId }).from(dmCryptoReceipt).where(and(eq(dmCryptoReceipt.deviceId, own.id), eq(dmCryptoReceipt.requestId, uploadId)));
+      if (uploaded) return { one_time_key_counts: { signed_curve25519: await tx.$count(dmKey, and(eq(dmKey.deviceId, own.id), eq(dmKey.fallback, false), eq(dmKey.used, false))) } };
+      if (await tx.$count(dmKey, eq(dmKey.deviceId, own.id)) >= 100_000 || await tx.$count(dmCryptoReceipt, eq(dmCryptoReceipt.deviceId, own.id)) >= 100_000) throw invalid("Device prekey lifetime limit reached. Enroll a new device.");
       if (body.device_keys) {
         const keys = parse(signedObject.extend({ device_id: uuid, algorithms: z.array(z.string()).max(8) }), body.device_keys);
         if (keys.user_id !== ownUser || keys.device_id !== own.id || !keys.keys[`curve25519:${own.id}`] || !keys.keys[`ed25519:${own.id}`]) throw invalid("Device keys do not match this account and device.");
@@ -212,8 +238,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
           }
         }
       }
-      const total = await tx.$count(dmKey, and(eq(dmKey.deviceId, own.id), eq(dmKey.fallback, false)));
+      const total = await tx.$count(dmKey, and(eq(dmKey.deviceId, own.id), eq(dmKey.fallback, false), eq(dmKey.used, false)));
       if (total > 100) throw invalid("Too many prekeys.");
+      await tx.insert(dmCryptoReceipt).values({ deviceId: own.id, requestId: uploadId, digest: uploadId, response: {} });
       return { one_time_key_counts: { signed_curve25519: total } };
     }
     if (data.kind === "signing") {
@@ -231,8 +258,12 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     if (data.kind === "signatures") {
       if (Object.keys(body).length > 20) throw invalid("Too many signatures.");
       for (const [matrixId, values] of Object.entries(body)) {
-        const target = fromMatrix(matrixId); await reachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
         for (const [keyId, raw] of Object.entries(record(values))) {
+          const [targetDevice] = uuid.safeParse(keyId).success ? await tx.select({ id: dmDevice.id }).from(dmDevice).where(and(eq(dmDevice.userId, target), eq(dmDevice.id, keyId), isNull(dmDevice.revokedAt))) : [];
+          const [identity] = await tx.select().from(dmIdentity).where(eq(dmIdentity.userId, target));
+          const masterId = identity ? Object.values(record(record(identity.keys.master_key).keys))[0] : undefined;
+          if (!targetDevice && keyId !== masterId) throw invalid("Signature target key does not exist.");
           const item = parse(signedObject, raw);
           if (item.user_id !== matrixId) throw invalid("Signature target mismatch.");
           const signatures = item.signatures?.[ownUser];
@@ -247,7 +278,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       if (requested.length > 50) throw invalid("Too many accounts.");
       const device_keys: Record<string, unknown> = {}, master_keys: Record<string, unknown> = {}, self_signing_keys: Record<string, unknown> = {}, user_signing_keys: Record<string, unknown> = {};
       for (const matrixId of requested) {
-        const target = fromMatrix(matrixId); await reachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
         const signatures = await tx.select().from(dmSignature).where(eq(dmSignature.targetId, target));
         const attach = (keyId: string, value: Record<string, unknown>) => {
@@ -277,17 +308,16 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       const requested = record(body.one_time_keys), one_time_keys: Record<string, unknown> = {};
       if (Object.keys(requested).length > 50) throw invalid("Too many accounts.");
       for (const [matrixId, rawDevices] of Object.entries(requested)) {
-        const target = fromMatrix(matrixId); await reachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
         const response: Record<string, unknown> = {};
         for (const [id, algorithm] of Object.entries(record(rawDevices))) {
           if (algorithm !== "signed_curve25519") throw invalid("Unsupported prekey algorithm.");
           const [device] = await tx.select().from(dmDevice).where(and(eq(dmDevice.id, parse(uuid, id)), eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
           if (!device) continue;
-          const [key] = await tx.select().from(dmKey).where(eq(dmKey.deviceId, id)).orderBy(asc(dmKey.fallback), asc(dmKey.keyId)).limit(1);
+          const [key] = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, id), or(eq(dmKey.fallback, true), eq(dmKey.used, false)))).orderBy(asc(dmKey.fallback), asc(dmKey.keyId)).limit(1);
           if (key) {
             response[id] = { [key.keyId]: key.content };
-            if (key.fallback) await tx.update(dmKey).set({ used: true }).where(and(eq(dmKey.deviceId, id), eq(dmKey.keyId, key.keyId)));
-            else await tx.delete(dmKey).where(and(eq(dmKey.deviceId, id), eq(dmKey.keyId, key.keyId)));
+            await tx.update(dmKey).set({ used: true }).where(and(eq(dmKey.deviceId, id), eq(dmKey.keyId, key.keyId)));
           }
         }
         one_time_keys[matrixId] = response;
@@ -297,8 +327,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       if (!["m.room.encrypted", "m.secret.request", "m.room_key_request"].includes(data.eventType) && !/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(data.eventType)) throw invalid("Only encrypted or verification device events are supported.");
       const recipients = record(body.messages);
       if (Object.keys(recipients).length > 20) throw invalid("Too many recipients.");
+      let deliveries = 0;
       for (const [matrixId, rawDevices] of Object.entries(recipients)) {
-        const target = fromMatrix(matrixId); await reachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
         for (const [id, rawContent] of Object.entries(record(rawDevices))) {
           const content = parseDeviceEvent(data.eventType, rawContent);
@@ -306,6 +337,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
             if (content.algorithm !== "m.olm.v1.curve25519-aes-sha2" || content.sender_key !== record(own.keys?.keys)[`curve25519:${own.id}`]) throw invalid("Invalid encrypted device event.");
           } else if ((content.from_device !== undefined && content.from_device !== own.id) || (content.requesting_device_id !== undefined && content.requesting_device_id !== own.id)) throw invalid("Verification sender mismatch.");
           for (const device of devices.filter((d) => d.id === id || id === "*")) {
+            if (++deliveries > 40) throw invalid("Too many device deliveries.");
             if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= 2000) throw invalid("The recipient's device mailbox is full.");
             await tx.insert(dmMailbox).values({ deviceId: device.id, senderId: auth.userId, event: { sender: ownUser, type: data.eventType, content } });
           }
@@ -353,8 +385,13 @@ export async function listDirectReports(actor: AdminActor) {
   return db.select({ id: dmReport.id, reason: dmReport.reason, excerpt: dmReport.excerpt, createdAt: dmReport.createdAt, senderId: dmMessage.senderId, senderName: user.name }).from(dmReport).innerJoin(dmMessage, eq(dmMessage.id, dmReport.messageId)).innerJoin(user, eq(user.id, dmMessage.senderId)).where(isNull(dmReport.resolvedAt)).orderBy(asc(dmReport.createdAt)).limit(100);
 }
 export async function resolveDirectReport(actor: AdminActor, rawId: unknown): Promise<void> {
-  await requireInstanceAdmin(actor);
-  await db.update(dmReport).set({ resolvedAt: new Date() }).where(eq(dmReport.id, parse(uuid, rawId)));
+  const id = parse(uuid, rawId);
+  await db.transaction(async (tx) => {
+    await requireInstanceAdmin(actor, tx);
+    const rows = await tx.update(dmReport).set({ resolvedAt: new Date() }).where(and(eq(dmReport.id, id), isNull(dmReport.resolvedAt))).returning({ id: dmReport.id });
+    if (!rows.length) throw notFound("Open private report not found.");
+    await tx.insert(instanceAuditLog).values({ actorId: actor.userId, action: "dm.report.reviewed", targetId: id, reason: "Recipient disclosure reviewed." });
+  });
 }
 
 /** Portable server-held data. Never includes a device bearer secret or any private crypto key. */
