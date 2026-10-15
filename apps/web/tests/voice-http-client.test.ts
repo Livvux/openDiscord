@@ -50,3 +50,12 @@ describe("Voice HTTP wire identity and cancellation", () => {
     await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "protocol" });
   });
 });
+
+it("rejects a structurally valid snapshot for a different call before passing it to an owner", async () => {
+  const binding = { callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 };
+  const callId = crypto.randomUUID(), voiceDeviceId = crypto.randomUUID(), channelId = crypto.randomUUID();
+  const voiceUserId = `@voice_${callId}_${binding.memberId}:opendiscord.local`, participantIdentity = `v1:${binding.memberId}`;
+  const body = { callId, channelId, generation: 1, memberId: binding.memberId, joinNonce: binding.joinNonce, voiceUserId, voiceDeviceId, participantIdentity, leaseExpiresAt: new Date(Date.now() + 30_000).toISOString(), serverTime: new Date().toISOString(), members: [{ memberId: binding.memberId, userId: "test-account", anchorDeviceId: crypto.randomUUID(), voiceUserId, voiceDeviceId, joinNonce: binding.joinNonce, participantIdentity, displayName: "Test", state: "active" }], removals: [] };
+  const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
+  await expect(createVoiceHttpClient({ fetch: request }).heartbeat(binding, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "protocol" });
+});

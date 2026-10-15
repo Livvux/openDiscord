@@ -5,6 +5,7 @@ import { createCommunity, newUserPage, signUp } from "./helpers";
 test("Voice HTTP uses the real browser session and registered enrollment without activating media", async ({ browser }) => {
   const page = await newUserPage(browser), consoleErrors: string[] = [];
   page.on("pageerror", error => consoleErrors.push(error.name));
+  page.on("console", message => { if (message.type() === "error" && !/Failed to load resource.*\b(403|405)\b/.test(message.text())) consoleErrors.push("unexpected-console-error"); });
   await signUp(page, "Voice Control HTTP");
   await createCommunity(page, "Voice HTTP browser");
   await page.getByRole("button", { name: "Create channel" }).click();

@@ -8,7 +8,7 @@ import { db } from "@/db";
 import { channel, session, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { POST, GET, HEAD, PUT, PATCH, DELETE, OPTIONS } from "@/app/api/voice/control/route";
-import { createCommunity } from "@/server/communities";
+import { acceptInvite, createInvite, createCommunity } from "@/server/communities";
 import { registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
 import { requireUser } from "@/server/session";
 import { VOICE_HTTP_REQUEST_BYTES } from "@/server/voice-http";
@@ -28,7 +28,7 @@ async function account() {
   const [room] = await db.insert(channel).values({ communityId: community.communityId, kind: "voice", name: "http-control" }).returning();
   const input = { channelId: room.id, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: "b".repeat(64), consent: true };
   const headers = { cookie, "x-dm-device": anchor.id, "x-dm-device-secret": anchor.secret };
-  return { actual, cookie, anchor, input, headers };
+  return { actual, cookie, anchor, input, headers, community };
 }
 async function code(response: Response, status: number, code: string) { expect(response.status).toBe(status); expect(response.headers.get("cache-control")).toBe("private, no-store"); expect(response.headers.get("access-control-allow-origin")).toBeNull(); expect(await response.json()).toEqual({ code }); }
 describe("actual cookie-authenticated Voice route", () => {
@@ -60,11 +60,28 @@ describe("actual cookie-authenticated Voice route", () => {
     const grant = await client.token(binding, a.input.enrollmentSecret, new AbortController().signal);
     const claims = await new TokenVerifier(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!).verify(grant.token, 0);
     expect(claims.sub).toBe(current.participantIdentity);
-    expect(claims.video).toMatchObject({ room: `voice:${current.channelId}:${current.callId}:${current.generation}`, roomJoin: true, canPublishData: false });
+    expect(claims.video).toMatchObject({ room: `voice:${current.channelId}:${current.callId}:${current.generation}`, roomJoin: true, canPublishData: false, canPublishSources: ["microphone", "camera", "screen_share", "screen_share_audio"] });
     expect(claims.exp! * 1000).toBeLessThanOrEqual(Date.parse(grant.expiresAt));
     expect(claims.exp! * 1000).toBeGreaterThan(Date.now());
     const left = await POST(request({ action: "leave", input: binding }, headers)); expect(left.status).toBe(200);
     await code(await POST(request({ action: "crypto", input: { ...binding, request: { kind: "sync" } } }, headers)), 403, "forbidden");
+  });
+  it("rejects exact old crypto/token generation after a genuine roster change and permits authoritative heartbeat", async () => {
+    const a = await account(), b = await account();
+    const invite = await createInvite(a.actual.id, a.community.communityId, { expiresInHours: 1, maxUses: null });
+    await acceptInvite(b.actual.id, invite);
+    const joined = await POST(request({ action: "join", input: a.input }, a.headers)); const snapshot = await joined.json();
+    const binding = { callId: snapshot.callId, memberId: snapshot.memberId, joinNonce: snapshot.joinNonce, expectedGeneration: snapshot.generation };
+    const headers = { cookie: a.cookie, "x-voice-member": snapshot.memberId, "x-voice-secret": a.input.enrollmentSecret };
+    const originalWork = { ...binding, request: { kind: "ack", cursor: "0" } };
+    expect((await POST(request({ action: "crypto", input: originalWork }, headers))).status).toBe(200);
+    expect((await POST(request({ action: "join", input: { ...b.input, channelId: a.input.channelId } }, b.headers))).status).toBe(200);
+    await code(await POST(request({ action: "crypto", input: originalWork }, headers)), 409, "conflict");
+    await code(await POST(request({ action: "token", input: binding }, headers)), 409, "conflict");
+    await code(await POST(request({ action: "heartbeat", input: { ...binding, joinNonce: randomUUID() } }, headers)), 403, "forbidden");
+    const refreshed = await POST(request({ action: "heartbeat", input: binding }, headers)); expect(refreshed.status).toBe(200);
+    const authoritative = await refreshed.json(); expect(authoritative.generation).toBeGreaterThan(binding.expectedGeneration); expect(authoritative.members).toHaveLength(2);
+    expect((await POST(request({ action: "leave", input: { ...binding, expectedGeneration: authoritative.generation } }, headers))).status).toBe(200);
   });
   it("does not replay authority after anchor revocation or session expiry/deletion", async () => {
     const a = await account();
