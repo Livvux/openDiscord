@@ -7,7 +7,7 @@ import { attachment } from "@/db/schema";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES } from "@/lib/limits";
 import { exportUserData } from "@/server/account";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
-import { cleanFilename, mediaEnabled, processImage, readAttachment, readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
+import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, processImage, readAttachment, readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
 import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
 import { testUsers } from "./helpers";
 
@@ -64,7 +64,9 @@ describe("file names", () => {
     expect(cleanFilename(encodeURIComponent(".."))).toBe("file");
     expect(cleanFilename("%E0%A4%A")).toBe("file");
     expect(cleanFilename(null)).toBe("file");
-    expect(cleanFilename(encodeURIComponent("x".repeat(300)))).toHaveLength(128);
+    // The end is kept, so a long name can't push the real extension out.
+    expect(cleanFilename(encodeURIComponent(`${"x".repeat(300)}.exe`))).toMatch(/^x{124}\.exe$/);
+    expect(cleanFilename(encodeURIComponent("invoice.pdf\u2800\u3000.exe"))).toBe("invoice.pdf .exe");
   });
 });
 
@@ -74,6 +76,7 @@ describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
   let member: string;
   let outsider: string;
   let channelId: string;
+  let communityId: string;
   const ids: string[] = [];
 
   beforeAll(async () => {
@@ -82,6 +85,7 @@ describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
     outsider = await fixtures.create("Outsider");
     const c = await createCommunity(author, "Media test");
     channelId = c.channelId;
+    communityId = c.communityId;
     await acceptInvite(member, await createInvite(author, c.communityId, { maxUses: null, expiresInHours: null }));
   });
   afterAll(async () => {
@@ -151,6 +155,15 @@ describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(html);
     await expect(readAttachment(outsider, view.id)).rejects.toThrow(/not found/);
+  });
+
+  it("enforces the daily upload quota atomically", async () => {
+    const heavy = await fixtures.create("Heavy uploader");
+    await acceptInvite(heavy, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));
+    // Pretend most of today's quota is already used.
+    await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `test/${heavy}`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
+    const small = new Uint8Array(8);
+    await expect(uploadAttachment(heavy, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/per day/);
   });
 
   it("requires text or at least one image", async () => {

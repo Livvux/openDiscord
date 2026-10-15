@@ -3,7 +3,7 @@
 // metadata is dropped. Objects are only ever served through an access-checked route.
 import { randomUUID } from "node:crypto";
 import { AwsClient } from "aws4fetch";
-import { and, count, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNotNull, isNull, lt, or, sql, sum } from "drizzle-orm";
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
 import { db } from "@/db";
@@ -25,6 +25,14 @@ export interface AttachmentView {
 }
 
 const UPLOAD_LIMIT = { max: 10, windowMs: 60_000 };
+/** Bytes one account may upload per day, so files can't fill the bucket. */
+export const DAILY_UPLOAD_BYTES = 500 * 1024 * 1024;
+/**
+ * Uploads are buffered in memory (up to 25 MB each), so a process only works on a few at once.
+ * shortcut: per process; stream to storage instead of buffering if uploads become the bottleneck.
+ */
+const MAX_CONCURRENT_UPLOADS = 4;
+let activeUploads = 0;
 /** Uploaded but not yet sent; bounds storage one account can occupy without posting. */
 const MAX_UNLINKED_PER_USER = 20;
 const MAX_DIMENSION = 4096;
@@ -114,11 +122,14 @@ export function cleanFilename(raw: string | null): string {
     // Malformed encoding: fall back to the generic name.
   }
   const cleaned = name
+    .normalize("NFKC")
     .split(/[\\/]/)
     .pop()!
     .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    // Blank-looking characters (braille blank, ideographic space…) would hide a real extension.
+    .replace(/[\p{Z}\u2800\u3164\uFFA0]+/gu, " ")
     .trim()
-    .slice(0, 128);
+    .slice(-128);
   return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned : "file";
 }
 
@@ -139,7 +150,7 @@ export async function uploadAttachment(
   body: (limit: number) => Promise<Uint8Array>,
   rawFilename: string | null = null,
 ): Promise<AttachmentView> {
-  const { client, url } = requireStorage();
+  requireStorage();
   const channelId = parse(uuid, rawChannelId);
   consume(`upload:${userId}`, UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs);
   const type = (contentType ?? "").split(";")[0].trim().toLowerCase();
@@ -149,11 +160,18 @@ export async function uploadAttachment(
   if (!Number.isFinite(contentLength) || contentLength <= 0) throw invalid("The upload needs a Content-Length.");
   if (contentLength > limit) throw invalid(`${image ? "Images" : "Files"} can be at most ${mb(limit)}.`);
   await requireChannel(db, channelId, userId, Permission.SendMessages);
-  const [{ unlinked }] = await db.select({ unlinked: count() }).from(attachment)
-    .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
-  if (unlinked >= MAX_UNLINKED_PER_USER) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
 
-  const raw = await body(contentLength);
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    return await storeUpload(userId, channelId, image, rawFilename, await body(contentLength));
+  } finally {
+    activeUploads -= 1;
+  }
+}
+
+async function storeUpload(userId: string, channelId: string, image: boolean, rawFilename: string | null, raw: Uint8Array): Promise<AttachmentView> {
+  const { client, url } = requireStorage();
   let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
   if (image) {
     const processed = await processImage(raw);
@@ -165,13 +183,27 @@ export async function uploadAttachment(
   }
   const key = `attachments/${randomUUID()}.${stored.ext}`;
   // Row first: if the upload fails afterwards, the unlinked row lets the sweeper clean up.
-  const [row] = await db.insert(attachment).values({
-    channelId, uploaderId: userId, key, contentType: stored.contentType, filename: stored.filename,
-    size: stored.data.byteLength, width: stored.width, height: stored.height,
-  }).returning({ id: attachment.id });
+  // Checks and insert are serialised per person, so parallel uploads can't slip past the caps.
+  const row = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
+    const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
+      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
+    if (unlinked >= MAX_UNLINKED_PER_USER) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
+    const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
+      .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
+    if ((today ?? 0) + stored.data.byteLength > DAILY_UPLOAD_BYTES) {
+      throw new AppError("rate_limited", `You can upload at most ${mb(DAILY_UPLOAD_BYTES)} per day.`);
+    }
+    const [created] = await tx.insert(attachment).values({
+      channelId, uploaderId: userId, key, contentType: stored.contentType, filename: stored.filename,
+      size: stored.data.byteLength, width: stored.width, height: stored.height,
+    }).returning({ id: attachment.id });
+    return created;
+  });
   const res = await client.fetch(url(key), {
     method: "PUT",
-    body: new Uint8Array(stored.data),
+    // No copy: the buffer is ours (from the request or sharp), never a SharedArrayBuffer.
+    body: stored.data as Uint8Array<ArrayBuffer>,
     // Explicit length: some S3 implementations (MinIO, Garage) refuse chunked uploads.
     headers: { "Content-Type": stored.contentType, "Content-Length": String(stored.data.byteLength) },
   });
@@ -240,7 +272,15 @@ export async function readAttachment(userId: string, rawId: unknown): Promise<Re
  * Deletes objects whose message, channel, community or author is gone (right away), and uploads that
  * were never sent (after an hour). They are unreachable from the moment they are unlinked.
  */
-export async function sweepAttachments(now = Date.now()): Promise<number> {
+let sweeping: Promise<number> | null = null;
+
+export function sweepAttachments(now = Date.now()): Promise<number> {
+  // Single flight: uploads trigger sweeps too, and overlapping runs would delete the same objects twice.
+  sweeping ??= sweep(now).finally(() => (sweeping = null));
+  return sweeping;
+}
+
+async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
   const { client, url } = storage;
   const stale = await db.select({ id: attachment.id, key: attachment.key }).from(attachment)

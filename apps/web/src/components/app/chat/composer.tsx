@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { shortFilename } from "@/lib/filename";
 import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
 interface ComposerProps {
@@ -230,7 +231,7 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
               ) : (
                 <span className={`flex h-full flex-col items-center justify-center gap-1 p-1 text-center ${u.id ? "" : "opacity-50"}`}>
                   <FileIcon aria-hidden className="size-6 text-zinc-300" />
-                  <span className="line-clamp-2 text-[10px] break-all text-zinc-300">{u.name}</span>
+                  <span className="text-[10px] break-all text-zinc-300">{shortFilename(u.name, 24)}</span>
                 </span>
               )}
               {!u.id && !u.error && (

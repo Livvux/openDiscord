@@ -6,6 +6,7 @@ import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { shortFilename } from "@/lib/filename";
 import { renderMarkdown } from "@/lib/markdown";
 import { decodeMentions, encodeMentions, type Mention } from "@/lib/mentions";
 import type { MessageView } from "@/server/messages";
@@ -233,7 +234,7 @@ export function MessageItem(props: MessageItemProps) {
                   className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 >
                   <FileDownIcon aria-hidden className="size-5 shrink-0 text-zinc-300" />
-                  <span className="min-w-0 flex-1 truncate text-sm text-sky-300">{a.filename}</span>
+                  <span className="min-w-0 flex-1 text-sm break-all text-sky-300" title={a.filename!}>{shortFilename(a.filename!)}</span>
                   <span className="text-xs text-zinc-400">{formatBytes(a.size)}</span>
                 </a>
               </li>
