@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, role, session } from "@/db/schema";
-import { voiceCallMember, voiceControlMailbox, voicePrekey, voiceSignature } from "@/db/voice-schema";
+import { voiceCallMember, voiceControlMailbox, voicePrekey, voiceSignature, voiceIdentity } from "@/db/voice-schema";
 import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport } from "@/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "@/lib/voice/owner-guard";
 import { voiceControlParty, VOICE_CONTROL_EVENT, type VoiceOwnerControl } from "@/lib/voice/owner-control";
@@ -210,7 +210,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     for (const key of Object.keys(fresh.input.request.body[b.snapshot.voiceUserId] as Record<string, unknown>)) expected[key] = { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." };
     expect(Object.keys(expected).length).toBeGreaterThan(0);
     expect(fresh.response).toEqual({ failures: { [b.snapshot.voiceUserId]: expected } });
-    expect(await db.select().from(voiceSignature)).toEqual(before.filter(row => row.targetMemberId !== b.snapshot.memberId));
+    expect(await db.select().from(voiceSignature)).toEqual(before.filter(row => row.targetMemberId !== b.snapshot.memberId && row.signerMemberId !== b.snapshot.memberId));
     release.resolve(); expect(await outcome).toBeInstanceOf(VoiceGenerationInterrupted);
     await refresh([c]); const epoch = await context(a, c), control = material(a, c, epoch);
     await a.owner.sendControl(control); expect(await c.owner.receive()).toEqual([control]);
@@ -410,10 +410,14 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
   it("retains previously admitted exact bindings through a real membership removal and fresh epoch", async () => {
     const [a, b, removed] = await fixture(3);
     await verify(a, b);
+    const identities = await db.select().from(voiceIdentity).where(inArray(voiceIdentity.memberId, [a.snapshot.memberId, b.snapshot.memberId]));
+    const bindings = [a.snapshot, b.snapshot].map(s => ({ memberId: s.memberId, voiceUserId: s.voiceUserId, voiceDeviceId: s.voiceDeviceId, joinNonce: s.joinNonce }));
     await leaveVoiceControl(auth(removed), binding(removed));
     await refresh([a, b]);
     const epoch = await context(a, b), value = material(a, b, epoch);
     await a.owner.sendControl(value); expect(await b.owner.receive()).toEqual([value]);
+    expect(await db.select().from(voiceIdentity).where(inArray(voiceIdentity.memberId, [a.snapshot.memberId, b.snapshot.memberId]))).toEqual(identities);
+    expect([a.snapshot, b.snapshot].map(s => ({ memberId: s.memberId, voiceUserId: s.voiceUserId, voiceDeviceId: s.voiceDeviceId, joinNonce: s.joinNonce }))).toEqual(bindings);
     expect(a.snapshot.members.map(m => m.memberId)).not.toContain(removed.snapshot.memberId);
     expect(a.snapshot.voiceUserId).toBe(b.snapshot.members.find(m => m.memberId === a.snapshot.memberId)?.voiceUserId);
   }, 30_000);
