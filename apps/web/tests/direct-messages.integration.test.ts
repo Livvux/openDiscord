@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { community, dmDevice, dmMessage, user } from "@/db/schema";
+import { community, dmDevice, dmMessage, dmSignature, user } from "@/db/schema";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { blockUser } from "@/server/blocks";
 import { createDirectConversation, respondToDirectRequest, listDirectConversations, listDirectMessages, appendDirectMessage, registerDmDevice, handleCryptoRequest, revokeDmDevice, saveDmBackup, getDmBackup, reportDirectMessage, exportDirectData } from "@/server/direct-messages";
@@ -121,6 +121,16 @@ describe("private encrypted conversations", () => {
     await handleCryptoRequest(authA(), send(content));
     expect(JSON.stringify((await handleCryptoRequest(authB(), { kind: "sync" })).events)).toContain(messageId);
     await expect(handleCryptoRequest(authA(), send({ ...content, "org.matrix.msgid": "x".repeat(200) }))).rejects.toThrow();
+  });
+  it("does not disclose unrelated accounts through a peer's cross-signatures", async () => {
+    await db.insert(dmSignature).values([
+      { signerId: outsider, targetId: bob, keyId: bDevice, signatures: { "ed25519:other-contact": "z".repeat(86) } },
+      { signerId: alice, targetId: bob, keyId: bDevice, signatures: { "ed25519:known-contact": "y".repeat(86) } },
+    ]);
+    const response = await handleCryptoRequest(authA(), { kind: "query", body: { device_keys: { [matrix(bob)]: [] } } });
+    expect(JSON.stringify(response)).not.toContain(matrix(outsider));
+    expect(JSON.stringify(response)).toContain(matrix(bob));
+    expect(JSON.stringify(response)).toContain(matrix(alice));
   });
   it("caps nested work before shared locks and refuses nonexistent signature targets", async () => {
     const huge = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [String(i), "signed_curve25519"]));

@@ -282,7 +282,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       for (const matrixId of requested) {
         const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
-        const signatures = await tx.select().from(dmSignature).where(eq(dmSignature.targetId, target));
+        const signatures = await tx.select().from(dmSignature).where(and(eq(dmSignature.targetId, target), or(eq(dmSignature.signerId, target), eq(dmSignature.signerId, auth.userId))));
         const attach = (keyId: string, value: Record<string, unknown>) => {
           const merged = record(value.signatures ?? {});
           for (const signature of signatures.filter((s) => s.keyId === keyId)) {
