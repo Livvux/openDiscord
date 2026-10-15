@@ -46,7 +46,18 @@ Optional integrations (see `.env.example`):
   visitor looks like a Cloudflare edge IP and shares one rate limit. Only those peers may supply
   `Cf-Connecting-Ip`; anyone reaching the server directly can't spoof it:
   `TRUSTED_PROXIES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | tr '\n' ' ')"`.
-  Cloudflare changes these ranges rarely; refresh them when it announces changes.
+  Cloudflare changes these ranges rarely; refresh them when it announces changes. `web` reads the same
+  variable: it takes the rightmost untrusted `X-Forwarded-For` entry as the client IP.
+
+## Dokploy
+
+Use `docker-compose.dokploy.yml` (Git source, this repository): the same services without Caddy, since
+Dokploy's Traefik terminates TLS. Add the domain to service `web`, port 3000, with Let's Encrypt, and
+set the variables from `.env.example` in Dokploy's environment tab. Behind Cloudflare, set
+`TRUSTED_PROXIES` to Cloudflare's ranges: Traefik forwards Cloudflare's `X-Forwarded-For` (when its
+entry points trust Cloudflare) and appends the edge address; without trusted proxies every visitor
+would share one rate limit. Create the first administrator from the build stage, which has the scripts:
+`docker compose -f docker-compose.dokploy.yml run --rm migrate pnpm --filter web exec tsx scripts/bootstrap-instance-admin.ts you@example.com "Initial instance owner"`.
 - If you put a CDN such as Cloudflare in front, it terminates TLS and can see traffic; tell your users.
 - `BETTER_AUTH_SECRET` signs sessions and encrypts TOTP secrets. Rotating it signs everyone out and
   invalidates enrolled authenticator apps (users must set 2FA up again). Rotate it if it leaks.
