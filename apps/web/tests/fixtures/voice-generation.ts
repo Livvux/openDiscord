@@ -7,6 +7,8 @@ export type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>
 type Operation = "send" | "retire";
 export type Receipt = { generation: number; disposition: "processed-current" | "processed-retired" | "processed-absent" | "processed-refused"; enqueued: number; nativeResponse: Record<string, unknown>; digest: string };
 type Pending = { request: NativeRequest; reject: (error: Error) => void };
+const jsonObject = z.record(z.string(), z.unknown());
+type PublicDirectory = { device?: Record<string, unknown>; signing: Record<string, Record<string, unknown>>; prekeys: Map<string, unknown>; claimed: Set<string>; deviceId: string; fallback: boolean };
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 class GenerationInterrupted extends Error {}
 const generationControl = z.object({
@@ -62,10 +64,29 @@ export class GenerationServer extends VoiceTransport {
   readonly enrolledUsers = new Set<string>();
   private readonly activeUsers = new Set<string>();
   private readonly owners = new Set<EphemeralVoice>();
+  private readonly publicDirectory = new Map<string, PublicDirectory>();
   readonly retired: Receipt[] = [];
   private readonly generationReceipts = new Map<string, Receipt>();
-  override enroll(owner: EphemeralVoice): void { super.enroll(owner); this.enrolledUsers.add(owner.binding.user); this.activeUsers.add(owner.binding.user); this.owners.add(owner); }
+  override enroll(owner: EphemeralVoice): void {
+    super.enroll(owner); this.enrolledUsers.add(owner.binding.user); this.activeUsers.add(owner.binding.user); this.owners.add(owner);
+    this.publicDirectory.set(owner.binding.user, { signing: {}, prekeys: new Map(), claimed: new Set(), deviceId: owner.binding.device, fallback: false });
+  }
   override remove(owner: EphemeralVoice): void { super.remove(owner); this.activeUsers.delete(owner.binding.user); }
+  override signing(owner: EphemeralVoice, request: C.UploadSigningKeysRequest): void {
+    super.signing(owner, request);
+    const record = this.publicDirectory.get(owner.binding.user);
+    if (!record) throw new Error("Missing own public directory.");
+    const body = jsonObject.parse(JSON.parse(request.body));
+    for (const name of ["master_key", "self_signing_key", "user_signing_key"]) record.signing[name] = jsonObject.parse(body[name]);
+  }
+  override async submit(owner: EphemeralVoice, request: NativeRequest): Promise<Record<string, unknown>> {
+    return (await this.process(owner, request, this.generation, "send", randomUUID())).nativeResponse;
+  }
+  override take(owner: EphemeralVoice): ReturnType<VoiceTransport["take"]> {
+    const incoming = super.take(owner), own = this.publicDirectory.get(owner.binding.user);
+    if (!own) throw new Error("Missing own public directory.");
+    return { ...incoming, count: own.prekeys.size, fallback: own.fallback };
+  }
   advance(): void {
     this.generation++;
     for (const owner of this.owners) if (this.owns(owner.binding)) super.take(owner);
@@ -90,25 +111,79 @@ export class GenerationServer extends VoiceTransport {
       if (!/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(request.event_type) && request.event_type !== "m.room.encrypted") throw new Error("Unsupported retirement event.");
       // This branch cannot call submit/take or inspect any recipient's key record.
       nativeResponse = {};
+    } else if (request instanceof C.KeysUploadRequest) {
+      // Own uploads are genuine storage only, including real remaining key counts.
+      const own = this.publicDirectory.get(owner.binding.user);
+      if (!own) throw new Error("Missing own public directory.");
+      const body = jsonObject.parse(JSON.parse(request.body));
+      if (body.device_keys) {
+        const device = jsonObject.parse(body.device_keys);
+        if (device.user_id !== owner.binding.user || device.device_id !== owner.binding.device) throw new Error("Own upload identity mismatch.");
+        own.device = device;
+      }
+      for (const [id, key] of Object.entries(jsonObject.parse(body.one_time_keys ?? {}))) if (!own.claimed.has(id)) own.prekeys.set(id, key);
+      if (own.prekeys.size > 100) throw new Error("Own prekey storage bound.");
+      if (Object.keys(jsonObject.parse(body.fallback_keys ?? {})).length) own.fallback = true;
+      nativeResponse = { one_time_key_counts: { signed_curve25519: own.prekeys.size } };
+      this.submitted.push({ kind: "KeysUpload", sender: owner.binding.member, recipients: 0 });
     } else if (request instanceof C.KeysQueryRequest || request instanceof C.KeysClaimRequest || request instanceof C.SignatureUploadRequest) {
-      const body = JSON.parse(request.body) as Record<string, unknown>;
-      const users = Object.keys(request instanceof C.KeysQueryRequest ? body.device_keys as object : request instanceof C.KeysClaimRequest ? body.one_time_keys as object : body);
+      const body = jsonObject.parse(JSON.parse(request.body));
+      const map = request instanceof C.KeysQueryRequest ? jsonObject.parse(body.device_keys) : request instanceof C.KeysClaimRequest ? jsonObject.parse(body.one_time_keys) : body;
+      const users = Object.keys(map);
       const scoped = new RegExp(`^@voice_${this.call}_${uuid}:opendiscord\\.invalid$`);
       if (!users.length || users.length > 8 || users.some((user) => !scoped.test(user))) throw new Error("Bounded same-call users required.");
       const absent = users.filter((user) => !this.activeUsers.has(user));
-      if (absent.length && absent.length !== users.length) throw new Error("Mixed normal processing requires separate review.");
-      if (!absent.length) nativeResponse = await super.submit(owner, request);
-      else if (request instanceof C.KeysQueryRequest) {
-        nativeResponse = { device_keys: Object.fromEntries(users.map((user) => [user, {}])), master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} };
-        disposition = "processed-absent";
+      if (request instanceof C.KeysQueryRequest) {
+        const device_keys: Record<string, unknown> = {}, master_keys: Record<string, unknown> = {}, self_signing_keys: Record<string, unknown> = {}, user_signing_keys: Record<string, unknown> = {};
+        for (const user of users) {
+          const ids = z.array(z.string()).max(1).parse(map[user]);
+          const record = this.activeUsers.has(user) ? this.publicDirectory.get(user) : undefined;
+          if (record && ids.some((id) => id !== record.deviceId)) throw new Error("Exact current queried device required.");
+          device_keys[user] = record?.device ? { [record.deviceId]: record.device } : {};
+          if (record?.signing.master_key) master_keys[user] = record.signing.master_key;
+          if (record?.signing.self_signing_key) self_signing_keys[user] = record.signing.self_signing_key;
+          if (user === owner.binding.user && record?.signing.user_signing_key) user_signing_keys[user] = record.signing.user_signing_key;
+        }
+        nativeResponse = { device_keys, master_keys, self_signing_keys, user_signing_keys, failures: {} };
+        if (absent.length) disposition = "processed-absent";
       } else if (request instanceof C.KeysClaimRequest) {
-        nativeResponse = { one_time_keys: {}, failures: {} }; disposition = "processed-absent";
+        const selected: { user: string; device: string; record: PublicDirectory; id: string; key: unknown }[] = [];
+        for (const user of users) {
+          const devices = Object.entries(jsonObject.parse(map[user]));
+          if (devices.length !== 1) throw new Error("Bounded exact claim device required.");
+          const [device, algorithm] = devices[0];
+          if (algorithm !== "signed_curve25519" || !new RegExp(`^${uuid}$`).test(device)) throw new Error("Exact claim algorithm/device required.");
+          const record = this.activeUsers.has(user) ? this.publicDirectory.get(user) : undefined;
+          if (!record) continue;
+          if (record.deviceId !== device) throw new Error("Current claim device mismatch.");
+          const next = record.prekeys.entries().next().value;
+          if (next) selected.push({ user, device, record, id: next[0], key: next[1] });
+        }
+        const one_time_keys: Record<string, unknown> = {};
+        for (const item of selected) {
+          item.record.prekeys.delete(item.id); item.record.claimed.add(item.id);
+          one_time_keys[item.user] = { [item.device]: { [item.id]: item.key } };
+        }
+        nativeResponse = { one_time_keys, failures: {} }; if (absent.length) disposition = "processed-absent";
       } else {
         // Official /keys/signatures/upload: failures[user][key] is a standard Error.
         // Refused storage is M_FORBIDDEN, never the cryptographic M_INVALID_SIGNATURE.
-        nativeResponse = { failures: Object.fromEntries(users.map((user) => [user, Object.fromEntries(Object.keys(body[user] as object).map((id) => [id, { errcode: "M_FORBIDDEN", error: "Target is outside current call scope." }]))])) };
-        disposition = "processed-refused";
+        const failures: Record<string, Record<string, unknown>> = {};
+        const writes: { target: Record<string, unknown>; signatures: Record<string, unknown> }[] = [];
+        for (const user of users) for (const [id, value] of Object.entries(jsonObject.parse(body[user]))) {
+          const signed = jsonObject.parse(value);
+          if (signed.user_id !== user) throw new Error("Signature user mismatch.");
+          const record = this.activeUsers.has(user) ? this.publicDirectory.get(user) : undefined;
+          if (!record) { (failures[user] ??= {})[id] = { errcode: "M_FORBIDDEN", error: "Target is outside current call scope." }; continue; }
+          const target = id === record.deviceId ? record.device : Object.values(record.signing).find((key) => Object.values(jsonObject.parse(key.keys)).includes(id));
+          if (!target) throw new Error("Unknown current signature target.");
+          const ownSignature = jsonObject.parse(jsonObject.parse(signed.signatures)[owner.binding.user]);
+          writes.push({ target, signatures: ownSignature });
+        }
+        for (const write of writes) write.target.signatures = { ...jsonObject.parse(write.target.signatures ?? {}), [owner.binding.user]: { ...jsonObject.parse(jsonObject.parse(write.target.signatures ?? {})[owner.binding.user] ?? {}), ...write.signatures } };
+        nativeResponse = { failures }; if (absent.length) disposition = "processed-refused";
       }
+      if (!absent.length) this.submitted.push({ kind: C.RequestType[request.type], sender: owner.binding.member, recipients: users.length });
     } else {
       const before = this.submitted.length;
       nativeResponse = await super.submit(owner, request);

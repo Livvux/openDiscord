@@ -57,8 +57,13 @@ and wildcard output is rejected before any queue/receipt/native completion;
 the owner suspends rather than splitting or rewriting it. The contract-only
 rejection test does not manufacture a native queued request. This narrowed
 candidate follows root's explicit fail-closed ruling. Query/claim/signature
-multi-map semantics are separate; mixed current/noncurrent class handling remains
-unproven and currently fails closed in this fixture. A
+multi-map semantics are separate. Genuine native two-user query and claim
+requests are generated before a roster transition, then processed unchanged
+with real current public keys/one prekey and empty departed results. The test
+server owns an isolated public-key directory and real consumable prekey map;
+there is no native/private state import. Exact retry checks prevent consuming
+the current prekey twice. Actual mixed signature fanout depends on native
+output and remains a separately reported gate. A
 separate benign control schema does check recipient-side generation/epoch/exact
 audience rejection after real decryption of an old fetched event. The accepted
 shared control schema is unchanged. No constructed combined request is presented

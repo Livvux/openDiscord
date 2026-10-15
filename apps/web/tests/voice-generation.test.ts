@@ -5,6 +5,43 @@ import { EphemeralVoice, verifyPair } from "./fixtures/ephemeral-voice";
 import { GenerationServer, GenerationDispatcher, encryptGenerationControl, identity, receiveGenerationControls, validateGenerationToDevice } from "./fixtures/voice-generation";
 
 describe("isolated native generation retirement candidate", () => {
+  it("processes genuine mixed current/departed native queries and claims without rewriting their bodies", async () => {
+    await C.initAsync();
+    const server = new GenerationServer();
+    const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server), c = await EphemeralVoice.open(server), d = await EphemeralVoice.open(server);
+    const dispatcher = new GenerationDispatcher(a, server);
+    try {
+      await verifyPair(a, d); await a.query([a, b, c]);
+      const query = a.machine.queryKeysForUsers([new C.UserId(b.binding.user), new C.UserId(c.binding.user)]);
+      const claim = await a.machine.getMissingSessions([new C.UserId(b.binding.user), new C.UserId(c.binding.user)]);
+      if (!claim) throw new Error("Expected genuine mixed native claim.");
+      expect(Object.keys(JSON.parse(query.body).device_keys)).toHaveLength(2);
+      expect(Object.keys(JSON.parse(claim.body).one_time_keys)).toHaveLength(2);
+      const queryBody = query.body, claimBody = claim.body;
+      const currentBefore = server.take(c).count;
+      server.remove(b); server.advance();
+      const claimId = randomUUID();
+      const claimResponse = await server.process(a, claim, server.generation, "send", claimId);
+      expect(Object.keys(claimResponse.nativeResponse.one_time_keys as object)).toEqual([c.binding.user]);
+      expect(server.take(c).count).toBe(currentBefore - 1);
+      expect(await server.process(a, claim, server.generation, "send", claimId)).toBe(claimResponse);
+      expect(server.take(c).count).toBe(currentBefore - 1);
+      await dispatcher.acceptResponse(claim, claimResponse);
+      const queryResponse = await server.process(a, query, server.generation, "send", randomUUID());
+      const deviceKeys = queryResponse.nativeResponse.device_keys as Record<string, object>;
+      expect(Object.keys(deviceKeys[b.binding.user])).toHaveLength(0);
+      expect(Object.keys(deviceKeys[c.binding.user])).toEqual([c.binding.device]);
+      expect(Object.hasOwn(queryResponse.nativeResponse.master_keys as object, b.binding.user)).toBe(false);
+      await dispatcher.acceptResponse(query, queryResponse);
+      expect(claim.body === claimBody && query.body === queryBody).toBe(true);
+      expect((await a.device(d)).isVerified()).toBe(true);
+      await verifyPair(a, c); await a.admit(c); await c.admit(a);
+      await a.send(c, "Mixed response surviving peer"); await c.sync();
+      expect(c.received).toHaveLength(1);
+      console.info("voice-generation-mixed-public-api", JSON.stringify({ queryUsers: 2, claimUsers: 2, currentClaimed: 1, retiredClaimed: 0, retryConsumed: 0 }));
+    } finally { dispatcher.release(); [a, b, c, d].forEach((owner) => owner.close()); }
+  }, 30_000);
+
   it("rejects unsupported ToDevice fanout before any processing without constructing native queue work", () => {
     const call = randomUUID();
     const user = `@voice_${call}_${randomUUID()}:opendiscord.invalid`;
@@ -109,6 +146,7 @@ describe("isolated native generation retirement candidate", () => {
     const dispatcher = new GenerationDispatcher(a, server);
     try {
       await verifyPair(a, b); await verifyPair(a, c);
+      const departedDevice = await a.device(b);
       server.remove(b); server.advance();
       const claim = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
       if (!claim) throw new Error("Expected native missing session request.");
@@ -121,7 +159,7 @@ describe("isolated native generation retirement candidate", () => {
       // Native 18.9 suppresses an immediate repeated empty claim. This is not session acquisition.
       const second = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
       expect(second).toBeNull();
-      await expect((await a.device(b)).encryptToDeviceEvent("app.opendiscord.voice.proof", { purpose: "benign-empty-claim-proof" }, C.CollectStrategy.onlyTrustedDevices())).rejects.toThrow();
+      await expect(departedDevice.encryptToDeviceEvent("app.opendiscord.voice.proof", { purpose: "benign-empty-claim-proof" }, C.CollectStrategy.onlyTrustedDevices())).rejects.toThrow();
       const query = a.machine.queryKeysForUsers([new C.UserId(b.binding.user)]);
       const queryResponse = await server.process(a, query, server.generation, "send", randomUUID());
       expect(queryResponse.nativeResponse).toEqual({ device_keys: { [b.binding.user]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
@@ -145,6 +183,7 @@ describe("isolated native generation retirement candidate", () => {
       const flow = verifyPair(a, b).then(() => "completed", () => "interrupted");
       const pending = await paused;
       expect(pending.request).toBeInstanceOf(C.SignatureUploadRequest);
+      console.info("voice-generation-signature-public-api", JSON.stringify({ users: Object.keys(JSON.parse(pending.request.body)).length, includesOwn: Object.hasOwn(JSON.parse(pending.request.body), a.binding.user) }));
       const trustBeforeResponse = (await a.device(b)).isVerified();
       server.remove(b); server.advance();
       const writesBefore = server.submitted.filter((entry) => entry.kind === "SignatureUpload").length;
@@ -166,14 +205,20 @@ describe("isolated native generation retirement candidate", () => {
   it("keeps the independent native DM baseline invariant", async () => {
     await C.initAsync();
     const dm = await C.OlmMachine.initialize(new C.UserId(`@dm_${randomUUID()}:opendiscord.invalid`), new C.DeviceId(randomUUID()));
+    const room = new C.RoomId(`!dm_${randomUUID()}:opendiscord.invalid`);
+    await dm.shareRoomKey(room, [], new C.EncryptionSettings());
+    const history = { msgtype: "m.text", body: "Independent benign DM baseline", transaction: randomUUID() };
+    const event = { type: "m.room.encrypted", event_id: `$${randomUUID()}`, sender: dm.userId.toString(), origin_server_ts: Date.now(), content: JSON.parse(await dm.encryptRoomEvent(room, "m.room.message", JSON.stringify(history))) };
+    const decryptHistory = async () => JSON.parse((await dm.decryptRoomEvent(JSON.stringify(event), room, new C.DecryptionSettings(C.TrustRequirement.Untrusted))).event).content;
+    expect(await decryptHistory()).toEqual(history);
     const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)])) : value;
     const digest = async () => createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), counts: await dm.roomKeyCounts(), requests: (await dm.outgoingRequests()).map((r) => ({ type: r.type, body: createHash("sha256").update(JSON.stringify(canonical(JSON.parse(r.body)))).digest("hex") })).sort((left, right) => left.type - right.type || left.body.localeCompare(right.body)) })).digest("hex");
     const before = await digest();
     expect(await digest()).toBe(before);
     const server = new GenerationServer();
     const a = await EphemeralVoice.open(server), b = await EphemeralVoice.open(server);
-    try { await verifyPair(a, b); expect(await digest()).toBe(before); }
-    finally { a.close(); b.close(); expect(await digest()).toBe(before); dm.close(); }
+    try { await verifyPair(a, b); expect(await digest()).toBe(before); expect(await decryptHistory()).toEqual(history); }
+    finally { a.close(); b.close(); expect(await digest()).toBe(before); expect(await decryptHistory()).toEqual(history); dm.close(); }
   }, 30_000);
 
   for (const phase of ["request", "ready", "start", "key", "mac", "done"]) {
