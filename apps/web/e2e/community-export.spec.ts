@@ -84,7 +84,11 @@ test("the owner migrates a complete archive with private image and binary files"
     await create.click();
     const importing = owner.waitForResponse((response) => response.url().endsWith("/api/communities/import") && response.request().method() === "POST");
     await owner.getByLabel("Or import an export file").setInputFiles({ name: "community.odc.gz", mimeType: "application/gzip", buffer: archive });
-    expect((await importing).status()).toBe(201);
+    const importedResponse = await importing;
+    expect(importedResponse.status()).toBe(201);
+    const imported: { communityId: string } = await importedResponse.json();
+    await expect(owner).toHaveURL(new RegExp(`/app/c/${imported.communityId}/`));
+    await expect(owner.getByRole("dialog", { name: "Create a community", exact: true })).toBeHidden();
     await expect(owner.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
     await closeNavigation();
     const message = owner.getByRole("log").getByRole("listitem").filter({ hasText: "Portable archive" });
