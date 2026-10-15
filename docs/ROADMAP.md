@@ -68,7 +68,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Requirement | Status | Notes / priority |
 | --- | --- | --- |
 | Communities and channels | ✅ | |
-| Categories | ❌ | P2 |
+| Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
 | Direct messages | ❌ | **P1** (with E2EE) |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
@@ -178,7 +178,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P2 — important improvements
 
-~~Screen sharing and video calls~~ ✅, threads, channel categories, non-image file attachments, bot accounts,
+~~Screen sharing and video calls~~ ✅, threads, ~~channel categories~~ ✅, non-image file attachments, bot accounts,
 incoming webhooks and a versioned public API (OpenAPI), Web Push notifications (VAPID, no third-party
 service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).

@@ -8,6 +8,7 @@ import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
 import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Permission, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
+import { listCategories, type CategorySummary } from "./categories";
 import { afterAccessChange, closeVoiceRoom, voiceEnabled } from "./voice";
 import { NOTHING_UNREAD, unreadState } from "./unread";
 import { z } from "zod";
@@ -23,6 +24,7 @@ export interface ChannelSummary {
   name: string;
   topic: string | null;
   kind: "text" | "voice";
+  categoryId: string | null;
   /** The viewer's effective permissions in this channel. */
   permissions: number;
   /** Hidden from the default role. */
@@ -38,6 +40,7 @@ export interface CommunityView {
   isOwner: boolean;
   /** The viewer's notification level here. */
   notifications: "mentions" | "muted";
+  categories: CategorySummary[];
   authority: MemberAuthority;
   channels: ChannelSummary[];
 }
@@ -74,7 +77,7 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
   const ctx = c ? await loadMember(db, communityId, userId) : null;
   if (!c || !ctx) throw notFound("Community not found.");
   const rows = await db
-    .select({ id: channel.id, name: channel.name, topic: channel.topic, kind: channel.kind })
+    .select({ id: channel.id, name: channel.name, topic: channel.topic, kind: channel.kind, categoryId: channel.categoryId })
     .from(channel)
     .where(eq(channel.communityId, communityId))
     .orderBy(asc(channel.position), asc(channel.id));
@@ -90,7 +93,10 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
   const channels = visible.map((r) => ({ ...r, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
   const [own] = await db.select({ notifications: member.notifications }).from(member)
     .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
-  return { id: c.id, name: c.name, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions", authority: ctx.authority, channels };
+  return {
+    id: c.id, name: c.name, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions",
+    categories: await listCategories(communityId), authority: ctx.authority, channels,
+  };
 }
 
 export async function renameCommunity(userId: string, rawId: unknown, rawName: unknown) {

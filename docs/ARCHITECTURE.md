@@ -39,6 +39,7 @@ pagination cursors. User ids come from Better Auth.
 
 - `community` (owner restricts user deletion) → `role` (bit-set permissions, position, one default role)
 - `member` (community, user) → `member_role`; removing a member removes its role assignments
+- `category` (sidebar groups; `channel.category_id`, set null on delete)
 - `channel` → `message` (author cascade: deleting an account deletes its messages; optional `reply_to_id` in the same channel, `pinned_at`, a generated `search` tsvector with a GIN index), `reaction` (message × person × emoji), `channel_override` (role allow/deny bits)
 - `invite` (random 96-bit code, optional expiry and use limit), `ban`, `audit_log` (no message content)
 

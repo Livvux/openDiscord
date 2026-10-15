@@ -8,6 +8,7 @@ import { getCommunitySafety, listInvites } from "@/server/communities";
 import { SafetySettings } from "@/components/app/settings/safety-settings";
 import { AutomodSettings } from "@/components/app/settings/automod-settings";
 import { NotificationLevel } from "@/components/app/settings/notification-level";
+import { CategoriesEditor } from "@/components/app/settings/categories-editor";
 import { getAutomod } from "@/server/automod";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
@@ -30,6 +31,7 @@ const AUDIT_LABELS: Record<string, string> = {
   "role.unassign": "removed a role from",
   "channel.delete": "deleted channel",
   "channel.permissions": "changed permissions of channel",
+  "category.delete": "deleted category",
   "invites.pause": "paused invites",
   "invites.resume": "resumed invites",
   "invites.auto_pause": "Raid protection paused invites",
@@ -40,7 +42,7 @@ const AUDIT_LABELS: Record<string, string> = {
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
-  if (e.action === "role.delete") return e.targetId;
+  if (e.action === "role.delete" || e.action === "category.delete") return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
   if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block"].includes(e.action)) return null;
@@ -110,6 +112,11 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           description="Roles grant permissions. Higher roles outrank lower ones; you can only manage roles below your own."
         >
           <RolesEditor communityId={view.id} authority={a} roles={roles} />
+        </Section>
+      )}
+      {has(a, Permission.ManageChannels) && (
+        <Section id="categories" title="Categories" description="Group channels in the sidebar.">
+          <CategoriesEditor communityId={view.id} categories={view.categories} />
         </Section>
       )}
       {safety && (

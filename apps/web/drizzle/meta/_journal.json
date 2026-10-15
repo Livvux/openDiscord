@@ -120,6 +120,13 @@
       "when": 1792072162657,
       "tag": "0016_video_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792072615844,
+      "tag": "0017_categories",
+      "breakpoints": true
     }
   ]
 }

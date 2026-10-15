@@ -2,6 +2,7 @@ import { SettingsIcon } from "lucide-react";
 import Link from "next/link";
 import type { CommunityView } from "@/server/communities";
 import { has, Permission } from "@/server/permissions";
+import { CategoryGroup } from "./category-group";
 import { ChannelLink } from "./channel-link";
 import { CreateChannelDialog } from "./create-channel-dialog";
 import { ReportDialog } from "./report-dialog";
@@ -15,7 +16,13 @@ const SETTINGS_PERMISSIONS =
 
 export function ChannelSidebar({ view }: { view: CommunityView }) {
   const canManageChannels = has(view.authority, Permission.ManageChannels);
-  const voice = view.channels.filter((c) => c.kind === "voice");
+  const loose = view.channels.filter((c) => !c.categoryId);
+  const voice = loose.filter((c) => c.kind === "voice");
+  const link = (c: CommunityView["channels"][number]) => (
+    <li key={c.id}>
+      <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} kind={c.kind} />
+    </li>
+  );
   const canModerate = (view.authority.permissions & SETTINGS_PERMISSIONS) !== 0;
   return (
     <>
@@ -35,23 +42,23 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
         {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} />}
       </div>
       <ul className="flex-1 space-y-0.5 overflow-y-auto px-3">
-        {view.channels.filter((c) => c.kind === "text").map((c) => (
-          <li key={c.id}>
-            <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} />
-          </li>
-        ))}
+        {loose.filter((c) => c.kind === "text").map(link)}
         {voice.length > 0 && (
           <li>
             <h3 className="px-2 pt-4 pb-1 text-[11px] tracking-widest text-zinc-400 uppercase">Voice channels</h3>
-            <ul className="space-y-0.5">
-              {voice.map((c) => (
-                <li key={c.id}>
-                  <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} kind="voice" />
-                </li>
-              ))}
-            </ul>
+            <ul className="space-y-0.5">{voice.map(link)}</ul>
           </li>
         )}
+        {view.categories.map((cat) => {
+          const inside = view.channels.filter((c) => c.categoryId === cat.id);
+          // Members only see groups with a channel they can open; managers also see empty ones.
+          if (inside.length === 0 && !canManageChannels) return null;
+          return (
+            <CategoryGroup key={cat.id} id={cat.id} name={cat.name} hrefs={inside.map((c) => `/app/c/${view.id}/${c.id}`)}>
+              {inside.map(link)}
+            </CategoryGroup>
+          );
+        })}
       </ul>
       <VoiceBar />
       <div className="px-3 py-2"><ReportDialog communityId={view.id} /></div>
