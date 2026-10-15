@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, session } from "@/db/schema";
-import { voiceCallMember, voiceControlMailbox } from "@/db/voice-schema";
+import { voiceCallMember, voiceControlMailbox, voicePrekey } from "@/db/voice-schema";
 import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport } from "@/lib/voice/crypto-owner";
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "@/lib/voice/owner-guard";
 import { voiceControlParty, VOICE_CONTROL_EVENT, type VoiceOwnerControl } from "@/lib/voice/owner-control";
@@ -163,6 +163,9 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(fresh.input.request.nativeRequestId).toBe(old.request.nativeRequestId);
     expect(fresh.input.request.body).toEqual(old.request.body);
     expect(fresh.input.request.requestId).not.toBe(old.request.requestId);
+    const prekeys = await db.select().from(voicePrekey);
+    expect(await handleVoiceCrypto(auth(a), { ...fresh.input.binding, request: fresh.input.request })).toEqual(fresh.response);
+    expect(await db.select().from(voicePrekey)).toEqual(prekeys);
     release.resolve(); expect(await outcome).toMatchObject({ code: "conflict" });
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
   }, 30_000);
