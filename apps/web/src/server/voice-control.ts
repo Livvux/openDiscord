@@ -537,3 +537,9 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
   if (result instanceof AppError) throw result;
   return result;
 }
+
+// Temporary unreachable TDD stub; removed by the implementation commit.
+export async function grantBoundVoiceMedia(_auth: unknown, _binding: unknown): Promise<{ snapshot: VoiceSnapshot; roomName: string; participantIdentity: string; sources: string[]; canPublishData: false; expiresAt: string }> {
+  void _auth; void _binding;
+  throw new Error("Bound media authorization is not implemented.");
+}

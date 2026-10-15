@@ -136,3 +136,9 @@ export function afterAccessChange(communityId: string): void {
   run();
   setTimeout(run, RECHECK_AFTER_MS).unref?.();
 }
+
+// Temporary unreachable TDD stub; removed by the implementation commit.
+export async function createBoundVoiceToken(_auth: unknown, _binding: unknown): Promise<{ token: string }> {
+  void _auth; void _binding;
+  throw new Error("Bound media authorization is not implemented.");
+}
