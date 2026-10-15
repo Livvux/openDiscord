@@ -31,6 +31,8 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       PORT: String(port),
+      // Requires GITHUB_ACTIONS as a second server-side gate; ordinary deployments return HTTP 404.
+      OPENDISCORD_VOICE_PROOF: process.env.GITHUB_ACTIONS === "true" ? "1" : "0",
       BETTER_AUTH_URL: `http://localhost:${port}`,
       // Exercise the native versioned-key deployment in browser auth/2FA flows on disposable CI data.
       BETTER_AUTH_SECRETS: process.env.BETTER_AUTH_SECRETS ?? (process.env.CI

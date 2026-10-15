@@ -69,6 +69,7 @@ test("the owner migrates a complete archive with private image and binary files"
     if (!await settings.isVisible()) await toggle.click();
     await settings.click();
     await closeNavigation();
+    await expect(owner).toHaveTitle("Community settings · openDiscord");
     await expectNoA11yViolations(owner);
     expect(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const downloadEvent = owner.waitForEvent("download");
