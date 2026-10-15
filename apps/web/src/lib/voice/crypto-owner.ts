@@ -77,8 +77,8 @@ export class VoiceCryptoOwner {
       const revision = this.revision;
       try {
         const result = await work();
+        if (!allowTransition && revision !== this.revision) throw new VoiceGenerationInterrupted();
         this.assertCurrent(allowTransition);
-        if (!allowTransition && revision !== this.revision) { this.admitted.clear(); this.epochId = undefined; this.audience = []; throw new VoiceGenerationInterrupted(); }
         return result;
       }
       catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("native-or-schema-failure"); throw error; }
@@ -259,8 +259,11 @@ export class VoiceCryptoOwner {
     return this.serial(async () => {
       const peer = voiceControlParty(this.peer(memberId));
       const flow = [...this.flows.values()].find(value => sameVoiceParty(value.peer, peer) && value.confirmed && value.request.isDone() && value.sas?.isDone());
-      const identity = JSON.stringify(peer);
-      if ((!flow && !this.completedPeers.has(identity)) || !(await this.device(peer)).isVerified()) throw new Error("Explicit completed voice SAS required.");
+      const identity = JSON.stringify(peer), revision = this.revision;
+      const verified = (await this.device(peer)).isVerified();
+      if (revision !== this.revision || this.transitioning) throw new VoiceGenerationInterrupted();
+      this.assertCurrent();
+      if ((!flow && !this.completedPeers.has(identity)) || !verified) throw new Error("Explicit completed voice SAS required.");
       this.completedPeers.add(identity); this.admitted.add(memberId);
     });
   }
@@ -358,6 +361,7 @@ export class VoiceCryptoOwner {
       const own = next.members.find(member => member.memberId === next.memberId);
       if (!own || own.userId !== this.options.accountId || own.joinNonce !== next.joinNonce || own.voiceUserId !== next.voiceUserId || own.voiceDeviceId !== next.voiceDeviceId) throw new Error("Lost voice enrollment.");
       const cancel: NativeRequest[] = [];
+      for (const flow of this.flows.values()) if (flow.confirmed && flow.request.isDone() && flow.sas?.isDone() && (await this.device(flow.peer)).isVerified()) this.completedPeers.add(JSON.stringify(flow.peer));
       for (const flow of this.flows.values()) if (!flow.request.isDone() && !flow.request.isCancelled()) { const output = flow.request.cancel(); if (output) cancel.push(output); }
       // Only known old entries and narrowly recognized cancellation output can cross the fence.
       const queued = await this.machine.outgoingRequests();

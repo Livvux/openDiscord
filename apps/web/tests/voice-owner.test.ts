@@ -50,7 +50,7 @@ async function pair() {
   const peer = await OwnerUnitPeer.create(remote, wire.port(other.memberId));
   return { owner, peer, current, other, wire, onFence, lifetime };
 }
-async function verify(value: Awaited<ReturnType<typeof pair>>) {
+async function verify(value: Awaited<ReturnType<typeof pair>>, admit = true) {
   const { owner, peer, current, other } = value;
   await peer.query();
   const handle = await owner.requestVerification(other.memberId); await peer.receive();
@@ -70,7 +70,7 @@ async function verify(value: Awaited<ReturnType<typeof pair>>) {
   await owner.receive(); await peer.receive(); await owner.receive(); await peer.receive();
   await owner.query(current.members.map(member => member.memberId)); await peer.query();
   expect((await owner.verificationStates()).find(state => state.handle === handle)?.done).toBe(true);
-  await owner.admit(other.memberId);
+  if (admit) await owner.admit(other.memberId);
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -164,6 +164,38 @@ describe("unreachable serial voice owner", () => {
       await expect(value.owner.receive()).rejects.toThrow("closed");
       await value.owner.close();
       const guard = await acquireVoiceOwnerGuard(value.current.members[0].userId); await releaseUnusedVoiceOwnerGuard(guard);
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+
+  it("does not commit an admission paused in real native getDevice across a generation fence", async () => {
+    const value = await pair();
+    try {
+      await verify(value, false);
+      const arrived = deferred<void>(), release = deferred<void>(), original = C.OlmMachine.prototype.getDevice;
+      let pause = true;
+      vi.spyOn(C.OlmMachine.prototype, "getDevice").mockImplementation(async function(this: C.OlmMachine, ...args) {
+        const device = await original.apply(this, args);
+        if (pause && this.userId.toString() === value.current.voiceUserId && args[0].toString() === value.other.voiceUserId) { pause = false; arrived.resolve(); await release.promise; }
+        return device;
+      });
+      const admission = value.owner.admit(value.other.memberId);
+      await arrived.promise;
+      const transition = value.owner.transition({ ...value.current, generation: 2 });
+      expect(value.onFence).toHaveBeenCalledWith("generation-transition");
+      release.resolve();
+      await expect(admission).rejects.toThrow("generation interrupted"); await transition;
+      // No stale admission was committed, despite retained genuine completed native trust.
+      await expect(value.owner.setControlContext(randomUUID(), value.current.members.map(member => member.memberId))).rejects.toThrow("admission required");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+  it("retains exact unchanged prior explicit admission and completed native trust through generation and epoch drains", async () => {
+    const value = await pair();
+    try {
+      await verify(value);
+      await value.owner.transition({ ...value.current, generation: 2 });
+      await value.owner.setControlContext(randomUUID(), value.current.members.map(member => member.memberId));
+      await value.owner.setControlContext(randomUUID(), value.current.members.map(member => member.memberId));
+      expect(value.onFence).toHaveBeenCalledWith("audience-context-change");
     } finally { await value.owner.close(); value.peer.close(); }
   });
 
