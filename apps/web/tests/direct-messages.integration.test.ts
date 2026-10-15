@@ -108,6 +108,12 @@ describe("private encrypted conversations", () => {
     await expect(handleCryptoRequest(authA(), { ...request, eventType: "m.key.verification.cancel" })).rejects.toThrow("cannot be reused");
     await expect(handleCryptoRequest(authA(), { ...request, requestId: randomUUID(), body: { messages: { [matrix(bob)]: { [bDevice]: { transaction_id: randomUUID(), body: "plaintext disguised as control" } } } } })).rejects.toThrow();
   });
+  it("accepts native SAS accept envelopes without a redundant method and refuses other chosen methods", async () => {
+    const content = { transaction_id: randomUUID(), commitment: "a".repeat(43), key_agreement_protocol: "curve25519-hkdf-sha256", hash: "sha256", message_authentication_code: "hkdf-hmac-sha256.v2", short_authentication_string: ["decimal"] };
+    const send = (value: unknown) => ({ kind: "send", requestId: randomUUID(), eventType: "m.key.verification.accept", body: { messages: { [matrix(bob)]: { [bDevice]: value } } } });
+    await handleCryptoRequest(authA(), send(content));
+    await expect(handleCryptoRequest(authA(), send({ ...content, method: "m.qr_code.show.v1" }))).rejects.toThrow();
+  });
   it("caps nested work before shared locks and refuses nonexistent signature targets", async () => {
     const huge = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [String(i), "signed_curve25519"]));
     await expect(handleCryptoRequest(authA(), { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(bob)]: huge } } })).rejects.toThrow("Too many target");

@@ -156,7 +156,7 @@ const verificationSchemas: Record<string, z.ZodType<Record<string, unknown>>> = 
   request: z.object({ transaction_id: transaction, from_device: uuid, methods, timestamp: z.number().int().nonnegative() }).strict(),
   ready: z.object({ transaction_id: transaction, from_device: uuid, methods }).strict(),
   start: z.object({ transaction_id: transaction, from_device: uuid, method: z.literal("m.sas.v1"), key_agreement_protocols: methods, hashes: methods, message_authentication_codes: methods, short_authentication_string: methods }).strict(),
-  accept: z.object({ transaction_id: transaction, method: z.literal("m.sas.v1"), commitment: base64Schema.max(128), key_agreement_protocol: z.string().max(100), hash: z.string().max(100), message_authentication_code: z.string().max(100), short_authentication_string: methods }).strict(),
+  accept: z.object({ transaction_id: transaction, method: z.literal("m.sas.v1").optional(), commitment: base64Schema.max(128), key_agreement_protocol: z.string().max(100), hash: z.string().max(100), message_authentication_code: z.string().max(100), short_authentication_string: methods }).strict(),
   key: z.object({ transaction_id: transaction, key: base64Schema.max(128) }).strict(),
   mac: z.object({ transaction_id: transaction, mac: z.record(z.string().max(128), base64Schema.max(128)), keys: base64Schema.max(128) }).strict(),
   done: z.object({ transaction_id: transaction }).strict(),
