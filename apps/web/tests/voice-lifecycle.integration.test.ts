@@ -4,9 +4,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { channel, member, role, session } from "@/db/schema";
 import { voiceCall, voiceCallMember } from "@/db/voice-schema";
-import { createCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
+import { createCommunity, deleteChannel, deleteCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
 import { registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
-import { heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
+import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
+import { banMember, createRole, deleteRole, kickMember, setMemberRole, updateRole } from "@/server/moderation";
+import { createIntegration } from "@/server/integrations";
 import { blockUser, unblockUser } from "@/server/blocks";
 import { Permission } from "@/server/permissions";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -58,7 +60,7 @@ async function peer(f: Awaited<ReturnType<typeof fixture>>) {
   await registerDmDevice(userId, sessionId, { id: anchorDeviceId, secret: anchorSecret, name: "Peer anchor" });
   await db.insert(member).values({ communityId: f.communityId, userId });
   const snapshot = await joinVoiceControl({ userId, sessionId, anchorDeviceId, anchorSecret }, { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: secret, consent: true });
-  return { userId, sessionId, anchorDeviceId, secret, snapshot };
+  return { userId, sessionId, anchorDeviceId, anchorSecret, secret, snapshot };
 }
 async function state(id: string) { const [m] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, id)); return m?.state; }
 describe("atomic product mutation invalidation", () => {
@@ -189,6 +191,102 @@ describe("pinned BetterAuth1.7.7 PostgreSQL adapter boundaries", () => {
         await deleting?.catch(() => {});
         blocker.release(); await pool.end();
       }
+    });
+  }
+});
+
+async function voiceWaiters(count: number) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const { rows } = await db.$client.query<{ count: number }>("select count(*)::int as count from pg_locks where locktype = 'advisory' and classid = 0 and objid = 810030 and not granted");
+    if (rows[0].count >= count) return;
+  }
+  throw new Error(`Expected ${count} actual PostgreSQL Voice waiters`);
+}
+type F = Awaited<ReturnType<typeof fixture>>;
+type P = Awaited<ReturnType<typeof peer>>;
+const scopedMutations: { name: string; run: (f: F, p: P) => Promise<unknown> }[] = [
+  { name: "leave", run: (f, p) => leaveCommunity(p.userId, f.communityId) },
+  { name: "kick", run: (f, p) => kickMember(f.userId, f.communityId, p.userId) },
+  { name: "ban", run: (f, p) => banMember(f.userId, f.communityId, p.userId) },
+  { name: "anchor revoke", run: (_f, p) => revokeDmDevice(p.userId, p.anchorDeviceId) },
+  { name: "source override", run: async (f) => { const [r] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true))); await setChannelOverride(f.userId, f.channelId, r.id, 0, Permission.Video); } },
+  { name: "default role loss", run: async (f) => { const [r] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true))); await updateRole(f.userId, r.id, "everyone", ["ViewChannels", "Connect", "Speak", "SendMessages", "CreateInvites"]); } },
+];
+describe("actual lifecycle mutators versus queued crypto with observed overlap", () => {
+  for (const mutation of scopedMutations) {
+    it(`${mutation.name} commits terminal invalidation before stale crypto can proceed`, async () => {
+      const f = await fixture(), p = await peer(f), barrier = await db.$client.connect();
+      let pending: Promise<unknown> | undefined;
+      try {
+        await barrier.query("begin"); await barrier.query("set local statement_timeout = '6s'");
+        await barrier.query("select pg_advisory_xact_lock(810030)");
+        pending = mutation.run(f, p);
+        const mutationOutcome = pending.then(() => null, (error: unknown) => error);
+        await voiceWaiters(1);
+        expect(await state(p.snapshot.memberId)).toBe("waiting");
+        const crypto = handleVoiceCrypto({ userId: p.userId, sessionId: p.sessionId, memberId: p.snapshot.memberId, secret: p.secret }, { callId: p.snapshot.callId, memberId: p.snapshot.memberId, joinNonce: p.snapshot.joinNonce, expectedGeneration: p.snapshot.generation, request: { kind: "sync" } });
+        const cryptoOutcome = crypto.then(() => null, (error: unknown) => error);
+        await voiceWaiters(2);
+        await barrier.query("commit");
+        expect(await mutationOutcome).toBeNull();
+        expect(await cryptoOutcome).toMatchObject({ code: "forbidden" });
+        expect(await state(p.snapshot.memberId)).toBe("left");
+      } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }
+    });
+  }
+  it("keeps the same user's unrelated community enrollment live after a scoped kick", async () => {
+    const f = await fixture(), p = await peer(f), other = await fixture();
+    await db.insert(member).values({ communityId: other.communityId, userId: p.userId });
+    const unrelated = await joinVoiceControl(p, { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    await kickMember(f.userId, f.communityId, p.userId);
+    expect(await state(p.snapshot.memberId)).toBe("left");
+    expect(await state(unrelated.memberId)).toBe("waiting");
+  });
+  it("compares role deletion and deny-role assignment using effective channel authority", async () => {
+    const f = await fixture(), p = await peer(f);
+    const r = await createRole(f.userId, f.communityId, "Voice source", []);
+    await setChannelOverride(f.userId, f.channelId, r, 0, Permission.Speak);
+    await setMemberRole(f.userId, r, p.userId, true);
+    expect(await state(p.snapshot.memberId)).toBe("left");
+    const q = await peer(f);
+    const source = await createRole(f.userId, f.communityId, "Explicit speak", ["Speak"]);
+    await setMemberRole(f.userId, source, q.userId, true);
+    const [everyone] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
+    await setChannelOverride(f.userId, f.channelId, everyone.id, 0, Permission.Speak);
+    await setChannelOverride(f.userId, f.channelId, source, Permission.Speak, 0);
+    // A fresh enrollment is needed after the intervening source loss.
+    const fresh = await joinVoiceControl(q, { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    await deleteRole(f.userId, source);
+    expect(await state(fresh.memberId)).toBe("left");
+  });
+  for (const kind of ["bot", "webhook"] as const) {
+    it(`prelocks both-kind integration creation (${kind}) before community rows without revoking Voice`, async () => {
+      const f = await fixture(), p = await peer(f), barrier = await db.$client.connect();
+      const [text] = await db.select().from(channel).where(and(eq(channel.communityId, f.communityId), eq(channel.kind, "text")));
+      let pending: Promise<unknown> | undefined;
+      try {
+        await barrier.query("begin"); await barrier.query("set local lock_timeout = '2s'");
+        await barrier.query("select pg_advisory_xact_lock(810030)");
+        pending = createIntegration(f.userId, f.communityId, { kind, name: "Ordered integration", ...(kind === "webhook" ? { channelId: text.id } : {}) });
+        const result = pending.then(() => null, (error: unknown) => error);
+        await voiceWaiters(1);
+        // If creation took community before Voice, this real row lock would time out.
+        await barrier.query("select id from public.community where id = $1 for update", [f.communityId]);
+        await barrier.query("commit");
+        expect(await result).toBeNull();
+        expect(await state(f.snapshot.memberId)).toBe("waiting");
+        expect(await state(p.snapshot.memberId)).toBe("waiting");
+      } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }
+    });
+  }
+  for (const scope of ["channel", "community"] as const) {
+    it(`${scope} deletion leaves no live cascaded Voice artifacts`, async () => {
+      const f = await fixture();
+      if (scope === "channel") await deleteChannel(f.userId, f.channelId);
+      else await deleteCommunity(f.userId, f.communityId);
+      expect(await db.$count(voiceCall, eq(voiceCall.id, f.snapshot.callId))).toBe(0);
+      expect(await state(f.snapshot.memberId)).toBeUndefined();
     });
   }
 });

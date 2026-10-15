@@ -299,7 +299,7 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
         const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, row.call.id)).for("update");
         if (call.status !== "active") continue;
         removed += (await expireAndRevalidate(tx, call, now)).length;
-        if (call.status === "closed") closed++;
+        if (call.closedAt !== null) closed++;
       }
       return { calls, closed, removed };
     });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
+import { Pool } from "pg";
 import { db } from "@/db";
 import { testUsers } from "./helpers";
 
@@ -123,4 +124,40 @@ describe("real PostgreSQL rejected and ordered native guard lock graphs", () => 
       }
     }, 12000);
   }
+});
+
+describe("bounded ordered-guard contention characterization", () => {
+  it("records auth/DM/Voice DB critical sections and pool wait without a performance SLO", async () => {
+    const id = await users.create("Guard contention fixture");
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3, statement_timeout: 6000, lock_timeout: 5000 });
+    const started = performance.now();
+    const waits: number[] = [];
+    let peakWaiting = 0;
+    try {
+      const operations = Array.from({ length: 18 }, async (_, index) => {
+        const requested = performance.now(), connection = pool.connect();
+        peakWaiting = Math.max(peakWaiting, pool.waitingCount);
+        const c = await connection;
+        waits.push(performance.now() - requested);
+        try {
+          await c.query("begin");
+          if (index % 3 === 0) await c.query('update public."user" set name = name where id = $1', [id]);
+          else if (index % 3 === 1) {
+            await c.query("select pg_advisory_xact_lock(810025)");
+            await c.query("select id from public.dm_device where user_id = $1 for share", [id]);
+            await c.query("update public.dm_device set name = name where false");
+          } else {
+            await c.query("select pg_advisory_xact_lock(810030)");
+            await c.query("select id from public.voice_call where false");
+          }
+          await c.query("commit");
+          return null;
+        } catch (error) { await c.query("rollback"); return sqlState(error) ?? "unknown"; }
+        finally { c.release(); }
+      });
+      expect(await Promise.all(operations)).toEqual(Array(18).fill(null));
+      expect(peakWaiting).toBeGreaterThan(0);
+      console.info("[voice guard characterization]", JSON.stringify({ operations: 18, pool: 3, peakWaiting, elapsedMs: Math.round(performance.now() - started), maxPoolWaitMs: Math.round(Math.max(...waits)), scope: "isolated DB-only no-call workload; not a capacity or production latency claim" }));
+    } finally { await pool.end(); }
+  }, 12000);
 });
