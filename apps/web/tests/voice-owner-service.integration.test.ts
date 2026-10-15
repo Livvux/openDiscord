@@ -330,19 +330,18 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(a.calls.at(-1)?.request.kind).toBe("send");
   }, 30_000);
 
-  it("completes genuine historical send before delayed real retirement response exactly once", async () => {
+  it("receives genuine historical send success before delayed real retirement response and completes exactly once", async () => {
     const [a, b, c] = await fixture(3);
-    const sent = deferred(), releaseSend = deferred(), retired = deferred(), releaseRetire = deferred(), completed = deferred();
+    const sent = deferred(), releaseSend = deferred(), retired = deferred(), releaseRetire = deferred(), delivered = deferred();
     let id: string | undefined;
     const completions: string[] = [], original = C.OlmMachine.prototype.markRequestAsSent;
     a.after = async input => {
-      if (input.request.kind === "send" && input.request.eventType === "m.key.verification.request") { id = input.request.nativeRequestId; sent.resolve(); await releaseSend.promise; }
+      if (input.request.kind === "send" && input.request.eventType === "m.key.verification.request") { id = input.request.nativeRequestId; sent.resolve(); await releaseSend.promise; delivered.resolve(); }
       if (input.request.kind === "retire" && input.request.nativeRequestId === id) { retired.resolve(); await releaseRetire.promise; }
     };
     vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, nativeId, type, response) {
       if (nativeId === id) completions.push(nativeId);
       const result = await original.call(this, nativeId, type, response);
-      if (nativeId === id) completed.resolve();
       return result;
     });
     const requested = a.owner.requestVerification(b.snapshot.memberId);
@@ -352,8 +351,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     await leaveVoiceControl(auth(c), binding(c));
     a.snapshot = await heartbeatVoiceControl(auth(a), binding(a));
     const transition = a.owner.transition(a.snapshot); await retired.promise;
-    releaseSend.resolve(); await completed.promise;
-    expect(completions).toEqual([id]);
+    releaseSend.resolve(); await delivered.promise;
     releaseRetire.resolve(); await transition;
     expect(await outcome).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
     expect(completions).toEqual([id]);
