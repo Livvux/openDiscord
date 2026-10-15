@@ -1,4 +1,8 @@
 // Requires a migrated database at DATABASE_URL.
+import { randomUUID } from "node:crypto";
+import { eq, inArray } from "drizzle-orm";
+import { db } from "@/db";
+import { attachment, community, session } from "@/db/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createCategory, setChannelCategory } from "@/server/categories";
 import { exportCommunity, importCommunity, type CommunityExport } from "@/server/community-export";
@@ -31,7 +35,11 @@ beforeAll(async () => {
   await setPinned(owner, root.id, true);
   await updateCommunityRules(owner, communityId, { text: "Respect the community.", required: true });
 });
-afterAll(() => users.cleanup());
+const stagedIds: string[] = [];
+afterAll(async () => {
+  if (stagedIds.length) await db.delete(attachment).where(inArray(attachment.id, stagedIds));
+  await users.cleanup();
+});
 
 describe("community export", () => {
   it("is owner-only and audited", async () => {
@@ -108,5 +116,44 @@ describe("community import", () => {
     await expect(importCommunity(importer, { format: "something-else" })).rejects.toThrow();
     await expect(importCommunity(importer, { ...exported, messages: [{ ...exported.messages[0], channelKey: "missing" }] })).rejects.toThrow("doesn't contain");
     await expect(importCommunity(importer, { ...exported, channels: [] })).rejects.toThrow();
+  });
+});
+
+
+describe("private archive staging commit", () => {
+  async function fixture() {
+    const id = await users.create("Archive importer");
+    const sessionId = randomUUID();
+    await db.insert(session).values({ id: sessionId, userId: id, token: randomUUID(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 60_000) });
+    const data = { ...exported, messages: exported.messages.map((m, index) => ({ ...m, attachments: index === 0 ? 1 : 0 })) };
+    return { id, sessionId, data };
+  }
+  async function staged(uploaderId: string) {
+    const [row] = await db.insert(attachment).values({ uploaderId, key: `attachments/${randomUUID()}.bin`, contentType: "application/octet-stream", filename: "private.bin", size: 3, width: 0, height: 0 }).returning({ id: attachment.id });
+    stagedIds.push(row.id);
+    return row.id;
+  }
+  it("atomically links owned staged files without a missing-file note", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    await importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] });
+    const [linked] = await db.select().from(attachment).where(eq(attachment.id, file));
+    expect(linked.messageId).not.toBeNull(); expect(linked.channelId).not.toBeNull(); expect(linked.linkedAt).not.toBeNull();
+    const messages = await listMessages(id, linked.channelId);
+    expect(messages.messages.some((m) => m.content.includes("attachment not imported"))).toBe(false);
+  });
+  it("rejects foreign staged IDs and rolls back the new community", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(owner);
+    await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("no longer available");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+    expect((await db.select().from(attachment).where(eq(attachment.id, file)))[0].messageId).toBeNull();
+  });
+  it("rejects a revoked session before creating the community", async () => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    await db.delete(session).where(eq(session.id, sessionId));
+    await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("Sign in again");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
   });
 });

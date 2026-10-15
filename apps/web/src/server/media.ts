@@ -7,13 +7,14 @@ import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
 import { db } from "@/db";
 import { attachment, message } from "@/db/schema";
-import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES } from "@/lib/limits";
+import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MAX_ARCHIVE_ATTACHMENTS } from "@/lib/limits";
 import { requireChannel, type Db } from "./access";
 import { AppError, invalid, notFound } from "./errors";
 import { consume } from "./limits";
 import { configuredAttachmentStorage } from "./attachment-storage";
 import { scanAttachment } from "./attachment-scanner";
 import { Permission } from "./permissions";
+import { assertActiveUser } from "./instance-policy";
 import { parse, uuid } from "./validation";
 
 export interface AttachmentView {
@@ -164,7 +165,19 @@ export async function uploadAttachment(
   }
 }
 
-async function storeUpload(userId: string, channelId: string, image: boolean, rawFilename: string | null, raw: Uint8Array): Promise<AttachmentView> {
+/** Private staging for one bounded archive; no delivery is possible until the import links it. */
+export async function stageArchiveAttachment(userId: string, image: boolean, filename: string | null, raw: Uint8Array, signal: AbortSignal): Promise<AttachmentView> {
+  signal.throwIfAborted();
+  await assertActiveUser(userId);
+  if (raw.byteLength === 0 || raw.byteLength > (image ? MAX_ATTACHMENT_BYTES : MAX_FILE_BYTES)) throw invalid("An archived file exceeds the upload limit.");
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    return await storeUpload(userId, null, image, filename === null ? null : encodeURIComponent(filename), raw, MAX_ARCHIVE_ATTACHMENTS, signal);
+  } finally { activeUploads -= 1; }
+}
+
+async function storeUpload(userId: string, channelId: string | null, image: boolean, rawFilename: string | null, raw: Uint8Array, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal): Promise<AttachmentView> {
   const storage = requireStorage();
   await scanAttachment(raw);
   let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
@@ -176,6 +189,7 @@ async function storeUpload(userId: string, channelId: string, image: boolean, ra
     // The stored type is fixed: what the browser claimed is never trusted for serving.
     stored = { data: raw, contentType: "application/octet-stream", width: 0, height: 0, filename: cleanFilename(rawFilename), ext: "bin" };
   }
+  signal?.throwIfAborted();
   const key = `attachments/${randomUUID()}.${stored.ext}`;
   // Row first: if the upload fails afterwards, the unlinked row lets the sweeper clean up.
   // Checks and insert are serialised per person, so parallel uploads can't slip past the caps.
@@ -183,7 +197,7 @@ async function storeUpload(userId: string, channelId: string, image: boolean, ra
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
     const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
       .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
-    if (unlinked >= MAX_UNLINKED_PER_USER) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
+    if (unlinked >= maximumPending) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
     const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
       .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
     if ((today ?? 0) + stored.data.byteLength > DAILY_UPLOAD_BYTES) {
@@ -196,7 +210,7 @@ async function storeUpload(userId: string, channelId: string, image: boolean, ra
     return created;
   });
   try {
-    await storage.put(key, stored.data as Uint8Array<ArrayBuffer>, stored.contentType);
+    await storage.put(key, stored.data as Uint8Array<ArrayBuffer>, stored.contentType, signal);
   } catch {
     // Keep the unlinked row: a write can succeed remotely despite a lost response.
     // The sweeper will remove both the unreachable object and its quota reservation.

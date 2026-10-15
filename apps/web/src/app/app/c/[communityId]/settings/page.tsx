@@ -202,6 +202,14 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           >
             Download community export
           </a>
+          <a
+            href={`/api/communities/${view.id}/export?attachments=1`}
+            download
+            className="ml-2 inline-flex min-h-8 items-center rounded-lg border px-3 py-1 text-sm font-medium hover:bg-muted"
+          >
+            Download archive with files
+          </a>
+          <p className="mt-2 text-xs text-muted-foreground">JSON excludes files. The complete archive includes every file attached to the newest 100,000 messages, up to 4,096 files and 256 MiB. Larger exports fail instead of omitting files. Concurrent edits may change the export; keep a separate operator backup.</p>
         </Section>
       )}
       <Section id="danger" title={view.isOwner ? "Delete community" : "Leave community"}>
