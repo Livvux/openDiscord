@@ -2,7 +2,7 @@
 // the `mention` table for unread counts and notifications.
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { member, mention, user } from "@/db/schema";
+import { member, mention, user, userBlock } from "@/db/schema";
 import type { Db } from "./access";
 
 export interface MentionView {
@@ -21,7 +21,7 @@ export function parseMentionIds(content: string): string[] {
 
 /**
  * Replaces the message's mentions with the community members its content names (never the author).
- * Returns the ids that are mentioned now but weren't before, which are the ones to notify.
+ * Returns the ids that are mentioned now but weren't before and haven't blocked the author: the ones to notify.
  */
 export async function syncMentions(tx: Db, communityId: string, messageId: string, authorId: string, content: string): Promise<string[]> {
   const ids = parseMentionIds(content).filter((id) => id !== authorId);
@@ -34,7 +34,14 @@ export async function syncMentions(tx: Db, communityId: string, messageId: strin
     .where(and(eq(member.communityId, communityId), inArray(member.userId, ids)));
   if (members.length === 0) return [];
   await tx.insert(mention).values(members.map((m) => ({ messageId, userId: m.userId })));
-  return members.map((m) => m.userId).filter((id) => !before.includes(id));
+  const fresh = members.map((m) => m.userId).filter((id) => !before.includes(id));
+  if (fresh.length === 0) return [];
+  // People who blocked the author still see their name rendered, but aren't notified.
+  const blockers = await tx
+    .select({ id: userBlock.blockerId })
+    .from(userBlock)
+    .where(and(eq(userBlock.blockedId, authorId), inArray(userBlock.blockerId, fresh)));
+  return fresh.filter((id) => !blockers.some((b) => b.id === id));
 }
 
 export async function mentionsFor(messageIds: string[]): Promise<Map<string, MentionView[]>> {

@@ -24,6 +24,12 @@ export const community = pgTable("community", {
   name: text("name").notNull(),
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspensionReason: text("suspension_reason"),
+  /** Set while invites are paused (by a manager, or automatically by raid protection). */
+  invitesPausedAt: timestamp("invites_paused_at", { withTimezone: true }),
+  /** Accounts younger than this can't join; 0 = no minimum. */
+  minAccountAgeHours: integer("min_account_age_hours").notNull().default(0),
+  /** More joins than this within 10 minutes pauses invites; 0 = off. */
+  raidJoinLimit: integer("raid_join_limit").notNull().default(30),
   // restrict: an owner must delete or hand over the community before deleting their account.
   ownerId: text("owner_id")
     .notNull()
@@ -64,7 +70,11 @@ export const member = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [primaryKey({ columns: [t.communityId, t.userId] }), index("member_user_idx").on(t.userId)],
+  (t) => [
+    primaryKey({ columns: [t.communityId, t.userId] }),
+    index("member_user_idx").on(t.userId),
+    index("member_joined_idx").on(t.communityId, t.joinedAt),
+  ],
 );
 
 export const memberRole = pgTable(
@@ -246,4 +256,19 @@ export const attachment = pgTable(
     index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null`),
     index("attachment_uploader_idx").on(t.uploaderId, t.createdAt),
   ],
+);
+
+/** One person blocking another: hides the blocked person's messages and silences their mentions. */
+export const userBlock = pgTable(
+  "user_block",
+  {
+    blockerId: text("blocker_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    blockedId: text("blocked_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] }), index("user_block_blocked_idx").on(t.blockedId)],
 );

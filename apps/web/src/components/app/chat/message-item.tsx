@@ -1,9 +1,9 @@
 "use client";
 
-import { PencilIcon, Trash2Icon } from "lucide-react";
+import { PencilIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import { useId, useState, useTransition } from "react";
-import { deleteMessage, editMessage } from "@/app/app/actions";
+import { blockUser, deleteMessage, editMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import { decodeMentions, encodeMentions, splitMentions, type Mention } from "@/lib/mentions";
@@ -34,14 +34,17 @@ function MessageContent({ content, mentions, currentUserId }: { content: string;
 interface MessageItemProps {
   message: MessageView;
   currentUserId: string;
+  /** The author is blocked by the viewer: collapsed until revealed. */
+  blocked: boolean;
   grouped: boolean;
   canEdit: boolean;
   canDelete: boolean;
   onDeleted: (id: string) => void;
 }
 
-export function MessageItem({ message, currentUserId, grouped, canEdit, canDelete, onDeleted }: MessageItemProps) {
+export function MessageItem({ message, currentUserId, blocked, grouped, canEdit, canDelete, onDeleted }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const created = new Date(message.createdAt);
@@ -56,6 +59,14 @@ export function MessageItem({ message, currentUserId, grouped, canEdit, canDelet
     });
   }
 
+  function onBlock() {
+    if (!window.confirm(`Block ${message.authorName}? Their messages will be hidden for you and their mentions won't notify you. They won't be told.`)) return;
+    startTransition(async () => {
+      const result = await blockUser(message.authorId);
+      if (!result.ok) setError(result.error);
+    });
+  }
+
   function onSaveEdit(content: string) {
     startTransition(async () => {
       const result = await editMessage(message.id, encodeMentions(content, message.mentions));
@@ -64,6 +75,18 @@ export function MessageItem({ message, currentUserId, grouped, canEdit, canDelet
         setError(null);
       } else setError(result.error);
     });
+  }
+
+  if (blocked && !revealed) {
+    return (
+      <li className={`flex gap-3 px-5 py-0.5 text-sm text-zinc-400 ${grouped ? "" : "mt-4"}`}>
+        <div className="w-8 shrink-0" />
+        <p>
+          Message from a blocked person.{" "}
+          <button type="button" aria-label="Show blocked message" className="underline hover:text-zinc-200" onClick={() => setRevealed(true)}>Show</button>
+        </p>
+      </li>
+    );
   }
 
   return (
@@ -124,6 +147,11 @@ export function MessageItem({ message, currentUserId, grouped, canEdit, canDelet
       {!editing && (
         <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:self-start max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
           <ReportDialog messageId={message.id} />
+          {message.authorId !== currentUserId && !blocked && (
+            <Button variant="ghost" size="icon-sm" aria-label={`Block ${message.authorName}`} onClick={onBlock} disabled={pending}>
+              <UserXIcon />
+            </Button>
+          )}
           {canEdit && (
             <Button variant="ghost" size="icon-sm" aria-label="Edit message" onClick={() => setEditing(true)}>
               <PencilIcon />

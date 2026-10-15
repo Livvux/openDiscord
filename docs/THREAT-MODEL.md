@@ -57,7 +57,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T15 | DoS: message spam | 5 messages / 5 s per user (Postgres-counted), 4000-character limit | ✅ |
 | T16 | DoS: resource creation loops | Burst limit of 30 mutations per 10 s per user; caps on owned communities, channels, roles, active invites | ✅ (burst limit per process) |
 | T17 | DoS: SSE connection flood | 8 streams per user per process; heartbeats; one message load per event | ✅ |
-| T18 | DoS: raids (mass joins via a leaked invite) | Expiring and limited-use invites; bans block rejoin | 🟡 join-rate limits P1 |
+| T18 | DoS: raids (mass joins via a leaked invite) | Expiring and limited-use invites; bans block rejoin; per-community raid protection auto-pauses invites after N joins in 10 minutes (joins serialised per community); manual invite pause; minimum account age | ✅ |
 | T19 | Repudiation: moderators deny actions | Audit log of kicks, bans, unbans, role and channel changes, moderator message deletions | ✅ |
 | T20 | Info disclosure: operator or database compromise | TLS, DB not exposed, TOTP secrets encrypted; message content is plaintext in the DB | 🟡 E2EE for DMs P1; disk encryption is the operator's job |
 | T21 | Supply chain: vulnerable dependency | Lockfile-frozen builds, `pnpm audit` in CI, Dependabot | ✅ |
@@ -65,7 +65,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T23 | Malicious uploads | Images only; type decided by the decoder, not the client; re-encoded to WebP (no EXIF/GPS, no polyglots, no SVG); size checked before the body is read; pixel and frame caps; per-user upload rate and pending-upload caps; private bucket; served with `nosniff`, `Content-Security-Policy: sandbox` and membership checks | ✅ images (no malware scanning; ClamAV P1) |
 | T24 | Spam sign-ups / account farming | Cloudflare Turnstile verified server-side on sign-up (when configured); 5 sign-ups per 10 min per IP; optional Closed Alpha: new accounts need admin approval before any session is issued | ✅ (shared across replicas: D4) |
 | T24 | Account enumeration | Password reset answers identically for unknown emails. Sign-up reveals that an email is taken (accepted trade-off for usability) | 🟡 |
-| T25 | Child safety, grooming, harassment | Blocking, reporting, age attestation, DM restrictions | ❌ P1, required before public launch of the official instance |
+| T25 | Child safety, grooming, harassment | Blocking and reporting ✅; age attestation and DM restrictions pending | 🟡 age attestation and DM restrictions required before public launch of the official instance |
 
 ## Residual risks we accept for the MVP
 

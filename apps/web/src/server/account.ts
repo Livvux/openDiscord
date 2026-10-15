@@ -2,10 +2,11 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { attachment, auditLog, channel, community, member, message, passkey, session, user } from "@/db/schema";
+import { listBlocked } from "./blocks";
 import { notFound } from "./errors";
 
-/** 2: messages carry their images. */
-export const EXPORT_FORMAT_VERSION = 2;
+/** 2: messages carry their images. 3: blocked people. */
+export const EXPORT_FORMAT_VERSION = 3;
 
 export interface ExportedImage { id: string; url: string; contentType: string; size: number; width: number; height: number; createdAt: string }
 
@@ -20,13 +21,14 @@ export interface UserExport {
   memberships: { communityId: string; communityName: string; joinedAt: string }[];
   /** Images download from `url` while signed in, like in the app. */
   messages: { id: string; communityId: string; channelName: string; content: string; createdAt: string; editedAt: string | null; images: ExportedImage[] }[];
+  blocked: { id: string; name: string; createdAt: string }[];
 }
 
 /** Everything stored about the person, as portable JSON. Excludes secrets (password hash, tokens). */
 export async function exportUserData(userId: string): Promise<UserExport> {
   const [profile] = await db.select().from(user).where(eq(user.id, userId));
   if (!profile) throw notFound("Account not found.");
-  const [sessions, passkeys, owned, memberships, messages] = await Promise.all([
+  const [sessions, passkeys, owned, memberships, messages, blocked] = await Promise.all([
     db.select().from(session).where(eq(session.userId, userId)).orderBy(asc(session.createdAt)),
     db.select().from(passkey).where(eq(passkey.userId, userId)),
     db.select().from(community).where(eq(community.ownerId, userId)),
@@ -48,6 +50,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       .innerJoin(channel, eq(channel.id, message.channelId))
       .where(eq(message.authorId, userId))
       .orderBy(asc(message.id)),
+    listBlocked(userId),
   ]);
   const images = messages.length === 0 ? [] : await db.select({
     id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, size: attachment.size,
@@ -86,6 +89,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       editedAt: m.editedAt?.toISOString() ?? null,
       images: imagesOf(m.id),
     })),
+    blocked: blocked.map((b) => ({ ...b, createdAt: b.createdAt.toISOString() })),
   };
 }
 

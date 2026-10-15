@@ -44,7 +44,9 @@ async function Invite({ params }: Pick<PageProps<"/invite/[code]">, "params">) {
         </>
       }
     >
-      {session ? (
+      {preview.paused ? (
+        <p role="status" className="text-sm text-muted-foreground">This community has paused new members. Ask the person who invited you.</p>
+      ) : session ? (
         <JoinButton code={preview.code} />
       ) : (
         <div className="grid gap-3">

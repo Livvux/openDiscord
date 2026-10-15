@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
+import { BlockedList } from "@/components/app/settings/blocked-list";
 import { DeleteAccount } from "@/components/app/settings/delete-account";
 import { NotificationSettings } from "@/components/app/settings/notification-settings";
 import { ProfileForm } from "@/components/app/settings/profile-form";
@@ -9,6 +10,7 @@ import { Sessions } from "@/components/app/settings/sessions";
 import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings";
 import { SignOutButton } from "@/app/app/sign-out-button";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
+import { listBlocked } from "@/server/blocks";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Account settings" };
@@ -41,7 +43,7 @@ function Section({ title, description, children }: { title: string; description?
 
 async function Settings() {
   const user = await requirePageUser();
-  const [owned, has2fa] = await Promise.all([ownedCommunityNames(user.id), twoFactorEnabled(user.id)]);
+  const [owned, has2fa, blocked] = await Promise.all([ownedCommunityNames(user.id), twoFactorEnabled(user.id), listBlocked(user.id)]);
   return (
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
@@ -49,6 +51,9 @@ async function Settings() {
       </Section>
       <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
         <NotificationSettings />
+      </Section>
+      <Section title="Blocked people" description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
+        <BlockedList blocked={blocked} />
       </Section>
       <Section title="Authenticator app" description="Optional two-factor authentication with a time-based code (TOTP).">
         <TwoFactorSettings enabled={has2fa} />
