@@ -1,7 +1,7 @@
 "use client";
 
 import { PlusIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createCommunity } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_ARCHIVE_COMPRESSED_BYTES } from "@/lib/limits";
 
-export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" | "button" }) {
+type CreateCommunityDialogProps = { trigger?: "icon" | "button" };
+
+export function CreateCommunityDialog(props: CreateCommunityDialogProps) {
+  const pathname = usePathname();
+  return <CommunityCreationForm key={pathname} {...props} />;
+}
+
+function CommunityCreationForm({ trigger = "icon" }: CreateCommunityDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
