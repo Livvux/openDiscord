@@ -3,7 +3,8 @@ CREATE TABLE "channel_override" (
 	"role_id" uuid NOT NULL,
 	"allow" integer DEFAULT 0 NOT NULL,
 	"deny" integer DEFAULT 0 NOT NULL,
-	CONSTRAINT "channel_override_channel_id_role_id_pk" PRIMARY KEY("channel_id","role_id")
+	CONSTRAINT "channel_override_channel_id_role_id_pk" PRIMARY KEY("channel_id","role_id"),
+	CONSTRAINT "channel_override_bits" CHECK ("channel_override"."allow" & "channel_override"."deny" = 0 and ("channel_override"."allow" | "channel_override"."deny") & ~1296 = 0)
 );
 --> statement-breakpoint
 ALTER TABLE "channel_override" ADD CONSTRAINT "channel_override_channel_id_channel_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channel"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

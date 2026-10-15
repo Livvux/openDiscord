@@ -7,12 +7,14 @@ import {
   createChannel,
   createCommunity,
   createInvite,
+  deleteChannel,
   getCommunityView,
   listChannelOverrides,
   setChannelOverride,
+  updateChannel,
 } from "@/server/communities";
 import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
-import { createRole, listRoles, setMemberRole } from "@/server/moderation";
+import { createRole, listAuditLog, listRoles, setMemberRole } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
 import { reportContent } from "@/server/reports";
 import { testUsers } from "./helpers";
@@ -76,17 +78,39 @@ describe("private channels", () => {
 });
 
 describe("override escalation rules", () => {
+  let openId: string;
+  beforeAll(async () => {
+    openId = await createChannel(owner, communityId, "lounge");
+  });
+
   it("requires both channel and role management", async () => {
-    await expect(setChannelOverride(member, privateId, everyoneRole, 0, 0)).rejects.toThrow("permission");
-    await expect(listChannelOverrides(staff, privateId)).rejects.toThrow("permission");
+    await expect(setChannelOverride(member, openId, everyoneRole, 0, 0)).rejects.toThrow("permission");
+    await expect(listChannelOverrides(staff, openId)).rejects.toThrow("permission");
   });
 
   it("only allows overrides for roles below the actor and with bits the actor holds", async () => {
-    // mod outranks staff? No: roles created later by the owner sit higher, so mod is above staff.
-    await expect(setChannelOverride(mod, privateId, staffRole, Permission.ViewChannels, 0)).resolves.toBeUndefined();
-    await expect(setChannelOverride(mod, privateId, modRole, Permission.ViewChannels, 0)).rejects.toThrow("permission");
+    // The owner created mod after staff, so mod sits above staff.
+    await expect(setChannelOverride(mod, openId, staffRole, Permission.ViewChannels, 0)).resolves.toBeUndefined();
+    await expect(setChannelOverride(mod, openId, modRole, Permission.ViewChannels, 0)).rejects.toThrow("permission");
     // mod lacks ManageMessages, so can't grant it anywhere.
-    await expect(setChannelOverride(mod, privateId, staffRole, Permission.ManageMessages, 0)).rejects.toThrow("permission");
+    await expect(setChannelOverride(mod, openId, staffRole, Permission.ManageMessages, 0)).rejects.toThrow("permission");
+  });
+
+  it("keeps managers who are excluded from a channel out of it", async () => {
+    const vault = await createChannel(owner, communityId, "vault");
+    await setChannelOverride(owner, vault, everyoneRole, 0, Permission.ViewChannels);
+    // mod manages channels and roles and holds a lower role (staff) it could otherwise unlock.
+    await setMemberRole(owner, staffRole, mod, true);
+    await expect(setChannelOverride(mod, vault, staffRole, Permission.ViewChannels, 0)).rejects.toThrow("Channel not found.");
+    await expect(listChannelOverrides(mod, vault)).rejects.toThrow("Channel not found.");
+    await expect(updateChannel(mod, vault, "renamed", "")).rejects.toThrow("Channel not found.");
+    await expect(deleteChannel(mod, vault)).rejects.toThrow("Channel not found.");
+    await setMemberRole(owner, staffRole, mod, false);
+  });
+
+  it("keeps private channel names out of the audit log", async () => {
+    const log = await listAuditLog(owner, communityId);
+    expect(log.filter((e) => e.action === "channel.permissions").map((e) => e.targetId)).not.toContain("vault");
   });
 
   it("rejects bits that aren't channel permissions and contradictory overrides", async () => {

@@ -1,5 +1,5 @@
 {
-  "id": "39538512-79a0-4921-ada6-af52a06da27e",
+  "id": "46be81a8-5aac-44da-9ba4-2f1477c7f467",
   "prevId": "a790d53d-456e-4211-8e14-268a1b8ce419",
   "version": "7",
   "dialect": "postgresql",
@@ -1148,7 +1148,12 @@
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "channel_override_bits": {
+          "name": "channel_override_bits",
+          "value": "\"channel_override\".\"allow\" & \"channel_override\".\"deny\" = 0 and (\"channel_override\".\"allow\" | \"channel_override\".\"deny\") & ~1296 = 0"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.community": {

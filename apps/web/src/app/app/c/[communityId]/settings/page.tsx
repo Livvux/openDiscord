@@ -28,8 +28,9 @@ const AUDIT_LABELS: Record<string, string> = {
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
-  if (e.action === "role.delete" || e.action === "channel.delete") return e.targetId;
-  if (e.action === "channel.permissions") return `#${e.targetId}`;
+  if (e.action === "role.delete") return e.targetId;
+  if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
+  if (e.action === "channel.delete") return e.targetId ?? "a private channel";
   if (e.action === "role.create" || e.action === "role.update") return null;
   return e.targetName ?? "a deleted user";
 }

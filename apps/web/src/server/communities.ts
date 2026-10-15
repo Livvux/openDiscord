@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, asc, count, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLog, ban, channel, channelOverride, community, invite, member, role } from "@/db/schema";
-import { channelAuthorities, loadMember, lockCommunity, requireMember, type Db } from "./access";
+import { channelAuthorities, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
@@ -130,24 +130,22 @@ export async function updateChannel(userId: string, rawChannelId: unknown, rawNa
   const channelId = parse(uuid, rawChannelId);
   const name = parse(channelName, rawName);
   const topic = parse(channelTopic, rawTopic ?? "");
-  const [ch] = await db.select().from(channel).where(eq(channel.id, channelId));
-  if (!ch) throw notFound("Channel not found.");
-  await requireMember(db, ch.communityId, userId, Permission.ManageChannels);
+  const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
   await db.update(channel).set({ name, topic: topic || null }).where(eq(channel.id, channelId));
   await publish({ type: "channels.changed", communityId: ch.communityId });
 }
 
 export async function deleteChannel(userId: string, rawChannelId: unknown) {
   const channelId = parse(uuid, rawChannelId);
-  const [ch] = await db.select().from(channel).where(eq(channel.id, channelId));
-  if (!ch) throw notFound("Channel not found.");
+  const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
   await db.transaction(async (tx) => {
-    await requireMember(tx, ch.communityId, userId, Permission.ManageChannels);
     await lockCommunity(tx, ch.communityId);
+    await requireChannel(tx, channelId, userId, Permission.ManageChannels);
     const [{ total }] = await tx.select({ total: count() }).from(channel).where(eq(channel.communityId, ch.communityId));
     if (total <= 1) throw forbidden("A community needs at least one channel.");
+    const targetId = await auditChannelName(tx, ch);
     await tx.delete(channel).where(eq(channel.id, channelId));
-    await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.delete", targetId: ch.name });
+    await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.delete", targetId });
   });
   await publish({ type: "channels.changed", communityId: ch.communityId });
 }
@@ -176,12 +174,22 @@ export async function listChannelOverrides(userId: string, rawChannelId: unknown
   return rows.map((r) => ({ ...r, allow: r.allow ?? 0, deny: r.deny ?? 0 }));
 }
 
-/** Overrides need both channel and role management (they change who sees what). */
+/**
+ * Overrides need both channel and role management (they change who sees what), and the channel must be
+ * visible to the actor: a manager excluded from a channel can't let themselves in.
+ */
 async function requireChannelManager(tx: Db, channelId: string, userId: string) {
-  const [ch] = await tx.select().from(channel).where(eq(channel.id, channelId));
-  if (!ch) throw notFound("Channel not found.");
-  const { authority } = await requireMember(tx, ch.communityId, userId, Permission.ManageChannels | Permission.ManageRoles);
-  return { channel: ch, authority };
+  return requireChannel(tx, channelId, userId, Permission.ManageChannels | Permission.ManageRoles);
+}
+
+/** The audit log is readable by people who may not see private channels, so their names stay out of it. */
+async function auditChannelName(tx: Db, ch: typeof channel.$inferSelect): Promise<string | null> {
+  const [hidden] = await tx
+    .select({ channelId: channelOverride.channelId })
+    .from(channelOverride)
+    .innerJoin(role, eq(role.id, channelOverride.roleId))
+    .where(and(eq(channelOverride.channelId, ch.id), role.isDefault, sql`${channelOverride.deny} & ${Permission.ViewChannels} <> 0`));
+  return hidden ? null : ch.name;
 }
 
 const overrideBits = z.number().int().min(0).max(CHANNEL_PERMISSIONS).refine((n) => (n & ~CHANNEL_PERMISSIONS) === 0, "Unknown permission.");
@@ -199,7 +207,7 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
     const { channel: ch, authority } = await requireChannelManager(tx, channelId, userId);
     const [r] = await tx.select().from(role).where(and(eq(role.id, roleId), eq(role.communityId, ch.communityId)));
     if (!r) throw notFound("Role not found.");
-    // Same escalation rule as editing the role itself: only roles below you, only bits you hold.
+    // Same escalation rule as editing the role itself: only roles below you, only bits you hold in this channel.
     if (!canManageRole(authority, r.position, allow | deny) || !has(authority, allow | deny)) throw forbidden();
     if (allow === 0 && deny === 0) {
       await tx.delete(channelOverride).where(and(eq(channelOverride.channelId, channelId), eq(channelOverride.roleId, roleId)));
@@ -207,7 +215,8 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
       await tx.insert(channelOverride).values({ channelId, roleId, allow, deny })
         .onConflictDoUpdate({ target: [channelOverride.channelId, channelOverride.roleId], set: { allow, deny } });
     }
-    await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.permissions", targetId: ch.name, reason: r.name });
+    const targetId = await auditChannelName(tx, ch);
+    await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.permissions", targetId, reason: r.name });
     return ch.communityId;
   });
   await publish({ type: "channels.changed", communityId });

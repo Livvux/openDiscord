@@ -3,6 +3,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   foreignKey,
   index,
   integer,
@@ -113,7 +114,12 @@ export const channelOverride = pgTable(
     allow: integer("allow").notNull().default(0),
     deny: integer("deny").notNull().default(0),
   },
-  (t) => [primaryKey({ columns: [t.channelId, t.roleId] }), index("channel_override_role_idx").on(t.roleId)],
+  (t) => [
+    primaryKey({ columns: [t.channelId, t.roleId] }),
+    index("channel_override_role_idx").on(t.roleId),
+    // Only channel permission bits (view 1024, send 256, manage messages 16), never both allowed and denied.
+    check("channel_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~1296 = 0`),
+  ],
 );
 
 export const message = pgTable(
