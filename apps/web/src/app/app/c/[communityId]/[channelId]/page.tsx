@@ -39,7 +39,11 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         )}
         <div className="ml-auto">
           {has(view.authority, Permission.ManageChannels) && (
-            <ChannelSettingsDialog channel={channel} communityId={view.id} />
+            <ChannelSettingsDialog
+              channel={channel}
+              communityId={view.id}
+              canManagePermissions={has(view.authority, Permission.ManageRoles)}
+            />
           )}
         </div>
       </header>
@@ -48,8 +52,8 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         channel={channel}
         initialPage={page}
         currentUserId={user.id}
-        canSend={has(view.authority, Permission.SendMessages)}
-        canModerate={has(view.authority, Permission.ManageMessages)}
+        canSend={has(channel, Permission.SendMessages)}
+        canModerate={has(channel, Permission.ManageMessages)}
         mediaEnabled={mediaEnabled}
       />
     </>

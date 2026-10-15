@@ -23,11 +23,13 @@ const AUDIT_LABELS: Record<string, string> = {
   "role.assign": "gave a role to",
   "role.unassign": "removed a role from",
   "channel.delete": "deleted channel",
+  "channel.permissions": "changed permissions of channel",
 };
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
   if (e.action === "role.delete" || e.action === "channel.delete") return e.targetId;
+  if (e.action === "channel.permissions") return `#${e.targetId}`;
   if (e.action === "role.create" || e.action === "role.update") return null;
   return e.targetName ?? "a deleted user";
 }

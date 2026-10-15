@@ -82,3 +82,26 @@ export async function expectNoA11yViolations(page: Page) {
   const summary = results.violations.map((v) => `${v.id}: ${v.help} → ${v.nodes.map((n) => `${n.target.join(" ")} ${n.failureSummary ?? ""}`).join(" | ")}`);
   expect(summary).toEqual([]);
 }
+
+export async function createChannel(page: Page, name: string) {
+  await page.getByRole("button", { name: "Create channel" }).click();
+  await page.getByLabel("Channel name").fill(name);
+  await page.getByRole("dialog").getByRole("button", { name: "Create channel" }).click();
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+}
+
+/** Signs up a second person and joins the community through an invite path. */
+export async function joinAsNewUser(browser: Browser, name: string, invitePath: string) {
+  const page = await newUserPage(browser);
+  await signUp(page, name);
+  await page.goto(invitePath);
+  await page.getByRole("button", { name: "Accept invite" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await waitForLive(page);
+  return page;
+}
+
+/** Waits until the community's realtime stream is connected, so later events can't be missed. */
+export async function waitForLive(page: Page) {
+  await expect(page.locator('[data-realtime="open"]')).toBeAttached({ timeout: 10_000 });
+}

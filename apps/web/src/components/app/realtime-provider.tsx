@@ -118,5 +118,10 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
     return () => void listeners.current.delete(listener);
   }, []);
   const value = useMemo(() => ({ state, subscribe }), [state, subscribe]);
-  return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
+    return (
+    <RealtimeContext.Provider value={value}>
+      {/* Exposes the connection state to tests and assistive tooling without affecting layout. */}
+      <div data-realtime={state} className="contents">{children}</div>
+    </RealtimeContext.Provider>
+  );
 }

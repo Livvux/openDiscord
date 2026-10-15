@@ -100,6 +100,22 @@ export const channel = pgTable(
   (t) => [index("channel_community_idx").on(t.communityId)],
 );
 
+/** Per-channel allow/deny bits for one role (src/server/permissions.ts `channelAuthority`). */
+export const channelOverride = pgTable(
+  "channel_override",
+  {
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channel.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => role.id, { onDelete: "cascade" }),
+    allow: integer("allow").notNull().default(0),
+    deny: integer("deny").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.channelId, t.roleId] }), index("channel_override_role_idx").on(t.roleId)],
+);
+
 export const message = pgTable(
   "message",
   {

@@ -1,9 +1,10 @@
 "use client";
 
+import { LockIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export function ChannelLink({ href, name }: { href: string; name: string }) {
+export function ChannelLink({ href, name, isPrivate = false }: { href: string; name: string; isPrivate?: boolean }) {
   const active = usePathname() === href;
   return (
     <Link
@@ -13,8 +14,9 @@ export function ChannelLink({ href, name }: { href: string; name: string }) {
         active ? "bg-white/10 text-white" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
       }`}
     >
-      <span aria-hidden className="text-zinc-500">#</span>
+      {isPrivate ? <LockIcon aria-hidden className="size-3.5 text-zinc-500" /> : <span aria-hidden className="text-zinc-500">#</span>}
       <span className="truncate">{name}</span>
+      {isPrivate && <span className="sr-only">(private)</span>}
     </Link>
   );
 }

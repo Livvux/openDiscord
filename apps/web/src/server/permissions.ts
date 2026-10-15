@@ -14,12 +14,16 @@ export const Permission = {
   CreateInvites: 1 << 7,
   SendMessages: 1 << 8,
   ViewAuditLog: 1 << 9,
+  ViewChannels: 1 << 10,
 } as const;
 
 export type PermissionName = keyof typeof Permission;
 
 export const ALL_PERMISSIONS = Object.values(Permission).reduce((a, b) => a | b, 0);
-export const DEFAULT_MEMBER_PERMISSIONS = Permission.SendMessages | Permission.CreateInvites;
+export const DEFAULT_MEMBER_PERMISSIONS = Permission.ViewChannels | Permission.SendMessages | Permission.CreateInvites;
+
+/** The permissions a channel can allow or deny per role. */
+export const CHANNEL_PERMISSIONS = Permission.ViewChannels | Permission.SendMessages | Permission.ManageMessages;
 
 /** Human-readable labels for the role editor, in display order. */
 export const PERMISSION_LABELS: Record<PermissionName, string> = {
@@ -33,6 +37,7 @@ export const PERMISSION_LABELS: Record<PermissionName, string> = {
   CreateInvites: "Create invites",
   SendMessages: "Send messages",
   ViewAuditLog: "View audit log",
+  ViewChannels: "View channels",
 };
 
 export interface MemberAuthority {
@@ -58,7 +63,7 @@ export function resolveAuthority(
   };
 }
 
-export function has(authority: MemberAuthority, permission: number): boolean {
+export function has(authority: Pick<MemberAuthority, "permissions">, permission: number): boolean {
   return (authority.permissions & permission) === permission;
 }
 
@@ -80,4 +85,34 @@ export function canManageRole(actor: MemberAuthority, rolePosition: number, role
 
 export function permissionsFromNames(names: readonly string[]): number {
   return names.reduce((acc, n) => (Object.hasOwn(Permission, n) ? acc | Permission[n as PermissionName] : acc), 0);
+}
+
+export interface ChannelOverride {
+  roleId: string;
+  allow: number;
+  deny: number;
+}
+
+/**
+ * Applies a channel's role overrides: first the default role's, then the union of the member's other
+ * roles (allow wins over deny between roles, like Discord). Owners and administrators bypass overrides.
+ */
+export function channelAuthority(
+  base: MemberAuthority,
+  overrides: readonly ChannelOverride[],
+  defaultRoleId: string,
+  memberRoleIds: readonly string[],
+): MemberAuthority {
+  if (base.isOwner || has(base, Permission.Administrator)) return base;
+  let permissions = base.permissions;
+  const everyone = overrides.find((o) => o.roleId === defaultRoleId);
+  if (everyone) permissions = (permissions & ~everyone.deny) | everyone.allow;
+  let allow = 0;
+  let deny = 0;
+  for (const o of overrides) {
+    if (o.roleId === defaultRoleId || !memberRoleIds.includes(o.roleId)) continue;
+    allow |= o.allow;
+    deny |= o.deny;
+  }
+  return { ...base, permissions: (permissions & ~deny) | allow };
 }

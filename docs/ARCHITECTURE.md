@@ -38,7 +38,7 @@ pagination cursors. User ids come from Better Auth.
 
 - `community` (owner restricts user deletion) → `role` (bit-set permissions, position, one default role)
 - `member` (community, user) → `member_role`; removing a member removes its role assignments
-- `channel` → `message` (author cascade: deleting an account deletes its messages)
+- `channel` → `message` (author cascade: deleting an account deletes its messages), `channel_override` (role allow/deny bits)
 - `invite` (random 96-bit code, optional expiry and use limit), `ban`, `audit_log` (no message content)
 
 ## Permissions
@@ -49,6 +49,13 @@ role position. Moderation (kick, ban, assigning roles) requires the actor to ran
 target. Roles can only be created, edited or assigned below the actor's rank and only with
 permissions the actor holds. New roles from non-owners are inserted directly below the creator.
 All checks run on the server inside a transaction that locks the community row.
+
+Channels can override the view, send and delete-others'-messages bits per role (`channel_override`):
+the default role's override applies first, then the union of the member's other roles (allow beats
+deny). Owners and administrators bypass overrides. `requireChannel` is the single gate for channel
+access; a channel the member cannot view is "not found" everywhere (lists, message APIs, uploads,
+reports and the realtime stream). Editing overrides needs Manage channels and Manage roles and follows
+the same escalation rule as editing the role itself.
 
 ## Realtime
 

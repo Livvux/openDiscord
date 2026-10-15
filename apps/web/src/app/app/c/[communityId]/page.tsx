@@ -16,6 +16,7 @@ async function OpenFirstChannel({ params }: Pick<PageProps<"/app/c/[communityId]
   const { communityId } = await params;
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
+  // Every channel can be private; members without any visible channel still see the sidebar.
+  if (view.channels.length === 0) return <p className="m-auto px-6 text-center text-muted-foreground">There are no channels you can see yet.</p>;
   redirect(`/app/c/${view.id}/${view.channels[0].id}`);
-  return null;
 }
