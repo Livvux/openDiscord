@@ -296,8 +296,8 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
         if (identity) {
           const key = record(identity.keys.master_key), keyId = Object.values(record(key.keys))[0];
           master_keys[matrixId] = attach(String(keyId), key);
-          self_signing_keys[matrixId] = identity.keys.self_signing_key;
-          if (target === auth.userId) user_signing_keys[matrixId] = identity.keys.user_signing_key;
+          self_signing_keys[matrixId] = attach("", record(identity.keys.self_signing_key));
+          if (target === auth.userId) user_signing_keys[matrixId] = attach("", record(identity.keys.user_signing_key));
         }
       }
       return { device_keys, master_keys, self_signing_keys, user_signing_keys, failures: {} };

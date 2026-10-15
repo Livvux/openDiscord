@@ -129,6 +129,8 @@ describe("private encrypted conversations", () => {
     ]);
     const keys = publicKeys(bob, bDevice);
     await handleCryptoRequest(authB(), { kind: "upload", body: { device_keys: { ...keys, signatures: { ...keys.signatures, [matrix(outsider)]: { "ed25519:embedded-contact": "x".repeat(86) } } } } });
+    const signingKey = (usage: string, letter: string) => ({ user_id: matrix(bob), usage: [usage], keys: { [`ed25519:${letter.repeat(43)}`]: letter.repeat(43) }, signatures: { [matrix(bob)]: { "ed25519:own": "w".repeat(86) }, [matrix(outsider)]: { "ed25519:embedded-outsider": "z".repeat(86) } } });
+    await handleCryptoRequest(authB(), { kind: "signing", body: { master_key: signingKey("master", "k"), self_signing_key: signingKey("self_signing", "l"), user_signing_key: signingKey("user_signing", "m") } });
     const response = await handleCryptoRequest(authA(), { kind: "query", body: { device_keys: { [matrix(bob)]: [] } } });
     expect(JSON.stringify(response)).not.toContain(matrix(outsider));
     expect(JSON.stringify(response)).toContain(matrix(bob));
