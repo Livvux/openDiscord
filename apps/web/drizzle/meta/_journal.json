@@ -218,6 +218,13 @@
       "when": 1792099255384,
       "tag": "0030_voice_call_control",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792100779912,
+      "tag": "0031_voice_lifecycle_guards",
+      "breakpoints": true
     }
   ]
 }
