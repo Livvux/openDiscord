@@ -156,6 +156,8 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
     await audit(tx, actor, "community.transfer", id, `${reason} (new owner: ${target.id})`);
   });
   await publish({ type: "channels.changed", communityId: id });
+  // The previous owner may lose rights they relied on in voice.
+  afterAccessChange(id);
 }
 export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enabled: unknown, rawReason: unknown) {
   const id = parse(z.string().min(1).max(128), rawId);

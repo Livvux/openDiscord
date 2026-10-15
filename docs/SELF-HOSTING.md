@@ -59,9 +59,11 @@ Voice is optional and runs on [LiveKit](https://livekit.io) (Apache-2.0), self-h
    through Caddy, so no extra certificate or DNS name is needed.
 3. Start with the profile: `docker compose --profile voice up -d`.
 
-The app only hands out room tokens (10 minutes, microphone only, no data channel) after checking the
-*Join voice* and *Speak* permissions, and removes people from rooms when they are kicked, banned,
-suspended or lose access through roles or channel permissions. LiveKit never sees the database. Audio is
+The app only hands out room tokens (valid 60 seconds, just long enough to connect; microphone only, no
+data channel) after checking the *Join voice* and *Speak* permissions, and removes people from rooms
+when they are kicked, banned, suspended or lose access through roles or channel permissions (checked
+again a minute later to catch a token fetched just before the change). LiveKit's server API is not
+exposed through Caddy. LiveKit never sees the database. Audio is
 relayed by your server (an SFU) and not recorded; it is encrypted in transit (DTLS-SRTP) but not
 end-to-end. Without the LiveKit settings, voice channels can't be created and the UI hides the option.
 Networks that block UDP fall back to TCP 7881; a TURN server is not bundled.

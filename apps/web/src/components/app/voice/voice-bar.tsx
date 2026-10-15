@@ -22,6 +22,9 @@ export function VoiceBar() {
           {voice.channel.name}
         </Link>
       </div>
+      {voice.audioBlocked && (
+        <Button variant="secondary" size="sm" onClick={() => void voice.startAudio()}>Enable audio</Button>
+      )}
       <Button
         variant="ghost"
         size="icon-sm"

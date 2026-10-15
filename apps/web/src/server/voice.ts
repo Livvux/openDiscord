@@ -16,8 +16,13 @@ const apiSecret = process.env.LIVEKIT_API_SECRET;
 
 /** Voice is optional: without LiveKit settings, voice channels can't be created or joined. */
 export const voiceEnabled = Boolean(url && apiKey && apiSecret);
-/** Long enough to connect and reconnect; access is re-checked when a new token is requested. */
-const TOKEN_TTL_SECONDS = 10 * 60;
+/**
+ * Tokens can't be revoked, so they only need to live long enough to connect: once connected, LiveKit
+ * refreshes the session itself, and removals end it. A short lifetime bounds re-joins with a stale token.
+ */
+const TOKEN_TTL_SECONDS = 60;
+/** Reconcile again after a token issued just before an access change has certainly expired. */
+const RECHECK_AFTER_MS = (TOKEN_TTL_SECONDS + 5) * 1000;
 
 /** The server API can live on a private address (compose: http://livekit:7880); defaults to the public URL. */
 const apiUrl = process.env.LIVEKIT_API_URL || url?.replace(/^ws/, "http");
@@ -78,7 +83,10 @@ export async function reconcileVoice(communityId: string): Promise<void> {
     .where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
   const client = rooms();
   for (const ch of voiceChannels) {
-    const participants = await client.listParticipants(ch.id).catch(() => []);
+    const participants = await client.listParticipants(ch.id).catch((error: unknown) => {
+      console.error("[voice] could not list participants", ch.id, error);
+      return [];
+    });
     for (const p of participants) {
       const access = await loadChannelAuthority(db, ch.id, p.identity).catch(() => null);
       if (!access || !has(access.authority, Permission.Connect)) {
@@ -97,7 +105,13 @@ export async function closeVoiceRoom(channelId: string): Promise<void> {
   if (voiceEnabled) await rooms().deleteRoom(channelId).catch(() => {});
 }
 
-/** Fire-and-forget wrapper for mutations: log, never throw. */
+/**
+ * Fire-and-forget wrapper for mutations: log, never throw. Runs now and once more after the token
+ * lifetime, which catches someone who fetched a token just before losing access and connected after.
+ */
 export function afterAccessChange(communityId: string): void {
-  void reconcileVoice(communityId).catch((error: unknown) => console.error("[voice] reconcile failed", error));
+  if (!voiceEnabled) return;
+  const run = () => void reconcileVoice(communityId).catch((error: unknown) => console.error("[voice] reconcile failed", error));
+  run();
+  setTimeout(run, RECHECK_AFTER_MS).unref?.();
 }

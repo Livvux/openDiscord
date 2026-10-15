@@ -53,6 +53,7 @@ services:
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:
+      # Both must be set when using this profile; LiveKit refuses to start with an empty or short secret.
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro

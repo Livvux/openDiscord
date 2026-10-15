@@ -36,13 +36,13 @@ describe.runIf(voiceEnabled)("voice channels", () => {
     expect(await listMessages(member, voiceId)).toEqual({ messages: [], hasMore: false });
   });
 
-  it("issues a short-lived token for this room only, microphone only, no data channel", async () => {
+  it("issues a short-lived (60 s) token for this room only, microphone only, no data channel", async () => {
     const c = await claims(member, voiceId);
     expect(c.sub).toBe(member);
     expect(c.name).toBe("Member");
     expect(c.video).toMatchObject({ room: voiceId, roomJoin: true, canPublish: true, canPublishData: false });
     expect(c.video.canPublishSources).toEqual(["microphone"]);
-    expect(c.exp - Date.now() / 1000).toBeLessThanOrEqual(10 * 60 + 5);
+    expect(c.exp - Date.now() / 1000).toBeLessThanOrEqual(65);
   });
 
   it("enforces Connect and Speak per channel", async () => {

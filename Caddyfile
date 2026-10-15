@@ -11,6 +11,8 @@
 	encode zstd gzip
 	# Security headers, including HSTS, come from the app itself (apps/web/next.config.ts).
 	# Voice signalling (optional `voice` profile): wss://DOMAIN/livekit → LiveKit's port 7880.
+	# LiveKit's server API stays private: the app reaches it on the internal network.
+	respond /livekit/twirp/* 404
 	handle_path /livekit/* {
 		reverse_proxy livekit:7880
 	}
