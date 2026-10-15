@@ -110,12 +110,12 @@ They are deliberately outside the text MVP: they bring an SFU, TURN and UDP port
 
 | Requirement | Status | Notes / priority |
 | --- | --- | --- |
-| Configurable moderation tools | 🟡 | Kick, ban with reason, unban, message removal, roles, channel overrides; instance admins suspend accounts and communities |
+| Configurable moderation tools | ✅ | Kick, ban with reason, unban, message removal, pins, roles, channel overrides, AutoMod (blocked words, links); instance admins suspend accounts and communities |
 | Explanations for restrictions | 🟡 | Reasons recorded in the audit log; showing the reason to the affected person P2 |
 | Appeals | ❌ | P2 |
 | Role-based moderation access | ✅ | |
 | Blocking and reporting | ✅ | Reporting of messages and communities with an instance-admin queue; personal blocking (messages collapsed, mentions silent, not disclosed to the blocked person). DM refusal ships with DMs |
-| Anti-harassment, anti-phishing, anti-grooming | ❌ | P1 (link warnings, DM restrictions by default); requires reporting first |
+| Anti-harassment, anti-phishing, anti-grooming | 🟡 | Blocking, reporting and per-community AutoMod (blocked words, links) ✅; DM restrictions by default ship with DMs |
 | Minor protection and age safeguards | ❌ | **P1 legal review** for the official instance. Self-attested minimum age at sign-up as a baseline; no ID collection |
 | Rules for the official instance | ❌ | P2: published terms and community guidelines |
 
@@ -172,7 +172,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | mentions | Opt-in presence; per-community all/mentions/nothing |
-| Basic AutoMod | — | Per-community blocked words and link rules, audited |
+| Basic AutoMod | ✅ | Per-community blocked words and link rules, audited |
 
 ### P2 — important improvements
 

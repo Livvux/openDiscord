@@ -6,6 +6,8 @@ import { MembersManager } from "@/components/app/settings/members-manager";
 import { RolesEditor } from "@/components/app/settings/roles-editor";
 import { getCommunitySafety, listInvites } from "@/server/communities";
 import { SafetySettings } from "@/components/app/settings/safety-settings";
+import { AutomodSettings } from "@/components/app/settings/automod-settings";
+import { getAutomod } from "@/server/automod";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
@@ -31,6 +33,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "invites.resume": "resumed invites",
   "invites.auto_pause": "Raid protection paused invites",
   "community.safety": "changed safety settings",
+  "automod.update": "changed AutoMod rules",
+  "automod.block": "had a message blocked by AutoMod",
 };
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
@@ -38,7 +42,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (e.action === "role.delete") return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety"].includes(e.action)) return null;
+  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -73,13 +77,14 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
   const a = view.authority;
-  const [members, roles, invites, bans, audit, safety] = await Promise.all([
+  const [members, roles, invites, bans, audit, safety, automod] = await Promise.all([
     listMembers(user.id, view.id),
     listRoles(user.id, view.id),
     has(a, Permission.ManageCommunity) ? listInvites(user.id, view.id) : null,
     has(a, Permission.BanMembers) ? listBans(user.id, view.id) : null,
     has(a, Permission.ViewAuditLog) ? listAuditLog(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? getCommunitySafety(user.id, view.id) : null,
+    has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
   ]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
@@ -109,6 +114,11 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
       {safety && (
         <Section id="safety" title="Safety" description="Control who can join. Changes are recorded in the audit log.">
           <SafetySettings communityId={view.id} safety={safety} />
+        </Section>
+      )}
+      {automod && (
+        <Section id="automod" title="AutoMod" description="Refuses messages that break these rules before anyone sees them. Refusals appear in the audit log without the message.">
+          <AutomodSettings communityId={view.id} rules={automod} />
         </Section>
       )}
       {invites && (
