@@ -318,3 +318,19 @@ it("never signs after its own final grant consumer terminally retires an unexpec
   const [row] = await db.select().from(voiceSfuRoom).where(eq(voiceSfuRoom.callId, f.snapshot.callId));
   expect(row.status).toBe("retired");
 });
+
+it("shares four SDK requests across reservation cleanup, explicit creation and final grant cleanup", async () => {
+  const f = await fixture(), channelId = randomUUID(), callId = randomUUID();
+  try {
+    await db.insert(voiceSfuRoom).values(Array.from({ length: 12 }, (_, n) => ({ roomName: `voice:${channelId}:${callId}:${n + 1}`, channelId, callId, generation: n + 1, status: "retired" as const, retiredAt: new Date(0), lastAppTokenExpiry: new Date(0), nextAttemptAt: new Date(0) })));
+    vi.mocked(RoomServiceClient.prototype.createRoom).mockClear();
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockClear();
+    const token = await createBoundVoiceToken(f.auth, f.binding);
+    expect(token.roomName).toBe(`voice:${f.snapshot.channelId}:${f.snapshot.callId}:${f.snapshot.generation}`);
+    const requests = vi.mocked(RoomServiceClient.prototype.createRoom).mock.calls.length + vi.mocked(RoomServiceClient.prototype.deleteRoom).mock.calls.length + vi.mocked(RoomServiceClient.prototype.listParticipants).mock.calls.length;
+    expect(RoomServiceClient.prototype.createRoom).toHaveBeenCalledTimes(1);
+    expect(requests).toBeLessThanOrEqual(4);
+    expect(await db.$count(voiceSfuRoom, and(eq(voiceSfuRoom.channelId, channelId), eq(voiceSfuRoom.lastOutcome, "pending")))).toBeGreaterThanOrEqual(9);
+  } finally { await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, channelId)); }
+});
