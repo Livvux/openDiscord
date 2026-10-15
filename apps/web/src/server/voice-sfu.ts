@@ -1,6 +1,6 @@
 // Internal generation-room ownership only. SDK requests never run inside a SQL transaction.
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, gt, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { RoomServiceClient, ServerError, TrackSource } from "livekit-server-sdk";
 import { db } from "@/db";
 import { channel, dmDevice, session, userBlock } from "@/db/schema";
@@ -65,7 +65,7 @@ async function roomAuthority(name: string) {
     await tx.select({ id: voiceCall.id }).from(voiceCall).where(eq(voiceCall.id, owned.callId)).for("update");
     const members = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.callId, owned.callId), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCallMember.id)).limit(9);
     const ids = members.map(member => member.userId);
-    const blocked = ids.length > 1 ? await tx.select({ id: userBlock.blockerId }).from(userBlock).where(and(sql`${userBlock.blockerId} = any(${ids}::text[])`, sql`${userBlock.blockedId} = any(${ids}::text[])`)).limit(1) : [];
+    const blocked = ids.length > 1 ? await tx.select({ id: userBlock.blockerId }).from(userBlock).where(and(inArray(userBlock.blockerId, ids), inArray(userBlock.blockedId, ids))).limit(1) : [];
     const sessionExpiries: Date[] = [];
     const allowed: { identity: string; sources: TrackSource[] }[] = [];
     let valid = members.length > 0 && members.length <= 8 && !blocked.length;
@@ -156,7 +156,7 @@ export async function consumeVoiceRooms({ maxRooms = 4, maxRequests = 4, maxMill
               if (current?.canPublishData || current?.canUpdateMetadata || (current?.canPublish && allowed.sources.length === 0) || (current?.canPublishSources ?? []).some(source => !allowed.sources.includes(source))) {
                 if (!canRequest()) { retrySoon = true; break; }
                 result.requests++;
-                await client.updateParticipant(claim.roomName, participant.identity, { permission: { canSubscribe: true, canPublish: !!current?.canPublish && allowed.sources.length > 0, canPublishSources: (current?.canPublishSources ?? []).filter(source => allowed.sources.includes(source)), canPublishData: false, canUpdateMetadata: false } });
+                await client.updateParticipant(claim.roomName, participant.identity, { permission: { canSubscribe: !!current?.canSubscribe, canPublish: !!current?.canPublish && allowed.sources.length > 0, canPublishSources: (current?.canPublishSources ?? []).filter(source => allowed.sources.includes(source)), canPublishData: false, canUpdateMetadata: false } });
               }
             }
           }
