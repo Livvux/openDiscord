@@ -29,7 +29,7 @@ export function Nav() {
           </Link>
           <Link
             href="/sign-up"
-            className="rounded-full bg-brand-indigo px-4 py-2 font-medium transition hover:bg-indigo-400"
+            className="rounded-full bg-indigo-600 px-4 py-2 font-medium transition hover:bg-indigo-500"
           >
             Join the beta
           </Link>

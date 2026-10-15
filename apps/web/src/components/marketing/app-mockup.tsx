@@ -1,16 +1,16 @@
 // Static, decorative rendering of the opendiscord client for the landing page.
 const communities = ["oD", "🎮", "λ", "✳︎", "♪"];
 const channels = [
-  { name: "announcements", unread: false },
-  { name: "general", unread: false, active: true },
-  { name: "self-hosting", unread: true },
-  { name: "design", unread: false },
-  { name: "moderators", unread: false, locked: true },
+  { name: "announcements" },
+  { name: "general", active: true },
+  { name: "self-hosting" },
+  { name: "design" },
+  { name: "moderators" },
 ];
 const messages = [
-  { who: "Mara", color: "text-amber-300", time: "09:41", text: "Moved our study group off the old server. Everything came over in an evening." },
+  { who: "Mara", color: "text-amber-300", time: "09:41", text: "Set up our study group in an evening. Invite links did the rest." },
   { who: "jonas", color: "text-sky-300", time: "09:42", text: "Same release on my own box. docker compose up and it was running 🚀" },
-  { who: "Ife", color: "text-emerald-300", time: "09:44", text: "Private #moderators channel works great. Outsiders can't even see it exists." },
+  { who: "Ife", color: "text-emerald-300", time: "09:44", text: "Kick and ban reasons land in the audit log. Our mods love it." },
   { who: "Mara", color: "text-amber-300", time: "09:45", text: "And exporting my data is one click. As it should be." },
 ];
 
@@ -33,7 +33,7 @@ export function AppMockup() {
             <span
               key={c}
               className={`grid size-10 place-items-center rounded-2xl font-display text-sm font-semibold transition ${
-                i === 0 ? "rounded-xl bg-brand-indigo text-white" : "bg-white/5 text-zinc-300"
+                i === 0 ? "rounded-xl bg-indigo-600 text-white" : "bg-white/5 text-zinc-300"
               }`}
             >
               {c}
@@ -47,12 +47,11 @@ export function AppMockup() {
             <p
               key={ch.name}
               className={`flex items-center gap-1.5 rounded-md px-2 py-1 ${
-                ch.active ? "bg-white/10 text-white" : ch.unread ? "text-zinc-100" : "text-zinc-500"
+                ch.active ? "bg-white/10 text-white" : "text-zinc-500"
               }`}
             >
-              <span className="text-zinc-600">{ch.locked ? "🔒" : "#"}</span>
+              <span className="text-zinc-600">#</span>
               {ch.name}
-              {ch.unread && <span className="ml-auto size-1.5 rounded-full bg-white" />}
             </p>
           ))}
         </div>

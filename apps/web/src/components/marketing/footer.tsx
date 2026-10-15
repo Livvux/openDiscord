@@ -13,7 +13,7 @@ export function Footer() {
           Join the invite-only beta, or help fund development and hosting.
         </p>
         <div className="reveal mt-10 flex flex-wrap justify-center gap-3">
-          <Link href="/sign-up" className="rounded-full bg-brand-indigo px-6 py-3 font-medium transition hover:bg-indigo-400">
+          <Link href="/sign-up" className="rounded-full bg-indigo-600 px-6 py-3 font-medium transition hover:bg-indigo-500">
             Join the beta →
           </Link>
           <a href={SPONSOR_URL} className="rounded-full border border-white/15 bg-white/5 px-6 py-3 font-medium transition hover:bg-white/10">

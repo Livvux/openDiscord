@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectNoA11yViolations } from "./helpers";
 
 test("landing page renders without errors and links to sign-up", async ({ page }) => {
   const errors: string[] = [];
@@ -11,6 +12,8 @@ test("landing page renders without errors and links to sign-up", async ({ page }
   // Tabs in the install panel swap content.
   await page.getByRole("tab", { name: "Hosted" }).click();
   await expect(page.getByRole("tabpanel")).toContainText("Start a community");
+
+  await expectNoA11yViolations(page);
 
   const noHorizontalScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(noHorizontalScroll).toBe(true);

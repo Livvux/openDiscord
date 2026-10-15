@@ -1,22 +1,22 @@
 const marquee = [
-  "Text channels", "Invite links", "Roles", "Private channels", "Kick & ban", "Message reports",
-  "Image attachments", "Unread indicators", "Edit & delete", "Data export", "Account deletion", "Instance admin",
+  "Text channels", "Invite links", "Roles", "Kick & ban", "Audit log", "Realtime updates",
+  "Edit & delete", "Two-factor auth", "Passkeys", "Data export", "Account deletion", "Backups",
 ];
 
 const features = [
   {
     title: "Real-time, written down first",
-    body: "Every message lands in PostgreSQL before anyone sees it. Reconnects replay what you missed, so nothing acknowledged is ever lost.",
+    body: "Every message lands in PostgreSQL before anyone sees it. After a dropped connection, the client catches up from the database.",
     span: "md:col-span-4",
   },
   {
-    title: "Private means private",
-    body: "Outsiders can't read, subscribe to or even discover private channels. That rule is enforced on the server and covered by tests.",
+    title: "Invite-only by default",
+    body: "Outsiders can't read, subscribe to or even discover a community. That rule is enforced on the server and covered by tests.",
     span: "md:col-span-2",
   },
   {
     title: "Moderation built in",
-    body: "Owner, moderator and member roles, kick and ban, message reports, upload quotas and rate limits from day one.",
+    body: "Roles with a clear hierarchy, kick and ban with reasons, an audit log and rate limits from day one.",
     span: "md:col-span-2",
   },
   {
@@ -59,7 +59,7 @@ export function Features() {
               key={f.title}
               className={`reveal group rounded-3xl border border-brand-mist bg-white p-8 shadow-[0_1px_0_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:border-brand-indigo/40 ${f.span}`}
             >
-              <p className="font-mono text-xs text-slate-400">{String(i + 1).padStart(2, "0")}</p>
+              <p className="font-mono text-xs text-slate-500">{String(i + 1).padStart(2, "0")}</p>
               <h3 className="mt-6 text-xl font-semibold">{f.title}</h3>
               <p className="mt-3 leading-relaxed text-slate-600">{f.body}</p>
             </article>

@@ -21,7 +21,8 @@ Zwei überlappende offene Gesprächsringe; Gradient-Version auf primären Marken
 |---|---|---|
 | Charcoal | `#0F172A` | Text, dunkle Oberflächen |
 | Blue | `#3478F6` | Einfarbiger Teil `Discord` der Wortmarke |
-| Indigo | `#6366F1` | Primär-Akzent, Buttons |
+| Indigo | `#6366F1` | Primär-Akzent, Flächen ohne Text |
+| Indigo 600 | `#4F46E5` | Buttons und Flächen mit weißem Text (Kontrast ≥ 4,5:1, WCAG AA) |
 | Cyan | `#06B6D4` | Sekundär-Akzent |
 | Mint | `#49DDC0` | Logo-Symbol, freundlicher Akzent |
 | Mist | `#E2E8F0` | Trennlinien, helle Oberflächen |

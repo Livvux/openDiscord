@@ -40,7 +40,7 @@ export function InstallPanel() {
           </button>
         ))}
       </div>
-      <pre role="tabpanel" className="overflow-x-auto rounded-xl bg-brand-charcoal p-5 font-mono text-[13px] leading-7">
+      <pre role="tabpanel" tabIndex={0} className="overflow-x-auto rounded-xl bg-brand-charcoal p-5 font-mono text-[13px] leading-7">
         {tabs[tab].map(([mark, text, note]) => (
           <div key={text}>
             <span className={mark === "✓" ? "text-brand-mint" : "text-brand-cyan"}>{mark}</span>{" "}
