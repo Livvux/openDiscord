@@ -36,6 +36,27 @@
       "when": 1792058589588,
       "tag": "0004_rapid_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792060250815,
+      "tag": "0005_closed_alpha_and_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792061266261,
+      "tag": "0006_attachment_linked_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792063183520,
+      "tag": "0007_auth_rate_limit",
+      "breakpoints": true
     }
   ]
 }

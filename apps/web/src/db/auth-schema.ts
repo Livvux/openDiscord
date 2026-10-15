@@ -21,6 +21,11 @@ export const user = pgTable("user", {
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
   twoFactorEnabled: boolean("two_factor_enabled").default(false),
+  approvalStatus: text("approval_status", {
+    enum: ["approved", "pending", "rejected"],
+  })
+    .default("approved")
+    .notNull(),
 });
 
 export const session = pgTable(
