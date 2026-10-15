@@ -11,6 +11,8 @@ import { authRateLimitStore } from "@/server/rate-limit-store";
 import { AccountBlocked, assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
 import { sessionDeviceLabel } from "./session-device";
+import { REGISTRATION_HEADER, registrationAttestation } from "./registration-policy";
+import { getMinimumAge } from "@/server/operator-policy";
 
 const NAME_MAX = 64;
 const APP_NAME = "openDiscord";
@@ -68,6 +70,12 @@ export const auth = betterAuth({
   advanced: { ipAddress: { trustedProxies } },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === "/sign-up/email") {
+        const minimumAge = getMinimumAge();
+        if (ctx.headers?.get(REGISTRATION_HEADER) !== registrationAttestation(minimumAge)) {
+          throw new APIError("BAD_REQUEST", { message: `Confirm that you are at least ${minimumAge} and accept the current registration policy.` });
+        }
+      }
       if (ctx.path !== "/change-email") return;
       // Better Auth 1.7's sensitive-session middleware checks revocation, not freshness.
       const current = await getAuthoritativeSessionFromCtx(ctx);

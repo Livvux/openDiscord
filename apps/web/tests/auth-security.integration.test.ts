@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 // Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -15,7 +16,7 @@ describe("two-factor secrets", () => {
   });
 
   it("stores the TOTP secret and backup codes encrypted, not as issued", async () => {
-    const res = await auth.api.signUpEmail({ body: { email, password, name: "Secret Keeper" }, returnHeaders: true });
+    const res = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Secret Keeper" }, returnHeaders: true });
     const headers = new Headers({ cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] });
     const enabled = await auth.api.enableTwoFactor({ body: { password }, headers });
     if (!("totpURI" in enabled)) throw new Error("expected TOTP setup");
@@ -29,7 +30,7 @@ describe("two-factor secrets", () => {
 
   it("rejects display names that are empty or too long", async () => {
     await expect(
-      auth.api.signUpEmail({ body: { email: `x-${email}`, password, name: "x".repeat(65) } }),
+      auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email: `x-${email}`, password, name: "x".repeat(65) } }),
     ).rejects.toThrow(/Display names/);
   });
 });
@@ -40,7 +41,7 @@ describe("session metadata", () => {
     try {
       const result = await auth.api.signUpEmail({
         body: { email: address, password, name: "Device privacy" },
-        headers: new Headers({ "user-agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.1 unique-hardware", "x-forwarded-for": "192.0.2.10" }),
+        headers: new Headers({ ...REGISTRATION_HEADERS, "user-agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.1 unique-hardware", "x-forwarded-for": "192.0.2.10" }),
       });
       const row = await db.query.session.findFirst({ where: (s, { eq }) => eq(s.userId, result.user.id) });
       expect(row?.ipAddress).toBeNull();

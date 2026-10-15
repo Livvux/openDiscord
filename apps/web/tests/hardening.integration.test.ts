@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 // Regression tests for the security review findings. Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -71,7 +72,7 @@ describe("caps", () => {
 
 describe("realtime stream access", () => {
   async function headersFor(email: string) {
-    const res = await auth.api.signUpEmail({ body: { email, password: "correct horse battery", name: "Streamer" }, returnHeaders: true });
+    const res = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password: "correct horse battery", name: "Streamer" }, returnHeaders: true });
     return { id: res.response.user.id, headers: new Headers({ cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] }) };
   }
   const ctx = (id: string) => ({ params: Promise.resolve({ communityId: id }) });
@@ -109,7 +110,7 @@ describe("realtime stream access", () => {
 describe("erasure", () => {
   it("unlinks audit entries about a deleted account", async () => {
     const email = `gone-${randomUUID()}@example.test`;
-    const res = await auth.api.signUpEmail({ body: { email, password: "correct horse battery", name: "Gone" }, returnHeaders: true });
+    const res = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password: "correct horse battery", name: "Gone" }, returnHeaders: true });
     const gone = res.response.user.id;
     await join(gone);
     await kickMember(owner, communityId, gone, "bye");

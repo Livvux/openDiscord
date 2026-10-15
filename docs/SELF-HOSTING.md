@@ -177,3 +177,20 @@ scan deadline, caps replies at 4 KiB, and rejects infected files, unavailable sc
 and timeouts. With no host configured, scanning is disabled. Do not publish clamd's unauthenticated
 TCP port. Malware scanning reduces risk; it cannot guarantee a file is harmless. Image re-encoding,
 private storage, permission checks and forced file downloads remain in effect with either backend.
+
+
+### Registration and public operator policies
+
+The default minimum age is 16, as selected for the official instance. Set `MINIMUM_AGE` (13–99)
+to your own documented policy and obtain legal advice appropriate to your operation. Signup requires
+an explicit current-policy self-attestation in the UI and server endpoint contract; no birth
+date, identity document or age-verification claim is stored. This is a self-attestation, not proof of age.
+API clients creating human accounts must pass `x-opendiscord-registration` with the value generated
+by `registrationAttestation(minimumAge)` in `src/lib/registration-policy.ts`. Existing users are not
+silently re-attested when the policy changes.
+
+For public legal pages set all of `OPERATOR_NAME`, `OPERATOR_ADDRESS`, `OPERATOR_COUNTRY`, and
+`OPERATOR_EMAIL`. The official operator defaults apply only when the configured public origin is
+exactly opendiscord.app. Other domains never inherit lk media's identity. Review the notice for your
+actual infrastructure, purposes, jurisdiction and retention. Technical policies and generated pages
+do not constitute a professional legal assessment or establish regulatory compliance.

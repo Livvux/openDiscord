@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { REGISTRATION_HEADER, registrationAttestation } from "../src/lib/registration-policy";
 
 export const PASSWORD = "correct horse battery";
 let ipCounter = 0;
@@ -29,7 +30,7 @@ export async function newUserPage(browser: Browser) {
  * Cloudflare's documented Turnstile test token. The E2E server runs with Cloudflare's always-pass test
  * keys (playwright.config.ts), so API sign-ups send this instead of solving a challenge.
  */
-export const CAPTCHA_HEADER = { "x-captcha-response": "XXXX.DUMMY.TOKEN.XXXX" };
+export const CAPTCHA_HEADER = { "x-captcha-response": "XXXX.DUMMY.TOKEN.XXXX", [REGISTRATION_HEADER]: registrationAttestation(Number(process.env.MINIMUM_AGE ?? 16)) };
 
 export function uniqueEmail(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
@@ -43,6 +44,7 @@ export async function signUp(page: Page, name: string, path = "/sign-up") {
   await form.getByLabel("Display name").fill(name);
   await form.getByLabel("Email").fill(email);
   await form.getByLabel("Password").fill(PASSWORD);
+  await form.getByRole("checkbox", { name: /I am at least/ }).check();
   // Wait for the Turnstile widget (test key: passes without interaction) to hand out its token.
   await expect(form.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
   await form.getByRole("button", { name: "Create account" }).click();

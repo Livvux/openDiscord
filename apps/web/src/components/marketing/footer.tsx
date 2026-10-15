@@ -27,6 +27,9 @@ export function Footer() {
           <nav aria-label="Footer" className="flex flex-wrap justify-center gap-5">
             <a href={GITHUB_URL} className="hover:text-white">GitHub</a>
             <a href={`${GITHUB_URL}/blob/main/LICENSE`} className="hover:text-white">AGPL-3.0</a>
+            <Link href="/privacy" className="hover:text-white">Privacy</Link>
+            <Link href="/terms" className="hover:text-white">Terms</Link>
+            <Link href="/imprint" className="hover:text-white">Imprint</Link>
             <Link href="/sign-in" className="hover:text-white">Sign in</Link>
           </nav>
         </div>
