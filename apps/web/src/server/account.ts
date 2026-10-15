@@ -2,16 +2,18 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { attachment, auditLog, ban, banAppeal, channel, community, member, message, passkey, session, user } from "@/db/schema";
+import { exportDirectData } from "./direct-messages";
 import { listBlocked } from "./blocks";
 import { notFound } from "./errors";
 
-/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. */
-export const EXPORT_FORMAT_VERSION = 5;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. */
+export const EXPORT_FORMAT_VERSION = 6;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
 
 export interface UserExport {
+  privateMessages: Awaited<ReturnType<typeof exportDirectData>>;
   format: "opendiscord.user-export";
   version: number;
   exportedAt: string;
@@ -68,6 +70,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
     .map(({ id, contentType, filename, size, width, height, createdAt }) => ({ id, contentType, filename, size, width, height, url: `/api/attachments/${id}`, createdAt: createdAt.toISOString() }));
 
   return {
+    privateMessages: await exportDirectData(userId),
     format: "opendiscord.user-export",
     version: EXPORT_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
