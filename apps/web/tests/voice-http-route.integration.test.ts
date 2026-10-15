@@ -1,3 +1,6 @@
+import { TokenVerifier } from "livekit-server-sdk";
+import { createVoiceHttpClient } from "@/lib/voice/http-client";
+import { PublicServicePeer } from "./fixtures/voice-service-peer";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
@@ -32,7 +35,8 @@ describe("actual cookie-authenticated Voice route", () => {
   it("denies supported non-POST methods without caching", async () => { for (const handler of [GET, HEAD, PUT, PATCH, DELETE, OPTIONS]) await code(handler(), 405, "method_not_allowed"); });
   it("requires origin, JSON, real session and rejects alternate body authority", async () => {
     const a = await account();
-    for (const headers of [{ origin: "https://foreign.test" }, { origin: "" }, { "sec-fetch-site": "cross-site" }, { "content-type": "text/plain" }]) await code(await POST(request({ action: "join", input: a.input }, { ...a.headers, ...headers })), 403, "forbidden");
+    const rejectedHeaders: Record<string, string>[] = [{ origin: "https://foreign.test" }, { origin: "" }, { "sec-fetch-site": "cross-site" }, { "content-type": "text/plain" }];
+    for (const headers of rejectedHeaders) await code(await POST(request({ action: "join", input: a.input }, { ...a.headers, ...headers })), 403, "forbidden");
     await code(await POST(request({ action: "join", input: a.input }, { "x-user-id": a.actual.id, "x-session-id": a.actual.sessionId, "x-dm-device": a.anchor.id, "x-dm-device-secret": a.anchor.secret })), 401, "unauthorized");
     await code(await POST(request({ action: "join", input: a.input, userId: a.actual.id }, a.headers)), 400, "invalid");
     await code(await POST(request({ action: "join", input: { ...a.input, sessionId: a.actual.sessionId } }, a.headers)), 400, "invalid");
@@ -47,6 +51,18 @@ describe("actual cookie-authenticated Voice route", () => {
     const sync = await POST(request({ action: "crypto", input: { ...binding, request: { kind: "sync" } } }, headers)); expect(sync.status).toBe(200); expect(await sync.json()).toMatchObject({ events: [], oneTimeKeys: { signed_curve25519: 0 } });
     await code(await POST(request({ action: "heartbeat", input: binding }, { ...headers, "x-voice-secret": "c".repeat(64) })), 403, "forbidden");
     await code(await POST(request({ action: "heartbeat", input: binding }, { ...headers, cookie: other.cookie })), 403, "forbidden");
+    // The adapter only supplies this freshly-created test account's cookie and browser Origin.
+    // Auth, registered anchors, native request IDs and the real DB service remain unchanged.
+    const client = createVoiceHttpClient({ fetch: async (path, init) => POST(new Request(`${origin}${path}`, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), origin, cookie: a.cookie } })) });
+    const current = await client.heartbeat(binding, a.input.enrollmentSecret, new AbortController().signal);
+    const peer = await PublicServicePeer.open({ snapshot: current, transport: ({ binding, request, signal }) => client.crypto(binding, request, a.input.enrollmentSecret, signal) });
+    try { await peer.query(); await peer.sync(); } finally { peer.close(); }
+    const grant = await client.token(binding, a.input.enrollmentSecret, new AbortController().signal);
+    const claims = await new TokenVerifier(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!).verify(grant.token, 0);
+    expect(claims.sub).toBe(current.participantIdentity);
+    expect(claims.video).toMatchObject({ room: `voice:${current.channelId}:${current.callId}:${current.generation}`, roomJoin: true, canPublishData: false });
+    expect(claims.exp! * 1000).toBeLessThanOrEqual(Date.parse(grant.expiresAt));
+    expect(claims.exp! * 1000).toBeGreaterThan(Date.now());
     const left = await POST(request({ action: "leave", input: binding }, headers)); expect(left.status).toBe(200);
     await code(await POST(request({ action: "crypto", input: { ...binding, request: { kind: "sync" } } }, headers)), 403, "forbidden");
   });

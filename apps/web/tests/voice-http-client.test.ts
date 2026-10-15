@@ -25,3 +25,28 @@ describe("bounded voice HTTP transport", () => {
     expect(request).not.toHaveBeenCalled();
   });
 });
+
+describe("Voice HTTP wire identity and cancellation", () => {
+  it("keeps exact native body and native/transport IDs across an explicit caller retry", async () => {
+    const request = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ one_time_keys: {}, failures: {} }), { headers: { "Content-Type": "application/json" } }));
+    const client = createVoiceHttpClient({ fetch: request }), signal = new AbortController().signal;
+    const binding = { callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 7 };
+    const work = { kind: "claim" as const, body: { one_time_keys: { "@voice_peer:opendiscord.local": { device: "signed_curve25519" } } }, requestId: "transport-original", nativeRequestId: "native-original" };
+    await client.crypto(binding, work, "a".repeat(64), signal); await client.crypto(binding, work, "a".repeat(64), signal);
+    const first = request.mock.calls[0][1], second = request.mock.calls[1][1];
+    expect(first?.body).toBe(second?.body);
+    expect(JSON.parse(String(first?.body))).toEqual({ action: "crypto", input: { ...binding, request: work } });
+    expect(first?.credentials).toBe("same-origin"); expect(first?.cache).toBe("no-store"); expect(first?.redirect).toBe("error");
+  });
+  it("cancels a stalled response reader at its deadline without retry", async () => {
+    const cancel = vi.fn();
+    const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(new ReadableStream({ cancel }), { headers: { "Content-Type": "application/json" } }));
+    const client = createVoiceHttpClient({ fetch: request, timeoutMs: 5 });
+    await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "timeout" });
+    expect(cancel).toHaveBeenCalledOnce(); expect(request).toHaveBeenCalledOnce();
+  });
+  it("rejects a forged status/code combination as protocol failure", async () => {
+    const client = createVoiceHttpClient({ fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ code: "conflict" }), { status: 403 })) });
+    await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "protocol" });
+  });
+});
