@@ -53,9 +53,14 @@ jobs:
           pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
       - run: pnpm build
       - name: Start LiveKit (dev mode)
-        run: docker run -d --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+        id: livekit
+        run: docker run -d --name opendiscord-ci-livekit --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
       - run: pnpm --filter web exec playwright install --with-deps chromium
       - run: pnpm --filter web test:e2e
+      - name: LiveKit advertised address and listeners
+        if: always() && steps.livekit.outcome == 'success'
+        # Deliberately omit participant, SDP, ICE credential and token logs.
+        run: docker logs opendiscord-ci-livekit 2>&1 | sed -n '/starting LiveKit server/p'
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-traces, path: apps/web/test-results }

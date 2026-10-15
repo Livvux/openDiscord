@@ -29,7 +29,9 @@ test.describe("native encrypted-only worker feasibility", () => {
     });
     await page.goto("/voice-proof/index");
     // Routed fixture documents have no network address-space evidence; allow this test origin to reach its local SFU.
-    await page.context().grantPermissions(["local-network-access"], { origin: new URL(page.url()).origin });
+    await page.context().grantPermissions(["local-network-access", "microphone"], { origin: new URL(page.url()).origin });
+    // Match the real voice flow's capture permission; otherwise Chromium masks local ICE candidates with mDNS.
+    await page.evaluate(() => navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => stream.getTracks().forEach((track) => track.stop())));
     await expect.poll(() => page.evaluate(() => !!window.voiceProof)).toBe(true);
   });
 
