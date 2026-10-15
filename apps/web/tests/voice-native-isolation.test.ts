@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 type JsonObject = Record<string, unknown>;
-type Fixture = { machine: C.OlmMachine; user: C.UserId; device: C.DeviceId; upload: JsonObject };
+type Fixture = { machine: C.OlmMachine; user: string; device: string; upload: JsonObject };
 
 async function fixture(): Promise<Fixture> {
-  const user = new C.UserId(`@${randomUUID()}:opendiscord.invalid`);
-  const device = new C.DeviceId(randomUUID());
-  const machine = await C.OlmMachine.initialize(user, device, undefined, undefined, logger);
+  const user = `@${randomUUID()}:opendiscord.invalid`;
+  const device = randomUUID();
+  const machine = await C.OlmMachine.initialize(new C.UserId(user), new C.DeviceId(device), undefined, undefined, logger);
   machine.roomKeyForwardingEnabled = false;
   machine.roomKeyRequestsEnabled = false;
   expect(machine.roomKeyForwardingEnabled).toBe(false);
@@ -23,13 +23,13 @@ async function fixture(): Promise<Fixture> {
 
 async function connect(sender: Fixture, recipient: Fixture) {
   for (const [source, target] of [[sender, recipient], [recipient, sender]]) {
-    const request = source.machine.queryKeysForUsers([target.user]);
+    const request = source.machine.queryKeysForUsers([new C.UserId(target.user)]);
     await source.machine.markRequestAsSent(request.id, request.type, JSON.stringify({
       device_keys: { [target.user.toString()]: { [target.device.toString()]: target.upload.device_keys } },
       failures: {}, master_keys: {}, self_signing_keys: {}, user_signing_keys: {},
     }));
   }
-  const claim = await sender.machine.getMissingSessions([recipient.user]);
+  const claim = await sender.machine.getMissingSessions([new C.UserId(recipient.user)]);
   if (!claim) throw new Error("Fixture claim missing");
   const keys = recipient.upload.one_time_keys as JsonObject;
   const first = Object.entries(keys)[0];
@@ -40,7 +40,7 @@ async function connect(sender: Fixture, recipient: Fixture) {
 }
 
 async function inject(sender: Fixture, recipient: Fixture, type: string, content: JsonObject, trust: C.TrustRequirement, nativeEnvelope?: unknown) {
-  const device = await sender.machine.getDevice(recipient.user, recipient.device);
+  const device = await sender.machine.getDevice(new C.UserId(recipient.user), new C.DeviceId(recipient.device));
   if (!device) throw new Error("Fixture device missing");
   const encrypted: unknown = nativeEnvelope ?? JSON.parse(await device.encryptToDeviceEvent(type, content, C.CollectStrategy.allDevices()));
   // Purpose and wrapper metadata are application assertions, not native dispatch boundaries.
@@ -69,7 +69,7 @@ describe("native shared-machine isolation prerequisite (characterization, not pr
       const room = new C.RoomId(`!${randomUUID()}:opendiscord.invalid`);
       const settings = new C.EncryptionSettings();
       settings.sharingStrategy = C.CollectStrategy.allDevices();
-      const shares = await sender.machine.shareRoomKey(room, [recipient.user], settings);
+      const shares = await sender.machine.shareRoomKey(room, [new C.UserId(recipient.user)], settings);
       const share = shares[0];
       if (!share) throw new Error("Fixture room share missing");
       const body = JSON.parse(share.body) as { messages: Record<string, Record<string, unknown>> };
@@ -118,7 +118,7 @@ describe("native shared-machine isolation prerequisite (characterization, not pr
     try {
       await connect(sender, recipient);
       const before = (await recipient.machine.roomKeyCounts()).total;
-      const peer = await recipient.machine.getDevice(sender.user, sender.device);
+      const peer = await recipient.machine.getDevice(new C.UserId(sender.user), new C.DeviceId(sender.device));
       expect(peer?.isVerified()).toBe(false);
       const content: JsonObject = type === "m.room_key_request"
         ? { action: "request", requesting_device_id: sender.device.toString(), request_id: "fixture-request", body: { algorithm: "m.megolm.v1.aes-sha2", room_id: "!fixture:opendiscord.invalid", sender_key: "fixture", session_id: "fixture" } }
@@ -130,8 +130,8 @@ describe("native shared-machine isolation prerequisite (characterization, not pr
       expect(result.summary).toHaveLength(1);
       expect(result.outgoing.filter((request) => ["m.room_key", "m.forwarded_room_key", "m.secret.send"].includes(request.eventType ?? ""))).toHaveLength(0);
       expect((await recipient.machine.roomKeyCounts()).total - before).toBe(0);
-      expect((await recipient.machine.getDevice(sender.user, sender.device))?.isVerified()).toBe(false);
-      expect(recipient.machine.getVerification(sender.user, "foreign-call-flow")).toBeUndefined();
+      expect((await recipient.machine.getDevice(new C.UserId(sender.user), new C.DeviceId(sender.device)))?.isVerified()).toBe(false);
+      expect(recipient.machine.getVerification(new C.UserId(sender.user), "foreign-call-flow")).toBeUndefined();
     } finally { sender.machine.close(); recipient.machine.close(); }
   });
 
