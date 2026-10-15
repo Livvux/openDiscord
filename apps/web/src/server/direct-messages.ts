@@ -208,8 +208,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     if (data.kind === "sync") {
       const events = await tx.select().from(dmMailbox).where(eq(dmMailbox.deviceId, own.id)).orderBy(asc(dmMailbox.id)).limit(100);
       const keys = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, own.id), or(eq(dmKey.fallback, true), eq(dmKey.used, false))));
-      const conversations = await tx.select().from(dmConversation).where(and(ne(dmConversation.status, "rejected"), or(eq(dmConversation.firstId, auth.userId), eq(dmConversation.secondId, auth.userId))));
-      return { cursor: String(events.at(-1)?.id ?? 0), events: events.map((e) => e.event), users: [...new Set([auth.userId, ...conversations.flatMap((r) => [r.firstId, r.secondId])])], oneTimeKeys: { signed_curve25519: keys.filter((k) => !k.fallback && !k.used).length }, unusedFallbackKeys: keys.some((k) => k.fallback && !k.used) ? ["signed_curve25519"] : [] };
+      return { cursor: String(events.at(-1)?.id ?? 0), events: events.map((e) => e.event), oneTimeKeys: { signed_curve25519: keys.filter((k) => !k.fallback && !k.used).length }, unusedFallbackKeys: keys.some((k) => k.fallback && !k.used) ? ["signed_curve25519"] : [] };
     }
     if (data.kind === "ack") { await tx.delete(dmMailbox).where(and(eq(dmMailbox.deviceId, own.id), lte(dmMailbox.id, Number(data.cursor)))); return {}; }
     const body = data.body;

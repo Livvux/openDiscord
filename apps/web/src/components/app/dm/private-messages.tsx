@@ -58,8 +58,9 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
       await client.acceptStartedVerifications();
       const own = await client.devices(userId);
       const peer = current && !current.blocked && current.status === "accepted" ? await client.devices(current.peerId) : [];
+      if (selection !== selectedRef.current) return;
       setTrusted([...own, ...peer]);
-      setVerifications(client.verifications());
+      setVerifications(client.verifications().filter((v) => v.userId === userId || v.userId === current?.peerId));
       if (current && selection === selectedRef.current) {
         const timeline = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${current.id}`);
         const all = [...new Map([...history.current, ...timeline.messages].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -71,9 +72,9 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
     finally { loading.current = false; }
   }, [client, userId, target]);
   useEffect(() => {
-    void refresh();
+    const initial = window.setTimeout(() => { void refresh(); }, 0);
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
   }, [refresh, selected]);
 
   async function run(fn: () => Promise<void>) {
@@ -83,15 +84,17 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
   }
   async function request(targetId: string) {
     const response = await dmFetch<{ id: string }>("/api/dm", { action: "request", target: targetId });
-    setSelected(response.id); setSecurity(true);
+    selectedRef.current = response.id; setSelected(response.id); setVerifications([]); setTrusted([]); setSecurity(true);
   }
   async function backups() { const data = await dmFetch<{ backups: typeof backupList }>("/api/dm/backups"); setBackupList(data.backups); }
   async function loadEarlier() {
     if (!client || !active || !envelopes.length) return;
     const data = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${active.id}&before=${envelopes[0].id}`);
     const all = [...data.messages, ...envelopes];
+    const decoded = await client.decrypt(all, active.id, active.peerId);
+    if (selectedRef.current !== active.id) return;
     history.current = all;
-    setMessages(await client.decrypt(all, active.id, active.peerId)); setEnvelopes(all); setHasMore(data.hasMore);
+    setMessages(decoded); setEnvelopes(all); setHasMore(data.hasMore);
   }
   const peersReady = active && trusted.some((d) => d.userId === active.peerId) && trusted.every((d) => d.verified);
   return <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -100,7 +103,7 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
       <Button variant="outline" className="mb-3" onClick={() => { setSecurity((v) => !v); void run(backups); }}>Devices and recovery</Button>
       {target && !conversations.some((c) => c.peerId === target) && <Button disabled={!ready || busy} onClick={() => void run(() => request(target))}>Send message request</Button>}
       {!conversations.length && <p className="text-xs text-muted-foreground">Start from the message button beside a community member&apos;s message. There is no public user directory.</p>}
-      <ul className="grid gap-1">{conversations.map((c) => <li key={c.id}><button className={`w-full rounded-lg px-3 py-2 text-left ${c.id === selected ? "bg-muted" : "hover:bg-muted/50"}`} onClick={() => { setSelected(c.id); setMessages([]); setEnvelopes([]); setHasMore(false); }} aria-current={c.id === selected ? "page" : undefined}><span className="block truncate font-medium">{c.peerName}</span><span className="text-xs text-muted-foreground">{c.blocked ? "Unavailable" : c.status === "accepted" ? "Encrypted conversation" : c.status === "pending" ? c.requestedBy === userId ? "Request sent" : "Message request" : "Request declined"}</span></button></li>)}</ul>
+      <ul className="grid gap-1">{conversations.map((c) => <li key={c.id}><button className={`w-full rounded-lg px-3 py-2 text-left ${c.id === selected ? "bg-muted" : "hover:bg-muted/50"}`} onClick={() => { selectedRef.current = c.id; setSelected(c.id); setVerifications([]); setTrusted([]); setReport(null); setMessages([]); setEnvelopes([]); setHasMore(false); }} aria-current={c.id === selected ? "page" : undefined}><span className="block truncate font-medium">{c.peerName}</span><span className="text-xs text-muted-foreground">{c.blocked ? "Unavailable" : c.status === "accepted" ? "Encrypted conversation" : c.status === "pending" ? c.requestedBy === userId ? "Request sent" : "Message request" : "Request declined"}</span></button></li>)}</ul>
     </aside>
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="border-b px-4 py-3"><p className="text-xs text-muted-foreground" role="status">{status}</p>{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
@@ -121,7 +124,7 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
           <label className="grid max-w-lg gap-1 text-sm">Restore identity and history<input className={field} type="file" accept="application/json,.json" disabled={busy || !client} onChange={(e) => { const file = e.target.files?.[0]; if (file) void run(async () => { if (file.size > 8192) throw new Error("Choose a private recovery file, not a data export."); await client!.restoreBackup(JSON.parse(await file.text())); setStatus("Encryption identity and backed-up history restored."); }); e.currentTarget.value = ""; }} /></label>
           {backupList.length > 0 && <ul aria-label="Encrypted backups" className="grid gap-2">{backupList.map((b) => <li key={b.id} className="flex flex-wrap items-center gap-2 text-xs"><time>{new Date(b.createdAt).toLocaleString()}</time><span>{b.id.slice(0, 8)}</span><Button variant="destructive" size="sm" disabled={busy} onClick={() => void run(async () => { await dmFetch("/api/dm/backups", { id: b.id }, undefined, "DELETE"); await backups(); })}>Delete encrypted backup</Button></li>)}</ul>}
         </section>}
-        {verifications.filter((v) => !v.cancelled).map((v) => <section key={v.flowId} aria-label="Device verification" className="m-4 grid gap-3 rounded-lg border border-brand-mint/50 p-4"><h2 className="font-semibold">Verify {v.userId === userId ? "your other device" : active?.peerName ?? "the other person"}</h2><p className="text-xs">Other device: {v.deviceId.slice(0, 8)}</p>{v.done ? <p role="status">Verification complete.</p> : <><p>Compare these numbers on both devices over a separate trusted channel. Confirm only if all three match.</p>{v.decimals ? <p className="text-xl font-semibold tabular-nums" data-verification-code>{v.decimals.join(" · ")}</p> : <p role="status">Waiting for the other device…</p>}<div className="flex flex-wrap gap-2">{v.requested && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "accept"))}>Accept verification</Button>}{v.ready && !v.decimals && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "start"))}>Show verification numbers</Button>}{v.decimals && !v.confirmed && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "confirm"))}>The numbers match</Button>}{v.confirmed && <p role="status">Waiting for their confirmation…</p>}<Button variant="outline" disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "cancel"))}>Cancel verification</Button></div></>}</section>)}
+        {verifications.filter((v) => !v.cancelled).map((v) => <section key={v.flowId} aria-label="Device verification" className="m-4 grid gap-3 rounded-lg border border-brand-mint/50 p-4"><h2 className="font-semibold">Verify {v.userId === userId ? "your other device" : conversations.find((c) => c.peerId === v.userId)?.peerName ?? v.userId}</h2><p className="text-xs">Account: {v.userId} · Other device: {v.deviceId.slice(0, 8)} · Flow: {v.flowId.slice(0, 8)}</p>{v.done ? <p role="status">Verification complete.</p> : <><p>Compare these numbers on both devices over a separate trusted channel. Confirm only if all three match.</p>{v.decimals ? <p className="text-xl font-semibold tabular-nums" data-verification-code>{v.decimals.join(" · ")}</p> : <p role="status">Waiting for the other device…</p>}<div className="flex flex-wrap gap-2">{v.requested && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "accept"))}>Accept verification</Button>}{v.ready && !v.decimals && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "start"))}>Show verification numbers</Button>}{v.decimals && !v.confirmed && <Button disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "confirm"))}>The numbers match</Button>}{v.confirmed && <p role="status">Waiting for their confirmation…</p>}<Button variant="outline" disabled={busy} onClick={() => void run(() => client!.verificationAction(v.userId, v.flowId, "cancel"))}>Cancel verification</Button></div></>}</section>)}
         {!active && <div className="p-6"><h2 className="text-lg font-semibold">Private by conversation</h2><p className="mt-2 max-w-lg text-muted-foreground">Select a conversation or send a message request from a community. Messages stay unavailable until you verify the participating devices.</p></div>}
         {active && <><header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"><h2 className="font-semibold">{active.peerName}</h2><Button variant="outline" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button></header>
           {active.status === "pending" && <div className="grid gap-3 p-4"><p>{active.requestedBy === userId ? "Your message request is waiting for acceptance." : "Accept this request to begin an encrypted conversation."}</p>{active.requestedBy !== userId && <div className="flex gap-2">{(["accepted", "rejected"] as const).map((s) => <Button key={s} disabled={busy || active.blocked} variant={s === "accepted" ? "default" : "outline"} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "respond", id: active.id, status: s }); setSecurity(true); })}>{s === "accepted" ? "Accept message request" : "Decline request"}</Button>)}</div>}</div>}

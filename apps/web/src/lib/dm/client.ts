@@ -98,6 +98,7 @@ export class PrivateMessaging {
       const identity = await machine.getIdentity(new C.UserId(matrixUser(userId)));
       if (!identity) await client.bootstrap();
       window.addEventListener("pagehide", () => client.close(), { once: true });
+      window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
       return client;
     } catch (error) { opened?.close(); release?.(); throw error; }
   }
@@ -231,7 +232,8 @@ export class PrivateMessaging {
         try {
           if (envelope.conversationId !== conversation || ![this.userId, peer].includes(envelope.senderId)) throw new Error("Unexpected message sender.");
           const event = { type: "m.room.encrypted", event_id: `$${envelope.id}`, sender: matrixUser(envelope.senderId), origin_server_ts: new Date(envelope.createdAt).getTime(), content: envelope.content };
-          const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.Untrusted));
+          const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
+          if (decrypted.shieldState(true).color !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
           if (!decrypted.senderDevice || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device?.isVerified() && !(envelope.senderId === this.userId && decrypted.senderDevice.toString() === this.deviceId)) throw new Error("Verify the sender's device to read this message.");
