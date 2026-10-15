@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
@@ -159,7 +159,7 @@ describe("voice-only scope, immutable public state and replay", () => {
     const { endpoints: [a, b] } = await fixture();
     await upload(a); await upload(b, { "signed_curve25519:one": keyContent("d") });
     const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`, device = randomUUID();
-    expect(await crypto(a, { kind: "query", body: { device_keys: { [unknown]: [] } } })).toEqual({ device_keys: {}, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
+    expect(await crypto(a, { kind: "query", body: { device_keys: { [unknown]: [] } } })).toEqual({ device_keys: { [unknown]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
     const request = { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
@@ -178,10 +178,11 @@ describe("voice-only scope, immutable public state and replay", () => {
     await expect(crypto(a, request)).rejects.toMatchObject({ code: loss === "generation" ? "conflict" : "forbidden" });
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
   });
-  it("retires healthy current and unknown targets without any identity/prekey/signature read or mailbox insert", async () => {
+  it("retires healthy current and unknown targets without recipient/key reads or mailbox inserts", async () => {
     const { endpoints: [a, b] } = await fixture();
     const transaction = db.transaction.bind(db);
     let forbiddenAccesses = 0;
+    const targetsRecipient = (value: unknown): boolean => value === voiceCallMember.voiceUserId || (value instanceof SQL && value.queryChunks.some(targetsRecipient));
     // Instrument the real transaction; retain its real PostgreSQL locks, reads and receipt writes.
     const spy = vi.spyOn(db, "transaction").mockImplementation((callback, config) => transaction(tx => callback(new Proxy(tx, {
       get(target, key, receiver) {
@@ -197,7 +198,18 @@ describe("voice-only scope, immutable public state and replay", () => {
               if (property !== "from" || typeof from !== "function") return from;
               return (table: unknown) => {
                 if (table === voiceIdentity || table === voicePrekey || table === voiceSignature) { forbiddenAccesses++; throw new Error("Retirement key read"); }
-                return Reflect.apply(from, query, [table]);
+                const scoped: object = Reflect.apply(from, query, [table]);
+                if (table !== voiceCallMember) return scoped;
+                return new Proxy(scoped, {
+                  get(scope, field, scopeReceiver) {
+                    const where: unknown = Reflect.get(scope, field, scopeReceiver);
+                    if (field !== "where" || typeof where !== "function") return where;
+                    return (...conditions: unknown[]) => {
+                      if (conditions.some(targetsRecipient)) { forbiddenAccesses++; throw new Error("Retirement recipient lookup"); }
+                      return Reflect.apply(where, scope, conditions);
+                    };
+                  },
+                });
               };
             },
           });
@@ -583,7 +595,7 @@ describe("pinned native18.9.0 public request compatibility", () => {
       expect(claim.body === original).toBe(true);
       const query = a.machine.queryKeysForUsers([new C.UserId(b.endpoint.snapshot.voiceUserId), new C.UserId(c.endpoint.snapshot.voiceUserId)]);
       const current = await a.out(query);
-      expect(Object.hasOwn(z.record(z.string(), z.unknown()).parse(current.device_keys), b.endpoint.snapshot.voiceUserId)).toBe(false);
+      expect(z.record(z.string(), z.unknown()).parse(current.device_keys)[b.endpoint.snapshot.voiceUserId]).toEqual({});
       expect(Object.hasOwn(z.record(z.string(), z.unknown()).parse(current.device_keys), c.endpoint.snapshot.voiceUserId)).toBe(true);
       expect(await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId))).toBeUndefined();
       expect(await a.machine.getMissingSessions([new C.UserId(b.endpoint.snapshot.voiceUserId)])).toBeNull();
@@ -685,9 +697,12 @@ describe("pinned native18.9.0 public request compatibility", () => {
           for (const request of unique.values()) expect(await a.out(request, "retire")).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
           expect(pending.id === original.id && pending.txn_id === original.txn && pending.body === original.body && pending.type === original.type).toBe(true);
           expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.endpoint.snapshot.callId))).toBe(0);
+          expect((await a.machine.outgoingRequests()).filter(request => request instanceof C.ToDeviceRequest)).toHaveLength(0);
           expect(nativeIdentityDigest(a)).toBe(identity);
           expect(nativeIdentityDigest(d)).toBe(retained);
           expect((await a.machine.getDevice(new C.UserId(d.endpoint.snapshot.voiceUserId), new C.DeviceId(d.endpoint.snapshot.voiceDeviceId)))?.isVerified()).toBe(true);
+          await expectNativeDelivery(a, d, "retained verified peer control");
+          await expectNativeDelivery(d, a, "retained verified peer reply");
           const fresh = departed ? c : b;
           if (!departed) {
             for (const flow of b.machine.getVerificationRequests(new C.UserId(a.endpoint.snapshot.voiceUserId))) {
