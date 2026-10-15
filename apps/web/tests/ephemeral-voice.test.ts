@@ -7,13 +7,23 @@ const logger = { debug() {}, info() {}, warn() {}, error() {} };
 function fingerprint(machine: C.OlmMachine) {
   return { curve: machine.identityKeys.curve25519.toBase64(), ed: machine.identityKeys.ed25519.toBase64() };
 }
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonical(child)]));
+  return value;
+}
 async function snapshot(machine: C.OlmMachine) {
   const counts = await machine.roomKeyCounts();
   return {
     keys: fingerprint(machine), total: counts.total, backedUp: counts.backedUp,
     verified: (await machine.getIdentity(machine.userId))?.isVerified() ?? false,
     verificationFlows: machine.getVerificationRequests(machine.userId).map((request) => request.flowId),
-    outgoing: (await machine.outgoingRequests()).map((request) => ({ type: request.type, id: request.id, digest: createHash("sha256").update(request.body).digest("hex") })),
+    outgoing: (await machine.outgoingRequests()).map((request) => ({
+      type: request.type,
+      // Native 18.9.0 reissues upload/query IDs even on consecutive reads without any voice operation.
+      id: request.type === C.RequestType.KeysUpload || request.type === C.RequestType.KeysQuery ? null : request.id,
+      digest: createHash("sha256").update(JSON.stringify(canonical(JSON.parse(request.body)))).digest("hex"),
+    })).sort((a, b) => a.type - b.type || a.digest.localeCompare(b.digest) || (a.id ?? "").localeCompare(b.id ?? "")),
   };
 }
 
@@ -32,6 +42,7 @@ describe("disposable voice OlmMachine supported API proof", () => {
       const decryptHistory = async () => JSON.parse((await dm.decryptRoomEvent(JSON.stringify(event), room, new C.DecryptionSettings(C.TrustRequirement.Untrusted))).event).content;
       expect(await decryptHistory()).toEqual(history);
       const baseline = await snapshot(dm);
+      expect(await snapshot(dm)).toEqual(baseline); // No voice activity between these control snapshots.
       for (let i = 0; i < 3; i++) opened.push(await EphemeralVoice.open(transport));
       const [a, b, c] = opened;
       for (const owner of opened) {
