@@ -4,7 +4,7 @@ import { createInviteLink, expectNoA11yViolations, newUserPage, sendMessage, sig
 async function showNavigationFor(page: Page, buttonName: string) {
   const button = page.getByRole("button", { name: buttonName, exact: true }).first();
   const navigation = page.getByRole("button", { name: "Open navigation" });
-  await expect(button.or(navigation).first()).toBeVisible();
+  await expect.poll(async () => await button.isVisible() || await navigation.isVisible()).toBe(true);
   if (!await button.isVisible()) {
     await navigation.click();
   }
