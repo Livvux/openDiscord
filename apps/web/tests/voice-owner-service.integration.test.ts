@@ -364,7 +364,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
   it("serializes a real uncommitted send against a queued leave before retiring its held committed response", async () => {
     const [a, b, c] = await fixture(3); await verify(a, b); const epoch = await context(a, b);
     const beforeCommit = deferred(), commit = deferred(), delivered = deferred(), response = deferred();
-    let paused = false, blockerPid: number | undefined, nativeId: string | undefined;
+    let paused = false, blockerPid: number | undefined;
     const complete: string[] = [], transaction = db.transaction.bind(db), mark = C.OlmMachine.prototype.markRequestAsSent;
     vi.spyOn(db, "transaction").mockImplementation((callback, config) => transaction(async tx => {
       const result = await callback(tx);
@@ -378,15 +378,15 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
       return result;
     }, config));
     a.after = async input => { if (input.request.kind === "send" && input.request.eventType === "m.room.encrypted") { delivered.resolve(); await response.promise; } };
-    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, body) {
-      if (id === nativeId) complete.push(id);
-      return mark.call(this, id, type, body);
-    });
     const sending = a.owner.sendControl(material(a, b, epoch)), sent = sending.then(() => undefined, error => error as unknown);
     await beforeCommit.promise;
     const original = a.calls.find(item => item.request.kind === "send" && item.request.eventType === "m.room.encrypted")!;
     if (original.request.kind !== "send") throw new Error("Missing genuine encrypted native send.");
-    nativeId = original.request.nativeRequestId;
+    const nativeId = original.request.nativeRequestId;
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, body) {
+      if (id === nativeId) complete.push(id);
+      return mark.call(this, id, type, body);
+    });
     // The real mailbox write is still invisible outside the sender's held transaction.
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(0);
     const leaving = leaveVoiceControl(auth(c), binding(c)).then(value => ({ value }), error => ({ error: error as unknown }));
