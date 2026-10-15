@@ -2,12 +2,17 @@
 import base64
 import http.server
 import json
+import os
 import pathlib
 import ssl
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 import urllib.request
+
+from native_support import cleanup, has_complete_bytes
 
 EVIDENCE = pathlib.Path('native-evidence')
 EVIDENCE.mkdir(exist_ok=True)
@@ -15,10 +20,11 @@ EVIDENCE.mkdir(exist_ok=True)
 
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/download':
+        if self.path in ('/download', '/cancel'):
             body = b'OpenDiscord native download acceptance\n'
             self.send_response(200)
-            self.send_header('Content-Disposition', 'attachment; filename="native-proof.txt"')
+            filename = 'native-cancel.txt' if self.path == '/cancel' else 'native-proof.txt'
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
             self.send_header('Content-Type', 'text/plain')
         else:
             body = b'<html><title>Native HTTPS fixture</title><body><h1>OpenDiscord native fixture</h1></body></html>'
@@ -38,7 +44,14 @@ context.load_cert_chain('/tmp/desktop-fixture.crt', '/tmp/desktop-fixture.key')
 server.socket = context.wrap_socket(server.socket, server_side=True)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 log = (EVIDENCE / 'driver.log').open('w')
-driver = subprocess.Popen(['tauri-driver'], stdout=log, stderr=log)
+sandbox = tempfile.TemporaryDirectory(prefix='opendiscord-native-')
+home = pathlib.Path(sandbox.name)
+(home / 'Downloads').mkdir()
+config = home / '.config'
+config.mkdir()
+(config / 'user-dirs.dirs').write_text('XDG_DOWNLOAD_DIR="$HOME/Downloads"\n')
+driver = subprocess.Popen(['tauri-driver'], stdout=log, stderr=log,
+                          env={**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(config)})
 session = None
 
 
@@ -90,34 +103,41 @@ try:
     assert 'not allowed' in denial.lower() or 'denied' in denial.lower(), denial
     screenshot = command('GET', '/screenshot')
     (EVIDENCE / 'linux-webview.png').write_bytes(base64.b64decode(screenshot))
+    saved = home / 'proof.txt'
+    blob_saved = home / 'blob.txt'
+    cancelled = home / 'cancel.txt'
+    default_cancelled = home / 'Downloads' / 'native-cancel.txt'
     # A download must display a native Save dialog before any bytes are written.
     script("var a=document.createElement('a'); a.href='/download'; a.download='native-proof.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True).returncode == 0, 'Save dialog absent')
+    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Save dialog absent')
     subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
-    subprocess.run(['xdotool', 'type', '/tmp/opendiscord-native-proof.txt'], check=True)
+    assert not saved.exists(), 'Destination written before Save consent'
+    subprocess.run(['xdotool', 'type', str(saved)], check=True)
     subprocess.run(['xdotool', 'key', 'Return'], check=True)
-    saved = pathlib.Path('/tmp/opendiscord-native-proof.txt')
-    eventually(saved.exists, 'Download not saved')
-    assert saved.read_bytes() == b'OpenDiscord native download acceptance\n'
-    script("var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['native blob export'],{type:'application/octet-stream'})); a.download='native-blob.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True).returncode == 0, 'Blob Save dialog absent')
+    eventually(lambda: has_complete_bytes(saved, b'OpenDiscord native download acceptance\n'), 'Download bytes incomplete')
+    script("var a=document.createElement('a'); a.href='/cancel'; a.download='native-cancel.txt'; document.body.append(a); a.click(); return true")
+    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Cancel Save dialog absent')
     subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
-    subprocess.run(['xdotool', 'type', '/tmp/opendiscord-native-blob.txt'], check=True)
-    subprocess.run(['xdotool', 'key', 'Return'], check=True)
-    blob_saved = pathlib.Path('/tmp/opendiscord-native-blob.txt')
-    eventually(blob_saved.exists, 'Blob export not saved')
-    assert blob_saved.read_bytes() == b'native blob export'
-    script("var a=document.createElement('a'); a.href='/download'; a.download='native-cancel.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True).returncode == 0, 'Cancel Save dialog absent')
+    subprocess.run(['xdotool', 'type', str(cancelled)], check=True)
+    assert not cancelled.exists() and not default_cancelled.exists(), 'Destination written before consent'
     subprocess.run(['xdotool', 'key', 'Escape'], check=True)
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True).returncode != 0, 'Save cancellation failed')
+    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode != 0, 'Save cancellation failed')
+    assert script('return document.readyState') == 'complete', 'WebView did not resume after cancellation'
+    assert not cancelled.exists() and not default_cancelled.exists(), 'Cancelled transfer wrote a file'
+    script("var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['native blob export'],{type:'application/octet-stream'})); a.download='native-blob.txt'; document.body.append(a); a.click(); return true")
+    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Blob Save dialog absent')
+    subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
+    assert not blob_saved.exists(), 'Blob written before consent'
+    subprocess.run(['xdotool', 'type', str(blob_saved)], check=True)
+    subprocess.run(['xdotool', 'key', 'Return'], check=True)
+    eventually(lambda: has_complete_bytes(blob_saved, b'native blob export'), 'Blob export bytes incomplete')
+    # A subsequent completed transfer is a processing barrier for the prior cancellation.
+    assert not cancelled.exists() and not default_cancelled.exists(), 'Cancelled transfer later wrote a file'
     (EVIDENCE / 'results.json').write_text(json.dumps({
         'https_launch': True, 'cross_origin_denied': True, 'file_scheme_denied': True,
         'native_ipc_denied': denial, 'native_save_download_bytes_verified': True, 'native_blob_export_bytes_verified': True, 'native_save_cancel': True,
         'scope': 'Linux fixture only; no application, macOS, Windows or physical-device parity claim'
     }, indent=2))
 finally:
-    if session:
-        command('DELETE', '')
-    driver.terminate()
-    server.shutdown()
+    cleanup(lambda: command('DELETE', '') if session else None,
+            driver, server, log, sys.exception(), sandbox.cleanup)
