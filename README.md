@@ -32,7 +32,7 @@ Backups, upgrades and security notes: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.m
 ## Develop
 
 ```sh
-docker compose -f compose.dev.yaml up -d      # Postgres 18 on 127.0.0.1:5432 (DEV_DB_PORT to change)
+docker compose -f compose.dev.yaml up -d      # Postgres 18 on 127.0.0.1:5433 (DEV_DB_PORT to change)
 cp apps/web/.env.example apps/web/.env
 pnpm install
 pnpm db:migrate

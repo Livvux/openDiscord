@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { Logo } from "@/components/logo";
+import { AuthCard, Field, FormError, FormNotice } from "@/components/app/auth-card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { safeNextPath } from "@/lib/safe-redirect";
 import { TwoFactorStep } from "./two-factor-step";
-
-const inputClass =
-  "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 outline-none focus:border-brand-indigo";
 
 export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const router = useRouter();
@@ -65,63 +64,49 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   if (needsSecondFactor) return <TwoFactorStep onDone={done} />;
 
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
-        <Logo />
-        <h1 className="text-2xl font-semibold">{isSignUp ? "Create your account" : "Welcome back"}</h1>
+    <AuthCard title={isSignUp ? "Create your account" : "Welcome back"}>
+      <form onSubmit={onSubmit} className="grid gap-4">
         {isSignUp && (
-          <label className="block space-y-1">
-            <span className="text-sm text-slate-400">Display name</span>
-            <input name="name" required maxLength={64} autoComplete="nickname" className={inputClass} />
-          </label>
+          <Field label="Display name" id="name">
+            <Input id="name" name="name" required maxLength={64} autoComplete="nickname" />
+          </Field>
         )}
-        <label className="block space-y-1">
-          <span className="text-sm text-slate-400">Email</span>
-          <input name="email" type="email" required autoComplete="email" className={inputClass} />
-        </label>
-        <label className="block space-y-1">
-          <span className="text-sm text-slate-400">Password</span>
-          <input
+        <Field label="Email" id="email">
+          <Input id="email" name="email" type="email" required autoComplete="email" />
+        </Field>
+        <Field label="Password" id="password">
+          <Input
+            id="password"
             name="password"
             type="password"
             required
             minLength={10}
             autoComplete={isSignUp ? "new-password" : "current-password"}
-            className={inputClass}
           />
-        </label>
+        </Field>
         {!isSignUp && (
-          <p className="text-sm">
-            <Link href="/forgot-password" className="text-slate-400 hover:text-white hover:underline">
-              Forgot your password?
-            </Link>
-          </p>
+          <Link href="/forgot-password" className="link w-fit">
+            Forgot your password?
+          </Link>
         )}
-        {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
-        {notice && <p role="status" className="text-sm text-emerald-400">{notice}</p>}
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded-full bg-indigo-600 px-4 py-2.5 font-medium hover:bg-indigo-500 disabled:opacity-50"
-        >
+        {error && <FormError>{error}</FormError>}
+        {notice && <FormNotice>{notice}</FormNotice>}
+        <Button type="submit" size="lg" disabled={pending}>
           {pending ? "Please wait…" : isSignUp ? "Create account" : "Sign in"}
-        </button>
+        </Button>
         {!isSignUp && (
-          <button
-            type="button"
-            onClick={signInWithPasskey}
-            className="w-full rounded-full border border-slate-700 px-4 py-2.5 font-medium hover:bg-slate-800"
-          >
+          <Button type="button" size="lg" variant="outline" onClick={signInWithPasskey}>
             Sign in with a passkey
-          </button>
+          </Button>
         )}
-        <p className="text-sm text-slate-400">
+        <p className="text-muted-foreground">
           {isSignUp ? "Already have an account? " : "New here? "}
-          <Link href={`${isSignUp ? "/sign-in" : "/sign-up"}${nextQuery}`} className="text-brand-cyan underline underline-offset-2">
+          <Link href={`${isSignUp ? "/sign-in" : "/sign-up"}${nextQuery}`} className="link">
             {isSignUp ? "Sign in" : "Create an account"}
           </Link>
         </p>
       </form>
-    </main>
+    </AuthCard>
   );
 }
+

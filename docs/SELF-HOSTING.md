@@ -69,7 +69,7 @@ sessions and TOTP enrolments are lost), restore, then switch DNS.
 ## Local development
 
 ```sh
-docker compose -f compose.dev.yaml up -d   # Postgres 18 on 127.0.0.1:5432
-# Port taken by a local Postgres? DEV_DB_PORT=5433 docker compose -f compose.dev.yaml up -d
-# and point DATABASE_URL in apps/web/.env at that port.
+docker compose -f compose.dev.yaml up -d   # Postgres 18 on 127.0.0.1:5433
+# 5433 avoids clashing with a locally installed Postgres on 5432, which is usually older than 18
+# and fails the migrations. Change it with DEV_DB_PORT and update DATABASE_URL in apps/web/.env.
 ```

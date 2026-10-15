@@ -3,11 +3,10 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { Logo } from "@/components/logo";
+import { AuthCard, Field, FormError } from "@/components/app/auth-card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
-
-const inputClass =
-  "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 outline-none focus:border-brand-indigo";
 
 export function ResetPasswordForm() {
   const router = useRouter();
@@ -28,33 +27,25 @@ export function ResetPasswordForm() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
-        <Logo />
-        <h1 className="text-2xl font-semibold">Choose a new password</h1>
-        {token ? (
+    <AuthCard title="Choose a new password" description={token ? "You'll be signed out on all devices." : undefined}>
+      <form onSubmit={onSubmit} className="grid gap-4">
+        {token && (
           <>
-            <label className="block space-y-1">
-              <span className="text-sm text-slate-400">New password</span>
-              <input name="password" type="password" required minLength={10} autoComplete="new-password" className={inputClass} />
-            </label>
-            <p className="text-sm text-slate-400">You&apos;ll be signed out on all devices.</p>
-            <button
-              type="submit"
-              disabled={pending}
-              className="w-full rounded-full bg-indigo-600 px-4 py-2.5 font-medium hover:bg-indigo-500 disabled:opacity-50"
-            >
+            <Field label="New password" id="password">
+              <Input id="password" name="password" type="password" required minLength={10} autoComplete="new-password" />
+            </Field>
+            <Button type="submit" size="lg" disabled={pending}>
               {pending ? "Please wait…" : "Set new password"}
-            </button>
+            </Button>
           </>
-        ) : null}
+        )}
         {(error || !token) && (
-          <p role="alert" className="text-sm text-red-400">
+          <FormError>
             {error ?? "This reset link is invalid or has expired."}{" "}
-            <Link href="/forgot-password" className="text-brand-cyan underline underline-offset-2">Request a new one</Link>
-          </p>
+            <Link href="/forgot-password" className="link">Request a new one</Link>
+          </FormError>
         )}
       </form>
-    </main>
+    </AuthCard>
   );
 }

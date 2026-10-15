@@ -31,7 +31,7 @@ export function ProfileForm({ name, email }: { name: string; email: string }) {
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>Save</Button>
         {status && (
-          <p role={status.ok ? "status" : "alert"} className={`text-sm ${status.ok ? "text-emerald-400" : "text-destructive"}`}>
+          <p role={status.ok ? "status" : "alert"} className={`text-sm ${status.ok ? "text-success" : "text-destructive"}`}>
             {status.text}
           </p>
         )}

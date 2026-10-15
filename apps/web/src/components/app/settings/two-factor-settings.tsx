@@ -64,7 +64,7 @@ export function TwoFactorSettings({ enabled }: { enabled: boolean }) {
   if (enabled) {
     return (
       <form onSubmit={disable} className="grid max-w-sm gap-2">
-        <p className="text-sm text-emerald-400">Authenticator app is on. Sign-ins ask for a code.</p>
+        <p className="text-sm text-success">Authenticator app is on. Sign-ins ask for a code.</p>
         <Label htmlFor="disable-2fa-password">Password to turn it off</Label>
         <div className="flex gap-2">
           <Input id="disable-2fa-password" name="password" type="password" required autoComplete="current-password" />

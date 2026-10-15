@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
-import { Logo } from "@/components/logo";
+import { AuthCard } from "@/components/app/auth-card";
+import { buttonVariants } from "@/components/ui/button";
 import { auth } from "@/lib/auth";
 import { getInvitePreview } from "@/server/communities";
 import { AppError } from "@/server/errors";
@@ -12,16 +13,9 @@ export const metadata: Metadata = { title: "Invitation", robots: { index: false,
 
 export default function InvitePage({ params }: PageProps<"/invite/[code]">) {
   return (
-    <main className="flex flex-1 items-center justify-center bg-background p-8 text-foreground">
-      <div className="w-full max-w-sm space-y-6 rounded-2xl border bg-card p-8 text-center">
-        <div className="flex justify-center">
-          <Logo />
-        </div>
-        <Suspense fallback={<p className="text-muted-foreground">Loading invitation…</p>}>
-          <Invite params={params} />
-        </Suspense>
-      </div>
-    </main>
+    <Suspense fallback={<AuthCard title="Loading invitation…">{null}</AuthCard>}>
+      <Invite params={params} />
+    </Suspense>
   );
 }
 
@@ -33,36 +27,35 @@ async function Invite({ params }: Pick<PageProps<"/invite/[code]">, "params">) {
   });
   if (!preview) {
     return (
-      <>
-        <h1 className="text-xl font-semibold">Invite unavailable</h1>
-        <p className="text-muted-foreground">This invite is invalid or has expired. Ask for a new link.</p>
-      </>
+      <AuthCard title="Invite unavailable" description="This invite is invalid or has expired. Ask for a new link.">
+        <Link href="/" className="link">Back to openDiscord</Link>
+      </AuthCard>
     );
   }
 
   const session = await auth.api.getSession({ headers: await headers() });
   const next = encodeURIComponent(`/invite/${preview.code}`);
   return (
-    <>
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">You&apos;ve been invited to join</p>
-        <h1 className="text-2xl font-semibold break-words">{preview.communityName}</h1>
-        <p className="text-sm text-muted-foreground">
-          {preview.memberCount} {preview.memberCount === 1 ? "member" : "members"}
-        </p>
-      </div>
+    <AuthCard
+      title={preview.communityName}
+      description={
+        <>
+          You&apos;ve been invited to join · {preview.memberCount} {preview.memberCount === 1 ? "member" : "members"}
+        </>
+      }
+    >
       {session ? (
         <JoinButton code={preview.code} />
       ) : (
-        <div className="grid gap-2">
-          <Link href={`/sign-up?next=${next}`} className="rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground hover:bg-primary/80">
+        <div className="grid gap-3">
+          <Link href={`/sign-up?next=${next}`} className={buttonVariants({ size: "lg" })}>
             Create an account to join
           </Link>
-          <Link href={`/sign-in?next=${next}`} className="text-sm text-brand-cyan hover:underline">
+          <Link href={`/sign-in?next=${next}`} className={buttonVariants({ size: "lg", variant: "outline" })}>
             I already have an account
           </Link>
         </div>
       )}
-    </>
+    </AuthCard>
   );
 }

@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Logo } from "@/components/logo";
+import { AuthCard, Field, FormError, FormNotice } from "@/components/app/auth-card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
-
-const inputClass =
-  "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 outline-none focus:border-brand-indigo";
 
 export default function ForgotPasswordPage() {
   const [sent, setSent] = useState(false);
@@ -26,34 +25,23 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
-        <Logo />
-        <h1 className="text-2xl font-semibold">Reset your password</h1>
+    <AuthCard title="Reset your password">
+      <form onSubmit={onSubmit} className="grid gap-4">
         {sent ? (
-          <p role="status" className="text-emerald-400">
-            If an account exists for that address, we&apos;ve sent a reset link. It expires in one hour.
-          </p>
+          <FormNotice>If an account exists for that address, we&apos;ve sent a reset link. It expires in one hour.</FormNotice>
         ) : (
           <>
-            <label className="block space-y-1">
-              <span className="text-sm text-slate-400">Email</span>
-              <input name="email" type="email" required autoComplete="email" className={inputClass} />
-            </label>
-            {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
-            <button
-              type="submit"
-              disabled={pending}
-              className="w-full rounded-full bg-indigo-600 px-4 py-2.5 font-medium hover:bg-indigo-500 disabled:opacity-50"
-            >
+            <Field label="Email" id="email">
+              <Input id="email" name="email" type="email" required autoComplete="email" />
+            </Field>
+            {error && <FormError>{error}</FormError>}
+            <Button type="submit" size="lg" disabled={pending}>
               {pending ? "Please wait…" : "Send reset link"}
-            </button>
+            </Button>
           </>
         )}
-        <p className="text-sm text-slate-400">
-          <Link href="/sign-in" className="text-brand-cyan hover:underline">Back to sign in</Link>
-        </p>
+        <Link href="/sign-in" className="link w-fit">Back to sign in</Link>
       </form>
-    </main>
+    </AuthCard>
   );
 }

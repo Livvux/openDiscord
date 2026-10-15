@@ -30,6 +30,7 @@ html {
   --font-heading: var(--font-inter);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-panel: var(--panel);
+  --color-success: var(--success);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -74,6 +75,16 @@ html {
 }
 @keyframes marquee {
   to { transform: translateX(-50%); }
+}
+
+/* Inline text links: indigo-300 on charcoal (≥ 9:1), underlined so they don't rely on colour. */
+@utility link {
+  color: #a5b4fc;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+  &:hover {
+    color: #fff;
+  }
 }
 
 @utility animate-rise {
@@ -168,6 +179,7 @@ html {
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 5%);
   --sidebar-ring: #6366f1;
+  --success: #6ee7b7; /* emerald-300 */
   /* Channel panel: white/2 over charcoal. */
   --panel: color-mix(in oklab, var(--color-brand-charcoal) 98%, white);
 }
