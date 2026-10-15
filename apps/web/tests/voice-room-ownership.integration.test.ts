@@ -1,15 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { AccessToken, ParticipantInfo, Room, RoomServiceClient, ServerError } from "livekit-server-sdk";
+import { AccessToken, ParticipantInfo, ParticipantPermission, Room, RoomServiceClient, ServerError, TrackSource } from "livekit-server-sdk";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { channel, session, member } from "@/db/schema";
+import { channel, channelOverride, role, session, member } from "@/db/schema";
 import { voiceCall, voiceSfuRoom, voiceCallMember, voiceIdentity } from "@/db/voice-schema";
 import { consumeVoiceRooms, createOwnedVoiceRoom, retireOwnedVoiceRoom, voiceTransaction } from "@/server/voice-sfu";
 import { createCommunity, deleteChannel, deleteCommunity } from "@/server/communities";
 import { registerDmDevice } from "@/server/direct-messages";
 import { joinVoiceControl, grantBoundVoiceMedia, handleVoiceCrypto, heartbeatVoiceControl, leaveVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
 import { createBoundVoiceToken, afterAccessChange } from "@/server/voice";
+import { Permission } from "@/server/permissions";
 import { testUsers } from "./helpers";
 
 beforeEach(() => {
@@ -161,6 +162,46 @@ describe("durable room lifecycle", () => {
 });
 
 describe("bounded persistent cleanup", () => {
+  it.each([
+    { name: "unrestricted empty sources", permission: new ParticipantPermission({ canPublish: true, canPublishSources: [] }), sources: [TrackSource.MICROPHONE] },
+    { name: "unrestricted omitted sources", permission: new ParticipantPermission({ canPublish: true }), sources: [TrackSource.MICROPHONE] },
+    { name: "disjoint camera permission", permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.CAMERA] }), sources: [] },
+    { name: "missing permission", permission: undefined, sources: [] },
+    { name: "unknown source", permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.UNKNOWN] }), sources: [] },
+    { name: "foreign source", permission: ParticipantPermission.fromJson({ canPublish: true, canPublishSources: [999] }), sources: [] },
+    { name: "mixed sources and data", permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.MICROPHONE, TrackSource.CAMERA], canPublishData: true }), sources: [TrackSource.MICROPHONE] },
+    { name: "metadata on an existing microphone restriction", permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canUpdateMetadata: true }), sources: [TrackSource.MICROPHONE] },
+    { name: "disabled publishing with data", permission: new ParticipantPermission({ canPublish: false, canPublishSources: [], canPublishData: true }), sources: [] },
+  ])("only narrows $name against canonical microphone authority", async ({ permission, sources }) => {
+    const f = await fixture(), p = await peer(f);
+    const [everyone] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
+    await db.insert(channelOverride).values({ channelId: f.snapshot.channelId, roleId: everyone.id, deny: Permission.Video });
+    const grant = await grantBoundVoiceMedia(p.auth, p.binding);
+    expect(grant.sources).toEqual(["microphone"]);
+    const participant = new ParticipantInfo({ identity: grant.participantIdentity, permission });
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockResolvedValue([participant]);
+    const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant").mockResolvedValue(participant);
+    await due(grant.roomName);
+    const stats = await consumeVoiceRooms({ maxRooms: 1 });
+    expect(stats.requests).toBe(2);
+    expect(update).toHaveBeenCalledExactlyOnceWith(grant.roomName, grant.participantIdentity, { permission: {
+      canSubscribe: false, canPublish: sources.length > 0, canPublishSources: sources, canPublishData: false, canUpdateMetadata: false,
+    } });
+    expect((await owned(grant.roomName)).status).toBe("active");
+  });
+
+  it("preserves a safe explicit subset even when canonical authority permits more sources", async () => {
+    const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+    expect(grant.sources).toHaveLength(4);
+    const participant = new ParticipantInfo({ identity: grant.participantIdentity, permission: new ParticipantPermission({ canPublish: true, canPublishSources: [TrackSource.MICROPHONE], canSubscribe: true }) });
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockResolvedValue([participant]);
+    const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant").mockResolvedValue(participant);
+    await due(grant.roomName);
+    expect((await consumeVoiceRooms({ maxRooms: 1 })).requests).toBe(1);
+    expect(update).not.toHaveBeenCalled();
+    expect((await owned(grant.roomName)).status).toBe("active");
+  });
+
   it("recovers expired claims, fences stale completion, and never overwrites a newer lease", async () => {
     const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
     await retireOwnedVoiceRoom(grant.roomName);
@@ -279,6 +320,7 @@ it("rechecks session expiry after the observed real PostgreSQL SHARE wait before
     const { rows: [{ pid }] } = await barrier.query<{ pid: number }>("select pg_backend_pid() as pid");
     await barrier.query('select id from "session" where id = $1 for update', [f.sessionId]);
     vi.mocked(RoomServiceClient.prototype.createRoom).mockClear();
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
     const update = vi.spyOn(RoomServiceClient.prototype, "updateParticipant");
     pending = createOwnedVoiceRoom(grant.roomName);
     const outcome = pending.then(() => null, (error: unknown) => error);
@@ -296,6 +338,7 @@ it("rechecks session expiry after the observed real PostgreSQL SHARE wait before
     expect(RoomServiceClient.prototype.createRoom).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect((await owned(grant.roomName)).status).toBe("retired");
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenCalledWith(grant.roomName);
   } finally {
     await barrier.query("rollback");
     await pending?.catch(() => {});
