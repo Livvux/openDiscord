@@ -1,8 +1,9 @@
 // Community data. Ids are UUIDv7 (Postgres 18 built-in), so they sort by creation time
 // and double as pagination cursors.
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  customType,
   boolean,
   check,
   foreignKey,
@@ -16,6 +17,8 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
+
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
 
 const id = () => uuid("id").primaryKey().default(sql`uuidv7()`);
 const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
@@ -150,6 +153,8 @@ export const message = pgTable(
     /** The message this one replies to (same channel); unlinked when that message is deleted. */
     replyToId: uuid("reply_to_id").references((): AnyPgColumn => message.id, { onDelete: "set null" }),
     pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+    /** Full-text index; the "simple" configuration works for every language (no stemming). */
+    search: tsvector("search").generatedAlwaysAs((): SQL => sql`to_tsvector('simple', ${message.content})`),
   },
   (t) => [
     index("message_channel_idx").on(t.channelId, t.id),
@@ -157,6 +162,7 @@ export const message = pgTable(
     index("message_pinned_idx").on(t.channelId, t.pinnedAt).where(sql`${t.pinnedAt} is not null`),
     // Deleting a message unlinks its replies; this keeps that FK action cheap.
     index("message_reply_idx").on(t.replyToId).where(sql`${t.replyToId} is not null`),
+    index("message_search_idx").using("gin", t.search),
   ],
 );
 

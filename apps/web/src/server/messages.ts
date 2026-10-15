@@ -1,7 +1,8 @@
-import { and, count, countDistinct, desc, eq, gt, isNotNull, lt, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, lt, notExists, sql } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
-import { auditLog, channel, message, reaction, user } from "@/db/schema";
-import { requireChannel } from "./access";
+import { auditLog, channel, message, reaction, user, userBlock } from "@/db/schema";
+import { channelAuthorities, loadMember, requireChannel } from "./access";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
@@ -250,4 +251,51 @@ export async function listPinned(userId: string, rawChannelId: unknown): Promise
     .orderBy(desc(message.pinnedAt))
     .limit(MAX_PINS_PER_CHANNEL);
   return toViews(rows);
+}
+
+// --- Search -----------------------------------------------------------------
+
+export const SEARCH_LIMIT = 25;
+
+/** Words of a query as a prefix tsquery ("hel wor" → "hel:* & wor:*"); only letters and digits pass. */
+export function toPrefixQuery(q: string): string | null {
+  const words = (q.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).slice(0, 8);
+  return words.length ? words.map((w) => `${w}:*`).join(" & ") : null;
+}
+
+export interface SearchResult extends MessageView {
+  channelName: string;
+}
+
+/**
+ * Full-text search over the channels of one community that the person can read, newest first.
+ * Messages from people they blocked are left out.
+ */
+export async function searchMessages(userId: string, rawCommunityId: unknown, rawQuery: unknown, rawBefore?: unknown): Promise<SearchResult[]> {
+  const communityId = parse(uuid, rawCommunityId);
+  const query = toPrefixQuery(parse(z.string().max(200), rawQuery ?? ""));
+  const before = rawBefore ? parse(uuid, rawBefore) : undefined;
+  const ctx = await loadMember(db, communityId, userId);
+  if (!ctx) throw notFound("Community not found.");
+  if (!query) return [];
+  const channels = await db.select({ id: channel.id, name: channel.name }).from(channel).where(eq(channel.communityId, communityId));
+  const perms = await channelAuthorities(db, ctx, channels.map((c) => c.id));
+  const readable = channels.filter((c) => has(perms.get(c.id)!, Permission.ViewChannels));
+  if (readable.length === 0) return [];
+  const rows = await db
+    .select(viewColumns)
+    .from(message)
+    .innerJoin(user, eq(user.id, message.authorId))
+    .where(
+      and(
+        inArray(message.channelId, readable.map((c) => c.id)),
+        sql`${message.search} @@ to_tsquery('simple', ${query})`,
+        notExists(db.select().from(userBlock).where(and(eq(userBlock.blockerId, userId), eq(userBlock.blockedId, message.authorId)))),
+        before ? lt(message.id, before) : undefined,
+      ),
+    )
+    .orderBy(desc(message.id))
+    .limit(SEARCH_LIMIT);
+  const names = new Map(readable.map((c) => [c.id, c.name]));
+  return (await toViews(rows)).map((m) => ({ ...m, channelName: names.get(m.channelId) ?? "" }));
 }

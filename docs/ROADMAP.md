@@ -75,7 +75,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Threads | ❌ | P2 |
 | Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P2 |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
-| Search | ❌ | P1: Postgres full-text search, membership-scoped |
+| Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
 | Notification preferences | 🟡 | Opt-in desktop notifications per browser ✅; per-community all/mentions/nothing P1 |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | 🟡 | Expiring, limited-use, revocable invites; pause and join requirements ✅; rules/onboarding screen P2 |
@@ -169,7 +169,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | --- | --- | --- |
 | Voice channels (LiveKit) | — | Optional compose profile with LiveKit + TURN; join/speak permissions enforced by short-lived server-issued tokens |
 | Direct messages with audited E2EE | blocking, audited protocol library ([D10](DECISIONS.md)) | Server stores ciphertext only; key verification UI; docs state guarantees and limits |
-| Search | channel permissions | Postgres full-text search limited to readable channels |
+| Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | mentions | Opt-in presence; per-community all/mentions/nothing |
 | Basic AutoMod | — | Per-community blocked words and link rules, audited |
