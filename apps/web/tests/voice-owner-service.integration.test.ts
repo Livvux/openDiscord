@@ -315,8 +315,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     // Retirement is in the native completion await when old HTTP work resumes.
     release.resolve(); finish.resolve(); await transition;
     const result = await outcome;
-    if (phase === "after-commit") expect(result).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
-    else expect(result).toMatchObject({ error: { code: "conflict" } });
+    expect(result).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
     expect(completions).toEqual([target]);
     const retired = a.calls.find(c => c.request.kind === "retire" && c.request.nativeRequestId === target)!;
     expect(retired).toBeDefined();
@@ -326,6 +325,9 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     expect(retired.request.requestId).not.toBe(originalSend.request.requestId);
     expect(retired.binding.expectedGeneration).toBe(a.snapshot.generation);
     expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+    a.before = undefined; a.after = undefined;
+    expect(await a.owner.requestVerification((targetState === "removed" ? c : b).snapshot.memberId)).toBeTruthy();
+    expect(a.calls.at(-1)?.request.kind).toBe("send");
   }, 30_000);
 
   it("completes genuine historical send before delayed real retirement response exactly once", async () => {
