@@ -42,7 +42,7 @@ describe("image processing", () => {
       .webp({ quality: 1, effort: 0 }).toBuffer();
     expect((await sharp(anim, { animated: true }).metadata()).pages).toBe(100);
     await expect(processImage(anim)).rejects.toThrow(/too large/);
-  });
+  }, 30_000); // generating 100 noise frames is slow on CI runners
 
   it("stops reading a body that is longer than announced", async () => {
     await expect(readLimited(new Blob([new Uint8Array(2048)]).stream(), 1024)).rejects.toThrow(/at most/);
