@@ -32,9 +32,16 @@ export async function POST(request: Request, ctx: RouteContext<"/public/[channel
     assertSameOrigin(request);
     const person = await requireUser(request.headers);
     // Native form is small; bound bytes before parsing rather than accepting a bulk upload.
-    const body = await request.text();
-    if (body.length > 4096) return publicNotFound();
-    const form = new URLSearchParams(body);
+    if (Number(request.headers.get("content-length") ?? "0") > 4096) return publicNotFound();
+    const reader = request.body?.getReader();
+    if (!reader) return publicNotFound();
+    const chunks: Uint8Array[] = []; let size = 0;
+    for (let part = await reader.read(); !part.done; part = await reader.read()) {
+      size += part.value.byteLength;
+      if (size > 4096) { await reader.cancel(); return publicNotFound(); }
+      chunks.push(part.value);
+    }
+    const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
     const messageId = await target(form.get("messageId"), channelId);
     if (!messageId) return publicNotFound();
     await reportContent(person.id, { messageId, reason: form.get("reason") });
