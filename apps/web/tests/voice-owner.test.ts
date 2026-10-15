@@ -5,7 +5,7 @@ import { VoiceCryptoOwner, VoiceGenerationInterrupted, type VoiceOwnerTransport 
 import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard } from "../src/lib/voice/owner-guard";
 import { validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT } from "../src/lib/voice/owner-control";
 import { OwnerUnitPeer, OwnerUnitWire } from "./fixtures/voice-owner-peer";
-import type { VoiceSnapshot } from "../src/lib/voice/contracts";
+import { VOICE_LIMITS, type VoiceSnapshot } from "../src/lib/voice/contracts";
 
 function locks() {
   const held = new Set<string>();
@@ -154,6 +154,7 @@ describe("unreachable serial voice owner", () => {
       const arrived = deferred<void>(), release = deferred<void>(), sendReturned = deferred<void>();
       value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { arrived.resolve(); await release.promise; sendReturned.resolve(); } };
       const requested = value.owner.requestVerification(value.other.memberId);
+      const requestedFailure = expect(requested).rejects.toThrow("generation interrupted");
       await arrived.promise;
       const send = [...value.wire.sent].reverse().find(entry => entry.request.kind === "send")!;
       if (!("nativeRequestId" in send.request)) throw new Error("Missing native ID.");
@@ -166,7 +167,7 @@ describe("unreachable serial voice owner", () => {
       expect(value.onFence).toHaveBeenCalledWith("generation-transition");
       const retired = value.wire.sent.filter(entry => entry.request.kind === "retire");
       expect(retired.some(entry => "nativeRequestId" in entry.request && entry.request.nativeRequestId === id)).toBe(true);
-      await expect(requested).rejects.toThrow("generation interrupted");
+      await requestedFailure;
       expect(completions.filter(value => value === id)).toHaveLength(1);
       expect(retired.every(entry => entry.binding.expectedGeneration === 2)).toBe(true);
       value.wire.pause = undefined;
@@ -298,6 +299,115 @@ describe("unreachable serial voice owner", () => {
       expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
       release.resolve(); await interrupted;
       expect(value.wire.sent.filter(entry => entry.request.kind === "retire")).toEqual([]);
+    } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+
+  for (const invalid of ["event-bytes", "event-utf8-bytes", "event-count", "key-count", "key-map", "fallback", "envelope", "event-type", "content"] as const) it(`rejects bounded-sync ${invalid} before any native receive and releases ownership`, async () => {
+    locks();
+    const current = snapshot(), base = snapshot().members[0], other = { ...base, voiceUserId: `@voice_${current.callId}_${base.memberId}:opendiscord.local` };
+    current.members.push(other);
+    const accountId = current.members[0].userId, onFence = vi.fn(), port = unitTransport();
+    const event = { sender: other.voiceUserId, type: "m.key.verification.cancel", content: { transaction_id: "bounded-fixture", code: "m.user", reason: "Fixture cancellation" } };
+    const batch = { cursor: "0", events: [event] as unknown[], oneTimeKeys: { signed_curve25519: 0 } as Record<string, number>, unusedFallbackKeys: [] as string[] };
+    if (invalid === "event-bytes") event.content.reason = "x".repeat(VOICE_LIMITS.requestBytes + 257);
+    if (invalid === "event-utf8-bytes") {
+      event.content.reason = "🦊".repeat(2200);
+      expect(JSON.stringify(event).length).toBeLessThan(VOICE_LIMITS.requestBytes + 256);
+      expect(Buffer.byteLength(JSON.stringify(event))).toBeGreaterThan(VOICE_LIMITS.requestBytes + 256);
+    }
+    if (invalid === "event-count") batch.events = Array.from({ length: VOICE_LIMITS.syncBatch + 1 }, () => event);
+    if (invalid === "key-count") batch.oneTimeKeys.signed_curve25519 = VOICE_LIMITS.prekeys + 1;
+    if (invalid === "key-map") batch.oneTimeKeys = Object.fromEntries(Array.from({ length: 256 }, (_, index) => [`unknown_${index}`, 1]));
+    if (invalid === "fallback") batch.unusedFallbackKeys = ["unsupported_algorithm"];
+    if (invalid === "envelope") batch.events = [{ ...event, unexpected: "outside stored service envelope" }];
+    if (invalid === "event-type") batch.events = [{ ...event, type: "m.room.message" }];
+    if (invalid === "content") batch.events = [{ sender: other.voiceUserId, type: event.type }];
+    const owner = await VoiceCryptoOwner.create({ accountId, guard: await acquireVoiceOwnerGuard(accountId), snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: input => input.request.kind === "sync" ? Promise.resolve(batch) : port(input), onFence });
+    // The public spy is a hard tripwire: RED must never send oversized data into native code.
+    const nativeReceive = vi.spyOn(C.OlmMachine.prototype, "receiveSyncChanges").mockImplementation(async () => { throw new Error("Pre-native validation tripwire."); });
+    try {
+      const rejected = owner.receive();
+      await expect(rejected).rejects.toThrow();
+      expect(nativeReceive).not.toHaveBeenCalled();
+      if (invalid === "event-bytes" || invalid === "event-utf8-bytes") await expect(rejected).rejects.toThrow("Voice sync event byte limit");
+      expect(onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(owner.flush()).rejects.toThrow("closed");
+      await owner.close();
+      const next = await acquireVoiceOwnerGuard(accountId); await releaseUnusedVoiceOwnerGuard(next);
+    } finally { await owner.close(); }
+  });
+
+  for (const ordering of ["before-completion", "during-completion", "after-completion"] as const) it(`retains the owner for a proven obsolete port failure ${ordering}`, async () => {
+    const value = await pair();
+    const sendArrived = deferred<void>(), sendRelease = deferred<void>(), sendRejected = deferred<void>(), retireArrived = deferred<void>(), retireRelease = deferred<void>(), completionArrived = deferred<void>(), completionRelease = deferred<void>();
+    const completions: string[] = [], original = C.OlmMachine.prototype.markRequestAsSent;
+    let targetId: string | undefined;
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, response) {
+      completions.push(id);
+      if (id === targetId && ordering === "during-completion") { completionArrived.resolve(); await completionRelease.promise; }
+      return original.call(this, id, type, response);
+    });
+    try {
+      value.wire.pause = async entry => {
+        if (entry.memberId !== value.current.memberId) return;
+        if (entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { sendArrived.resolve(); await sendRelease.promise; sendRejected.resolve(); throw new Error("Obsolete actual port conflict."); }
+        if (entry.request.kind === "retire" && entry.request.nativeRequestId === targetId && ordering === "before-completion") { retireArrived.resolve(); await retireRelease.promise; }
+      };
+      const requested = value.owner.requestVerification(value.other.memberId), interrupted = expect(requested).rejects.toBeInstanceOf(VoiceGenerationInterrupted);
+      await sendArrived.promise;
+      const sent = value.wire.sent.find(entry => entry.request.kind === "send")!;
+      if (!("nativeRequestId" in sent.request)) throw new Error("Missing native request ID.");
+      targetId = sent.request.nativeRequestId;
+      const transition = value.owner.transition({ ...value.current, generation: 2 });
+      if (ordering === "before-completion") {
+        await retireArrived.promise;
+        sendRelease.resolve(); await interrupted;
+        expect(completions.filter(id => id === targetId)).toHaveLength(0);
+        retireRelease.resolve(); await transition;
+      } else if (ordering === "during-completion") {
+        await completionArrived.promise;
+        sendRelease.resolve(); await sendRejected.promise;
+        expect(completions.filter(id => id === targetId)).toHaveLength(1);
+        completionRelease.resolve();
+        await transition; await interrupted;
+      } else {
+        await transition; sendRelease.resolve(); await interrupted;
+      }
+      expect(completions.filter(id => id === targetId)).toHaveLength(1);
+      expect(value.onFence.mock.calls).toEqual([["generation-transition"]]);
+      value.wire.pause = undefined;
+      expect(await value.owner.requestVerification(value.other.memberId)).toBeTruthy();
+      expect(value.wire.sent.at(-1)?.request.kind).toBe("send");
+    } finally { sendRelease.resolve(); retireRelease.resolve(); completionRelease.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+  it("keeps a current port failure fatal instead of treating every HTTP error as obsolete", async () => {
+    const value = await pair();
+    try {
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send") throw new Error("Current actual port failure."); };
+      await expect(value.owner.requestVerification(value.other.memberId)).rejects.toThrow("Current actual port failure");
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(value.owner.flush()).rejects.toThrow("closed");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+
+  it("keeps an already-started native completion failure fatal after a generation fence", async () => {
+    const value = await pair();
+    const arrived = deferred<void>(), release = deferred<void>(), original = C.OlmMachine.prototype.markRequestAsSent;
+    let targetId: string | undefined;
+    value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send") targetId = entry.request.nativeRequestId; };
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, response) {
+      if (id !== targetId) return original.call(this, id, type, response);
+      arrived.resolve(); await release.promise;
+      await original.call(this, id, type, response);
+      throw new Error("Injected native completion failure.");
+    });
+    try {
+      const requested = value.owner.requestVerification(value.other.memberId), failed = expect(requested).rejects.toThrow("Injected native completion failure");
+      await arrived.promise;
+      const transition = value.owner.transition({ ...value.current, generation: 2 }), interruptedTransition = expect(transition).rejects.toThrow("closed");
+      release.resolve(); await failed; await interruptedTransition;
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(value.owner.flush()).rejects.toThrow("closed");
     } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
   });
 

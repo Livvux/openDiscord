@@ -5,13 +5,22 @@ import { consumeVoiceOwnerGuard, type VoiceOwnerGuard } from "./owner-guard";
 import { sameVoiceParty, validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 
 type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
-type Entry = { readonly id: string; readonly type: C.RequestType; readonly body: string; readonly digest: string; readonly firstObservedGeneration: number; readonly request: NativeRequest; state: "pending" | "in-flight" | "completing" | "completed"; attempts: Map<string, { input: VoiceCryptoRequest; binding: VoiceBinding; promise?: Promise<void> }> };
+type Attempt = { readonly input: VoiceCryptoRequest; readonly binding: VoiceBinding; readonly revision: number; readonly key: string; promise?: Promise<void> };
+type Entry = { readonly id: string; readonly type: C.RequestType; readonly body: string; readonly digest: string; readonly firstObservedGeneration: number; readonly request: NativeRequest; state: "pending" | "in-flight" | "completing" | "completed"; attempts: Map<string, Attempt>; activeAttempt?: Attempt };
 type Flow = { handle: string; peer: VoiceControlParty; generation: number; request: C.VerificationRequest; sas?: C.Sas; confirmed: boolean };
 export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: string; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; emojiIndices: number[] | null };
 export type VoiceOwnerTransport = (input: Readonly<{ binding: VoiceBinding; request: VoiceCryptoRequest; signal: AbortSignal }>) => Promise<unknown>;
 export class VoiceGenerationInterrupted extends Error { constructor() { super("Voice generation interrupted."); } }
 export type VoiceOwnerOptions = { accountId: string; guard: VoiceOwnerGuard; snapshot: VoiceSnapshot; lifetime: { assertCurrent(): void; signal: AbortSignal }; transport: VoiceOwnerTransport; onFence(reason: string): void };
-const syncSchema = z.object({ cursor: z.string().regex(/^\d{1,15}$/), events: z.array(z.unknown()).max(VOICE_LIMITS.syncBatch), oneTimeKeys: z.record(z.string(), z.number().int().nonnegative()), unusedFallbackKeys: z.array(z.string()).max(1) }).strict();
+// Service stores {sender,type,content}; its 8192-byte limit already includes the original
+// send request. Canonical sender is 98 ASCII bytes, longest supported type 26, wrapper 34:
+// 158 bytes added around content. Reserve 256 rather than accepting unbounded response data.
+const VOICE_OWNER_SYNC_LIMITS = {
+  eventBytes: VOICE_LIMITS.requestBytes + 256,
+  batchBytes: VOICE_LIMITS.syncBatch * (VOICE_LIMITS.requestBytes + 256) + VOICE_LIMITS.syncBatch + 1,
+} as const;
+const syncSchema = z.object({ cursor: z.string().regex(/^\d{1,15}$/), events: z.array(z.unknown()).max(VOICE_LIMITS.syncBatch), oneTimeKeys: z.object({ signed_curve25519: z.number().int().min(0).max(VOICE_LIMITS.prekeys) }).strict(), unusedFallbackKeys: z.array(z.literal("signed_curve25519")).max(1) }).strict();
+const incomingEnvelopeSchema = z.object({ sender: z.string().min(1).max(98), type: z.string().min(1).max(100), content: z.record(z.string().max(256), z.unknown()) }).strict();
 const envelopeSchema = z.object({ sender: z.string(), type: z.string(), content: z.record(z.string(), z.unknown()) }).passthrough();
 const decryptedSchema = envelopeSchema.extend({ recipient: z.string(), recipient_keys: z.object({ ed25519: z.string() }), sender_device_keys: z.object({ user_id: z.string(), device_id: z.string(), keys: z.record(z.string(), z.string()) }), keys: z.object({ ed25519: z.string() }) });
 const deviceOutcomeSchema = z.object({ nativeResponse: z.object({}).strict(), disposition: z.discriminatedUnion("status", [z.object({ status: z.literal("processed-current"), enqueued: z.literal(1) }).strict(), z.object({ status: z.literal("processed-retired"), enqueued: z.literal(0) }).strict()]) }).strict();
@@ -179,29 +188,37 @@ export class VoiceCryptoOwner {
       const entry = await this.observe(request, allowTransition);
       if (entry?.state === "completed") return undefined;
       const key = `${this.snapshot.generation}:${retire ? "retire" : "send"}`;
-      const attempt = entry?.attempts.get(key) ?? { input: this.requestInput(request, entry?.id, retire), binding: this.binding() };
-      if (entry) { entry.attempts.set(key, attempt); entry.state = "in-flight"; }
+      const previous = entry?.attempts.get(key);
+      const attempt: Attempt = previous?.revision === this.revision ? previous : { input: previous?.input ?? Object.freeze(this.requestInput(request, entry?.id, retire)), binding: Object.freeze(this.binding()), revision: this.revision, key };
+      if (entry) { entry.attempts.set(key, attempt); entry.activeAttempt = attempt; entry.state = "in-flight"; }
       return { entry, attempt };
     }, allowTransition);
     if (!prepared) return;
     if (prepared.attempt.promise) return prepared.attempt.promise;
     const run = async () => {
       this.assertCurrent(allowTransition);
-      const result = await this.options.transport({ binding: prepared.attempt.binding, request: prepared.attempt.input, signal: this.abort.signal });
+      let outcome: { ok: true; result: unknown } | { ok: false; error: unknown };
+      try {
+        outcome = { ok: true, result: await this.options.transport({ binding: prepared.attempt.binding, request: prepared.attempt.input, signal: this.abort.signal }) };
+      } catch (error) { outcome = { ok: false, error }; }
       await this.serial(async () => {
-        const { entry } = prepared;
-        if (entry?.state === "completed" || entry?.state === "completing") return;
-        let nativeResponse = result;
+        const { entry, attempt } = prepared;
+        // Resolve both success and failure in the native executor. A superseded HTTP outcome
+        // cannot complete native work or apply the fatal policy to the retained current owner.
+        if (attempt.revision !== this.revision || attempt.binding.callId !== this.snapshot.callId || attempt.binding.memberId !== this.snapshot.memberId || attempt.binding.joinNonce !== this.snapshot.joinNonce || attempt.binding.expectedGeneration !== this.snapshot.generation || (entry && (entry.activeAttempt !== attempt || entry.attempts.get(attempt.key) !== attempt || entry.state === "completed" || entry.state === "completing"))) throw new VoiceGenerationInterrupted();
+        if (!outcome.ok) throw outcome.error;
+        let nativeResponse = outcome.result;
         if (request instanceof C.ToDeviceRequest) {
-          const outcome = deviceOutcomeSchema.parse(result);
-          if ((retire ? "processed-retired" : "processed-current") !== outcome.disposition.status) throw new Error("Native transport disposition mismatch.");
-          nativeResponse = outcome.nativeResponse;
+          const response = deviceOutcomeSchema.parse(outcome.result);
+          if ((retire ? "processed-retired" : "processed-current") !== response.disposition.status) throw new Error("Native transport disposition mismatch.");
+          nativeResponse = response.nativeResponse;
         }
         if (!entry) return;
         // Reserve BEFORE await; no late or concurrent response may mark this ID twice.
         entry.state = "completing";
         await this.machine.markRequestAsSent(entry.id, entry.type, JSON.stringify(nativeResponse));
         entry.state = "completed";
+        if (attempt.revision !== this.revision) throw new VoiceGenerationInterrupted();
       }, true);
     };
     prepared.attempt.promise = run();
@@ -329,10 +346,26 @@ export class VoiceCryptoOwner {
   async receive(): Promise<VoiceOwnerControl[]> {
     const revision = this.revision;
     const rawBatch = await this.exchange({ kind: "sync" });
-    const batch = await this.serial(() => syncSchema.parse(rawBatch));
+    const batch = await this.serial(() => {
+      const parsed = syncSchema.parse(rawBatch), serializedEvents: string[] = [];
+      let batchBytes = 2;
+      for (const rawEvent of parsed.events) {
+        const serialized = JSON.stringify(rawEvent);
+        if (serialized === undefined || serialized.length > VOICE_OWNER_SYNC_LIMITS.eventBytes) throw new Error("Voice sync event byte limit.");
+        const bytes = new TextEncoder().encode(serialized).length;
+        if (bytes > VOICE_OWNER_SYNC_LIMITS.eventBytes) throw new Error("Voice sync event byte limit.");
+        batchBytes += bytes + (serializedEvents.length ? 1 : 0);
+        if (batchBytes > VOICE_OWNER_SYNC_LIMITS.batchBytes) throw new Error("Voice sync batch byte limit.");
+        const event = incomingEnvelopeSchema.parse(JSON.parse(serialized)), schema = voiceEventSchema(event.type);
+        if (!schema || !this.snapshot.members.some(member => member.voiceUserId === event.sender && member.memberId !== this.snapshot.memberId)) throw new Error("Unsupported incoming voice envelope.");
+        schema.parse(event.content);
+        serializedEvents.push(serialized);
+      }
+      return { ...parsed, nativeEvents: `[${serializedEvents.join(",")}]` };
+    });
     const controls = await this.serial(async () => {
       if (revision !== this.revision) throw new VoiceGenerationInterrupted();
-      const processed = await this.machine.receiveSyncChanges(JSON.stringify(batch.events), new C.DeviceLists([], []), new Map(Object.entries(batch.oneTimeKeys)), new Set(batch.unusedFallbackKeys), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
+      const processed = await this.machine.receiveSyncChanges(batch.nativeEvents, new C.DeviceLists([], []), new Map(Object.entries(batch.oneTimeKeys)), new Set(batch.unusedFallbackKeys), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
       const accepted: VoiceOwnerControl[] = [];
       for (const item of processed) {
         if (item instanceof C.PlainTextToDeviceEvent) {
