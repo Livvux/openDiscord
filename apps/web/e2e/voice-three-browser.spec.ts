@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -14,7 +14,7 @@ const dependency = createRequire(path.join(process.cwd(), "package.json"));
 const worker = readFileSync(path.join(path.dirname(dependency.resolve("livekit-client")), "livekit-client.e2ee.worker.mjs"));
 const nativeHash = createHash("sha256").update(worker).digest("hex");
 
-async function open(browser: Browser, profile: { viewport?: { width: number; height: number }; isMobile?: boolean; hasTouch?: boolean }): Promise<Harness> {
+async function open(browser: Browser, profile: Pick<BrowserContextOptions, "viewport" | "isMobile" | "hasTouch" | "deviceScaleFactor" | "userAgent">): Promise<Harness> {
   const call = randomUUID(), room = `three-browser-${call}`;
   const bindings: Binding[] = [0, 1, 2].map(() => { const member = randomUUID(); return { call, member, user: `@voice_${call}_${member}:opendiscord.invalid`, device: randomUUID() }; });
   const transport = new BrowserVoiceTransport(bindings), devices: Device[] = [];
@@ -26,7 +26,7 @@ async function open(browser: Browser, profile: { viewport?: { width: number; hei
   };
   try {
     for (const binding of bindings) {
-      const context = await browser.newContext({ ...profile, baseURL: "http://localhost:3200" });
+      const context = await browser.newContext({ viewport: profile.viewport, isMobile: profile.isMobile, hasTouch: profile.hasTouch, deviceScaleFactor: profile.deviceScaleFactor, userAgent: profile.userAgent, baseURL: "http://localhost:3200" });
       const page = await context.newPage(); page.setDefaultTimeout(10_000);
       const access = new AccessToken(key, secret, { identity: binding.member, ttl: 300 });
       access.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true, canPublishData: false });
