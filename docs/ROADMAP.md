@@ -76,10 +76,10 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P2 |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
-| Notification preferences | 🟡 | Opt-in desktop notifications per browser ✅; per-community all/mentions/nothing P1 |
+| Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | 🟡 | Expiring, limited-use, revocable invites; pause and join requirements ✅; rules/onboarding screen P2 |
-| Presence and status | ❌ | P1 |
+| Presence and status | ✅ | Opt-in online status (off by default), heartbeat from open tabs, shown on avatars and member lists |
 | Edit, delete, moderate messages | ✅ | Pinning (max 50 per channel, audited); safe Markdown subset (code, quotes, bold/italic/strike, http(s) links) rendered without raw HTML |
 | Opt-in public, indexable channels | ❌ | P3 |
 
@@ -171,7 +171,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Direct messages with audited E2EE | blocking, audited protocol library ([D10](DECISIONS.md)) | Server stores ciphertext only; key verification UI; docs state guarantees and limits |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
-| Presence and notification preferences | mentions | Opt-in presence; per-community all/mentions/nothing |
+| Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |
 | Basic AutoMod | ✅ | Per-community blocked words and link rules, audited |
 
 ### P2 — important improvements

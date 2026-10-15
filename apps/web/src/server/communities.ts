@@ -34,6 +34,8 @@ export interface CommunityView {
   id: string;
   name: string;
   isOwner: boolean;
+  /** The viewer's notification level here. */
+  notifications: "mentions" | "muted";
   authority: MemberAuthority;
   channels: ChannelSummary[];
 }
@@ -84,7 +86,9 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
     .filter((r) => (r.permissions & Permission.ViewChannels) !== 0);
   const unread = await unreadState(userId, visible.map((r) => r.id));
   const channels = visible.map((r) => ({ ...r, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
-  return { id: c.id, name: c.name, isOwner: ctx.authority.isOwner, authority: ctx.authority, channels };
+  const [own] = await db.select({ notifications: member.notifications }).from(member)
+    .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+  return { id: c.id, name: c.name, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions", authority: ctx.authority, channels };
 }
 
 export async function renameCommunity(userId: string, rawId: unknown, rawName: unknown) {

@@ -9,6 +9,7 @@ import { toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as messages from "@/server/messages";
 import * as moderation from "@/server/moderation";
+import * as presence from "@/server/presence";
 import { requireUser } from "@/server/session";
 import * as unread from "@/server/unread";
 
@@ -69,6 +70,10 @@ export const updateCommunitySafety = async (communityId: string, input: Partial<
 
 export const updateAutomod = async (communityId: string, rules: { words: string[]; blockLinks: boolean }) =>
   run((u) => automod.updateAutomod(u, communityId, rules));
+
+export const setPresenceVisible = async (visible: boolean) => run((u) => presence.setPresenceVisible(u, visible));
+export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
+  run((u) => presence.setNotificationLevel(u, communityId, level));
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>
   run((u) => moderation.kickMember(u, communityId, userId, reason));

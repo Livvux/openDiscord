@@ -6,7 +6,7 @@ import { banMember, kickMember, setMemberRole } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { MemberSummary, RoleSummary } from "@/server/moderation";
 import { canManageRole, has, outranks, Permission, resolveAuthority, type MemberAuthority } from "@/server/permissions";
-import { Avatar } from "../avatar";
+import { PresenceAvatar } from "../presence-avatar";
 
 interface MembersManagerProps {
   communityId: string;
@@ -50,7 +50,7 @@ export function MembersManager({ communityId, currentUserId, authority, members,
           );
           return (
             <li key={m.userId} className="flex flex-wrap items-center gap-3 px-3 py-2">
-              <Avatar name={m.name} size="sm" />
+              <PresenceAvatar userId={m.userId} name={m.name} size="sm" announce />
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-1.5 font-medium">
                   {m.name}

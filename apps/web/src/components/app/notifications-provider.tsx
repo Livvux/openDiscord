@@ -70,7 +70,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       // Read at event time; usePathname would force this app-wide provider into a Suspense boundary.
       const path = window.location.pathname;
       const watching = path === channelPath && document.visibilityState === "visible";
-      if (!watching) desktopNotify(notice, () => router.push(channelPath));
+      if (!watching && !notice.muted) desktopNotify(notice, () => router.push(channelPath));
       // The open community counts its own mentions from its stream; others are bumped here.
       if (!path.startsWith(`/app/c/${notice.communityId}`)) {
         setLive((m) => {
