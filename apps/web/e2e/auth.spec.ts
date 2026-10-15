@@ -17,6 +17,7 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await page.getByLabel("Display name").fill("E2E Tester");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
+  await page.getByRole("checkbox", { name: /I am at least/ }).check();
   await expect(page.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/app$/);

@@ -70,7 +70,7 @@ describe("file names", () => {
   });
 });
 
-describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
+describe.skipIf(!mediaEnabled)("attachments in private storage", () => {
   const fixtures = testUsers();
   let author: string;
   let member: string;
@@ -161,7 +161,7 @@ describe.skipIf(!mediaEnabled)("attachments in object storage", () => {
     const heavy = await fixtures.create("Heavy uploader");
     await acceptInvite(heavy, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));
     // Pretend most of today's quota is already used.
-    await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `test/${heavy}`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
+    await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `attachments/${heavy}.bin`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
     const small = new Uint8Array(8);
     await expect(uploadAttachment(heavy, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/per day/);
   });

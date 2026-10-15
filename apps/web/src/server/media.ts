@@ -2,7 +2,6 @@
 // Every upload is decoded and re-encoded server-side: only real raster images survive, and EXIF/GPS
 // metadata is dropped. Objects are only ever served through an access-checked route.
 import { randomUUID } from "node:crypto";
-import { AwsClient } from "aws4fetch";
 import { and, count, eq, gt, inArray, isNotNull, isNull, lt, or, sql, sum } from "drizzle-orm";
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
@@ -12,6 +11,8 @@ import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE
 import { requireChannel, type Db } from "./access";
 import { AppError, invalid, notFound } from "./errors";
 import { consume } from "./limits";
+import { configuredAttachmentStorage } from "./attachment-storage";
+import { scanAttachment } from "./attachment-scanner";
 import { Permission } from "./permissions";
 import { parse, uuid } from "./validation";
 
@@ -42,16 +43,9 @@ const MAX_TOTAL_PIXELS = 50_000_000;
 const UNLINKED_TTL_MS = 60 * 60_000;
 const DECODABLE = new Set(["jpeg", "png", "webp", "gif"]);
 
-const storage = (() => {
-  const { R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  if (!R2_ENDPOINT || !R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) return null;
-  return {
-    client: new AwsClient({ accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY, service: "s3", region: "auto" }),
-    url: (key: string) => `${R2_ENDPOINT.replace(/\/$/, "")}/${R2_BUCKET}/${key}`,
-  };
-})();
+const storage = configuredAttachmentStorage();
 
-/** Uploads are offered only when object storage is configured. */
+/** Uploads are offered when private local or S3 storage is configured. */
 export const mediaEnabled = storage !== null;
 
 function requireStorage() {
@@ -171,7 +165,8 @@ export async function uploadAttachment(
 }
 
 async function storeUpload(userId: string, channelId: string, image: boolean, rawFilename: string | null, raw: Uint8Array): Promise<AttachmentView> {
-  const { client, url } = requireStorage();
+  const storage = requireStorage();
+  await scanAttachment(raw);
   let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
   if (image) {
     const processed = await processImage(raw);
@@ -200,16 +195,11 @@ async function storeUpload(userId: string, channelId: string, image: boolean, ra
     }).returning({ id: attachment.id });
     return created;
   });
-  const res = await client.fetch(url(key), {
-    method: "PUT",
-    // No copy: the buffer is ours (from the request or sharp), never a SharedArrayBuffer.
-    body: stored.data as Uint8Array<ArrayBuffer>,
-    // Explicit length: some S3 implementations (MinIO, Garage) refuse chunked uploads.
-    headers: { "Content-Type": stored.contentType, "Content-Length": String(stored.data.byteLength) },
-  });
-  if (!res.ok) {
-    await db.delete(attachment).where(eq(attachment.id, row.id));
-    console.error("[media] upload failed", res.status, await res.text().catch(() => ""));
+  try {
+    await storage.put(key, stored.data as Uint8Array<ArrayBuffer>, stored.contentType);
+  } catch {
+    // Keep the unlinked row: a write can succeed remotely despite a lost response.
+    // The sweeper will remove both the unreachable object and its quota reservation.
     throw new AppError("conflict", "The file couldn't be stored. Try again.");
   }
   return { id: row.id, width: stored.width, height: stored.height, filename: stored.filename, size: stored.data.byteLength };
@@ -240,13 +230,13 @@ export async function attachmentsFor(messageIds: string[]): Promise<Map<string, 
 
 /** Streams an attachment to a member of its channel. Everyone else gets "not found". */
 export async function readAttachment(userId: string, rawId: unknown): Promise<Response> {
-  const { client, url } = requireStorage();
+  const storage = requireStorage();
   const id = parse(uuid, rawId);
   const [row] = await db.select({ key: attachment.key, contentType: attachment.contentType, filename: attachment.filename, channelId: message.channelId })
     .from(attachment).innerJoin(message, eq(message.id, attachment.messageId)).where(eq(attachment.id, id));
   if (!row) throw notFound("Attachment not found.");
   await requireChannel(db, row.channelId, userId);
-  const res = await client.fetch(url(row.key));
+  const res = await storage.read(row.key);
   if (!res.ok || !res.body) {
     console.error("[media] read failed", res.status);
     throw notFound("Attachment not found.");
@@ -282,13 +272,11 @@ export function sweepAttachments(now = Date.now()): Promise<number> {
 
 async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
-  const { client, url } = storage;
   const stale = await db.select({ id: attachment.id, key: attachment.key }).from(attachment)
     .where(and(isNull(attachment.messageId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))))).limit(200);
   const removed: string[] = [];
   await Promise.all(stale.map(async ({ id, key }) => {
-    const res = await client.fetch(url(key), { method: "DELETE" }).catch(() => null);
-    if (res && (res.ok || res.status === 404)) removed.push(id);
+    if (await storage.remove(key).catch(() => false)) removed.push(id);
   }));
   if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId)));
   return removed.length;

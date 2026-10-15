@@ -20,6 +20,7 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
     env:
+      ATTACHMENT_DIR: /tmp/opendiscord-ci-attachments
       DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/opendiscord
       BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
       BETTER_AUTH_URL: http://localhost:3000
@@ -37,6 +38,8 @@ jobs:
         run: node scripts/check-dependency-licenses.mjs
       - name: Dependency audit (production dependencies)
         run: pnpm audit --prod --audit-level=high
+      - name: Operator job shell syntax
+        run: bash -n scripts/production-backup.sh scripts/production-maintenance.sh scripts/secure-dokploy-env.sh
       - name: Operator alert state regression checks
         run: python3 scripts/test-operator-monitor.py
       - run: pnpm lint

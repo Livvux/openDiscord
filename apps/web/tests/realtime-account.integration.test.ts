@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 // Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -39,7 +40,7 @@ describe("account deletion", () => {
   const password = "correct horse battery";
 
   async function signUp() {
-    const res = await auth.api.signUpEmail({ body: { email, password, name: "Leaving" }, returnHeaders: true });
+    const res = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Leaving" }, returnHeaders: true });
     const cookie = res.headers.get("set-cookie") ?? "";
     return { userId: res.response.user.id, headers: new Headers({ cookie: cookie.split(";")[0] }) };
   }

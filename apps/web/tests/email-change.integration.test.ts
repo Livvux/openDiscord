@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,7 @@ const password = "correct horse battery";
 const address = (name: string) => `${name}-${randomUUID()}@example.test`;
 
 async function verifiedAccount(email: string) {
-  const result = await auth.api.signUpEmail({ body: { email, password, name: "Email correction test" } });
+  const result = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Email correction test" } });
   ids.push(result.user.id);
   await db.update(user).set({ emailVerified: true }).where(eq(user.id, result.user.id));
   const signedIn = await auth.api.signInEmail({ body: { email, password }, returnHeaders: true });

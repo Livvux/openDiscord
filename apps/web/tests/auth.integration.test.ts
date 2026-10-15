@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 // Requires a migrated database at DATABASE_URL (see docker-compose.yml / CI).
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -15,7 +16,7 @@ describe("email + password auth", () => {
   });
 
   it("creates an account and returns a session", async () => {
-    const res = await auth.api.signUpEmail({ body: { email, password, name: "Tester" } });
+    const res = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Tester" } });
     expect(res.user.email).toBe(email);
     expect(res.token).toBeTruthy();
   });

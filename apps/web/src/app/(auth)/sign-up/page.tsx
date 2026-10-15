@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { getInstanceSettings } from "@/server/instance-policy";
+import { getMinimumAge } from "@/server/operator-policy";
 import { AuthForm } from "../auth-form";
 
 export default function SignUpPage() {
@@ -15,5 +16,5 @@ export default function SignUpPage() {
 async function SignUp() {
   await connection();
   const { closedAlpha } = await getInstanceSettings();
-  return <AuthForm mode="sign-up" closedAlpha={closedAlpha} turnstileSiteKey={process.env.TURNSTILE_SITE_KEY || undefined} />;
+  return <AuthForm minimumAge={getMinimumAge()} mode="sign-up" closedAlpha={closedAlpha} turnstileSiteKey={process.env.TURNSTILE_SITE_KEY || undefined} />;
 }
