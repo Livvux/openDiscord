@@ -206,6 +206,7 @@ describe("private archive staging commit", () => {
     await expect(importCommunity(id, { ...data, messages }, { sessionId, attachments: ordered.map((row, index) => ({ id: row.id, messageKey: messages[index].key })) })).rejects.toThrow("no longer available");
     expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
     const unchanged = await db.select().from(attachment).where(inArray(attachment.id, ordered.map((row) => row.id)));
+    expect(unchanged).toHaveLength(ordered.length);
     expect(unchanged.every((row) => row.messageId === null && row.channelId === null && row.linkedAt === null)).toBe(true);
   });
 
