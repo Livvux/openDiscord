@@ -52,7 +52,7 @@ export function AdminPanel({ data, tab, search, status }: AdminPanelProps) {
       )}
       {tab === "users" && <UsersPanel users={data.users} filter={data.filter} search={search} />}
       {tab === "communities" && <CommunitiesPanel communities={data.communities} search={search} />}
-      {tab === "reports" && <ReportsPanel reports={data.reports} status={status} />}
+      {tab === "reports" && <><Link href="/app/admin/private-reports" className="underline">Private message reports (explicit recipient disclosures)</Link><ReportsPanel reports={data.reports} status={status} /></>}
       {tab === "settings" && <SettingsPanel settings={data.settings} admins={data.admins} />}
       {tab === "audit" && <AuditPanel logs={data.logs} />}
     </div>

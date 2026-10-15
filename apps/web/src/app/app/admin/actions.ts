@@ -1,6 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
+import { resolveDirectReport } from "@/server/direct-messages";
 import * as admin from "@/server/instance-admin";
 import { toResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
@@ -26,3 +27,5 @@ export const setClosedAlpha = async (enabled: boolean, reason: string) => run((a
 export const saveSettings = async (settings: z.infer<typeof admin.settingsInput>, reason: string) => run((a) => admin.updateInstanceSettings(a, settings, reason));
 export const reviewReport = async (id: string, reason: string) => run((a) => admin.reviewReport(a, id, reason), false);
 export const resolveReport = async (id: string, outcome: "dismissed" | "removed", reason: string) => run((a) => admin.resolveReport(a, id, outcome, reason));
+
+export const resolvePrivateReport = async (id: string) => run((a) => resolveDirectReport(a, id));
