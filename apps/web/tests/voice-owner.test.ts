@@ -337,4 +337,78 @@ describe("unreachable serial voice owner", () => {
     } finally { await owner.close(); }
   });
 
+  for (const ordering of ["before-completion", "during-completion", "after-completion"] as const) it(`retains the owner for a proven obsolete port failure ${ordering}`, async () => {
+    const value = await pair();
+    const sendArrived = deferred<void>(), sendRelease = deferred<void>(), sendRejected = deferred<void>(), retireArrived = deferred<void>(), retireRelease = deferred<void>(), completionArrived = deferred<void>(), completionRelease = deferred<void>();
+    const completions: string[] = [], original = C.OlmMachine.prototype.markRequestAsSent;
+    let targetId: string | undefined;
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, response) {
+      completions.push(id);
+      if (id === targetId && ordering === "during-completion") { completionArrived.resolve(); await completionRelease.promise; }
+      return original.call(this, id, type, response);
+    });
+    try {
+      value.wire.pause = async entry => {
+        if (entry.memberId !== value.current.memberId) return;
+        if (entry.request.kind === "send" && entry.request.eventType === "m.key.verification.request") { sendArrived.resolve(); await sendRelease.promise; sendRejected.resolve(); throw new Error("Obsolete actual port conflict."); }
+        if (entry.request.kind === "retire" && entry.request.nativeRequestId === targetId && ordering === "before-completion") { retireArrived.resolve(); await retireRelease.promise; }
+      };
+      const requested = value.owner.requestVerification(value.other.memberId), interrupted = expect(requested).rejects.toBeInstanceOf(VoiceGenerationInterrupted);
+      await sendArrived.promise;
+      const sent = value.wire.sent.find(entry => entry.request.kind === "send")!;
+      if (!("nativeRequestId" in sent.request)) throw new Error("Missing native request ID.");
+      targetId = sent.request.nativeRequestId;
+      const transition = value.owner.transition({ ...value.current, generation: 2 });
+      if (ordering === "before-completion") {
+        await retireArrived.promise;
+        sendRelease.resolve(); await interrupted;
+        expect(completions.filter(id => id === targetId)).toHaveLength(0);
+        retireRelease.resolve(); await transition;
+      } else if (ordering === "during-completion") {
+        await completionArrived.promise;
+        sendRelease.resolve(); await sendRejected.promise;
+        expect(completions.filter(id => id === targetId)).toHaveLength(1);
+        completionRelease.resolve();
+        await transition; await interrupted;
+      } else {
+        await transition; sendRelease.resolve(); await interrupted;
+      }
+      expect(completions.filter(id => id === targetId)).toHaveLength(1);
+      expect(value.onFence.mock.calls).toEqual([["generation-transition"]]);
+      value.wire.pause = undefined;
+      expect(await value.owner.requestVerification(value.other.memberId)).toBeTruthy();
+      expect(value.wire.sent.at(-1)?.request.kind).toBe("send");
+    } finally { sendRelease.resolve(); retireRelease.resolve(); completionRelease.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+  it("keeps a current port failure fatal instead of treating every HTTP error as obsolete", async () => {
+    const value = await pair();
+    try {
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send") throw new Error("Current actual port failure."); };
+      await expect(value.owner.requestVerification(value.other.memberId)).rejects.toThrow("Current actual port failure");
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(value.owner.flush()).rejects.toThrow("closed");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+
+  it("keeps an already-started native completion failure fatal after a generation fence", async () => {
+    const value = await pair();
+    const arrived = deferred<void>(), release = deferred<void>(), original = C.OlmMachine.prototype.markRequestAsSent;
+    let targetId: string | undefined;
+    value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === "send") targetId = entry.request.nativeRequestId; };
+    vi.spyOn(C.OlmMachine.prototype, "markRequestAsSent").mockImplementation(async function(this: C.OlmMachine, id, type, response) {
+      if (id !== targetId) return original.call(this, id, type, response);
+      arrived.resolve(); await release.promise;
+      await original.call(this, id, type, response);
+      throw new Error("Injected native completion failure.");
+    });
+    try {
+      const requested = value.owner.requestVerification(value.other.memberId), failed = expect(requested).rejects.toThrow("Injected native completion failure");
+      await arrived.promise;
+      const transition = value.owner.transition({ ...value.current, generation: 2 }), interruptedTransition = expect(transition).rejects.toThrow("closed");
+      release.resolve(); await failed; await interruptedTransition;
+      expect(value.onFence).toHaveBeenCalledWith("native-or-schema-failure");
+      await expect(value.owner.flush()).rejects.toThrow("closed");
+    } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+
 });

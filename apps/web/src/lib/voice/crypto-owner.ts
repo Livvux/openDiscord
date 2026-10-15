@@ -5,7 +5,8 @@ import { consumeVoiceOwnerGuard, type VoiceOwnerGuard } from "./owner-guard";
 import { sameVoiceParty, validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 
 type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
-type Entry = { readonly id: string; readonly type: C.RequestType; readonly body: string; readonly digest: string; readonly firstObservedGeneration: number; readonly request: NativeRequest; state: "pending" | "in-flight" | "completing" | "completed"; attempts: Map<string, { input: VoiceCryptoRequest; binding: VoiceBinding; promise?: Promise<void> }> };
+type Attempt = { readonly input: VoiceCryptoRequest; readonly binding: VoiceBinding; readonly revision: number; readonly key: string; promise?: Promise<void> };
+type Entry = { readonly id: string; readonly type: C.RequestType; readonly body: string; readonly digest: string; readonly firstObservedGeneration: number; readonly request: NativeRequest; state: "pending" | "in-flight" | "completing" | "completed"; attempts: Map<string, Attempt>; activeAttempt?: Attempt };
 type Flow = { handle: string; peer: VoiceControlParty; generation: number; request: C.VerificationRequest; sas?: C.Sas; confirmed: boolean };
 export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: string; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; emojiIndices: number[] | null };
 export type VoiceOwnerTransport = (input: Readonly<{ binding: VoiceBinding; request: VoiceCryptoRequest; signal: AbortSignal }>) => Promise<unknown>;
@@ -187,29 +188,37 @@ export class VoiceCryptoOwner {
       const entry = await this.observe(request, allowTransition);
       if (entry?.state === "completed") return undefined;
       const key = `${this.snapshot.generation}:${retire ? "retire" : "send"}`;
-      const attempt = entry?.attempts.get(key) ?? { input: this.requestInput(request, entry?.id, retire), binding: this.binding() };
-      if (entry) { entry.attempts.set(key, attempt); entry.state = "in-flight"; }
+      const previous = entry?.attempts.get(key);
+      const attempt: Attempt = previous?.revision === this.revision ? previous : { input: previous?.input ?? Object.freeze(this.requestInput(request, entry?.id, retire)), binding: Object.freeze(this.binding()), revision: this.revision, key };
+      if (entry) { entry.attempts.set(key, attempt); entry.activeAttempt = attempt; entry.state = "in-flight"; }
       return { entry, attempt };
     }, allowTransition);
     if (!prepared) return;
     if (prepared.attempt.promise) return prepared.attempt.promise;
     const run = async () => {
       this.assertCurrent(allowTransition);
-      const result = await this.options.transport({ binding: prepared.attempt.binding, request: prepared.attempt.input, signal: this.abort.signal });
+      let outcome: { ok: true; result: unknown } | { ok: false; error: unknown };
+      try {
+        outcome = { ok: true, result: await this.options.transport({ binding: prepared.attempt.binding, request: prepared.attempt.input, signal: this.abort.signal }) };
+      } catch (error) { outcome = { ok: false, error }; }
       await this.serial(async () => {
-        const { entry } = prepared;
-        if (entry?.state === "completed" || entry?.state === "completing") return;
-        let nativeResponse = result;
+        const { entry, attempt } = prepared;
+        // Resolve both success and failure in the native executor. A superseded HTTP outcome
+        // cannot complete native work or apply the fatal policy to the retained current owner.
+        if (attempt.revision !== this.revision || attempt.binding.callId !== this.snapshot.callId || attempt.binding.memberId !== this.snapshot.memberId || attempt.binding.joinNonce !== this.snapshot.joinNonce || attempt.binding.expectedGeneration !== this.snapshot.generation || (entry && (entry.activeAttempt !== attempt || entry.attempts.get(attempt.key) !== attempt || entry.state === "completed" || entry.state === "completing"))) throw new VoiceGenerationInterrupted();
+        if (!outcome.ok) throw outcome.error;
+        let nativeResponse = outcome.result;
         if (request instanceof C.ToDeviceRequest) {
-          const outcome = deviceOutcomeSchema.parse(result);
-          if ((retire ? "processed-retired" : "processed-current") !== outcome.disposition.status) throw new Error("Native transport disposition mismatch.");
-          nativeResponse = outcome.nativeResponse;
+          const response = deviceOutcomeSchema.parse(outcome.result);
+          if ((retire ? "processed-retired" : "processed-current") !== response.disposition.status) throw new Error("Native transport disposition mismatch.");
+          nativeResponse = response.nativeResponse;
         }
         if (!entry) return;
         // Reserve BEFORE await; no late or concurrent response may mark this ID twice.
         entry.state = "completing";
         await this.machine.markRequestAsSent(entry.id, entry.type, JSON.stringify(nativeResponse));
         entry.state = "completed";
+        if (attempt.revision !== this.revision) throw new VoiceGenerationInterrupted();
       }, true);
     };
     prepared.attempt.promise = run();
