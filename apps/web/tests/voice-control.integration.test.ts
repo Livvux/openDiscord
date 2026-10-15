@@ -158,7 +158,7 @@ describe("voice-only scope, immutable public state and replay", () => {
     const request = { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
-    expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
+    expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
     expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, b.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(0);
     expect(await db.$count(voiceSignature, eq(voiceSignature.signerMemberId, a.snapshot.memberId))).toBe(0);
   });
