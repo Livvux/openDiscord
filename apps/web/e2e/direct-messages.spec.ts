@@ -1,10 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createInviteLink, expectNoA11yViolations, newUserPage, PASSWORD, sendMessage, signUp } from "./helpers";
 
-async function navigation(page: Page, name: string) {
+async function showNavigationFor(page: Page, name: string) {
   const button = page.getByRole("button", { name, exact: true }).first();
-  if (!await button.isVisible()) await page.getByRole("button", { name: "Open navigation" }).click();
-  await button.click();
+  const navigation = page.getByRole("button", { name: "Open navigation" });
+  await expect.poll(async () => await button.isVisible() || await navigation.isVisible()).toBe(true);
+  if (!await button.isVisible()) await navigation.click();
+  await expect(button).toBeVisible();
 }
 async function openConversation(page: Page, name: string) {
   await page.getByRole("complementary", { name: "Direct conversations" }).getByRole("button").filter({ hasText: name }).click();
@@ -36,12 +38,18 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
     page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/dm") && request.method() === "POST") wire.push(request.postData() ?? ""); });
   }
   const email = await signUp(alice, "Private Alice");
-  await navigation(alice, "Create a community");
+  await showNavigationFor(alice, "Create a community");
+  await alice.getByRole("button", { name: "Create a community", exact: true }).first().click();
   await alice.getByLabel("Name", { exact: true }).fill("Private Test Community");
   await alice.getByRole("button", { name: "Create", exact: true }).click();
   await expect(alice.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
-  if (!await alice.getByRole("button", { name: "Invite people", exact: true }).isVisible()) await alice.getByRole("button", { name: "Open navigation" }).click();
+  await showNavigationFor(alice, "Invite people");
   const invite = await createInviteLink(alice);
+  const mobileNavigation = alice.getByRole("button", { name: "Open navigation" });
+  if (await mobileNavigation.isVisible()) {
+    await alice.keyboard.press("Escape");
+    await expect(mobileNavigation).toHaveAttribute("aria-expanded", "false");
+  }
   await signUp(bob, "Private Bob");
   await bob.goto(invite);
   await bob.getByRole("button", { name: "Accept invite", exact: true }).click();
