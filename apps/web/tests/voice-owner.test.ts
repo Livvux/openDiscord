@@ -411,4 +411,39 @@ describe("unreachable serial voice owner", () => {
     } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
   });
 
+  for (const operation of ["sync", "ack"] as const) for (const change of ["generation", "context"] as const) it(`retains actual verified peer controls after obsolete ${operation} rejection across ${change}`, async () => {
+    const value = await pair();
+    const arrived = deferred<void>(), release = deferred<void>();
+    try {
+      await verify(value);
+      await value.owner.setControlContext(randomUUID(), value.current.members.map(member => member.memberId));
+      let held = false;
+      value.wire.pause = async entry => {
+        if (!held && entry.memberId === value.current.memberId && entry.request.kind === operation) { held = true; arrived.resolve(); await release.promise; throw new Error(`Obsolete ${operation} port conflict.`); }
+      };
+      const pending = value.owner.receive(), interrupted = expect(pending).rejects.toBeInstanceOf(VoiceGenerationInterrupted);
+      await arrived.promise;
+      const generation = change === "generation" ? value.current.generation + 1 : value.current.generation;
+      if (change === "generation") await value.owner.transition({ ...value.current, generation });
+      const epochId = randomUUID();
+      await value.owner.setControlContext(epochId, value.current.members.map(member => member.memberId));
+      release.resolve(); await interrupted;
+      expect(value.onFence.mock.calls.every(([reason]) => reason === "generation-transition" || reason === "audience-context-change")).toBe(true);
+      value.wire.pause = undefined;
+      value.peer.snapshot.generation = generation;
+      const control = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: value.current.callId, generation, epochId, sender: voiceControlParty(value.other), recipient: voiceControlParty(value.current.members[0]), publisher: voiceControlParty(value.other), audience: value.current.members.map(voiceControlParty).sort((a, b) => a.memberId.localeCompare(b.memberId)), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 7).toString("base64") };
+      await value.peer.encrypt(value.current.members[0], control);
+      expect(await value.owner.receive()).toEqual([control]);
+    } finally { release.resolve(); await value.owner.close(); value.peer.close(); }
+  });
+  for (const operation of ["sync", "ack"] as const) it(`keeps a current ${operation} port rejection fatal`, async () => {
+    const value = await pair();
+    try {
+      value.wire.pause = async entry => { if (entry.memberId === value.current.memberId && entry.request.kind === operation) throw new Error(`Current ${operation} port failure.`); };
+      await expect(value.owner.receive()).rejects.toThrow(`Current ${operation} port failure`);
+      expect(value.onFence).toHaveBeenCalledWith("transport-or-schema-failure");
+      await expect(value.owner.flush()).rejects.toThrow("closed");
+    } finally { await value.owner.close(); value.peer.close(); }
+  });
+
 });
