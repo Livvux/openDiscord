@@ -17,11 +17,10 @@ export function RailLink({ href, name }: { href: string; name: string }) {
       title={name}
       aria-label={name}
       aria-current={active ? "page" : undefined}
-      className={`relative flex size-12 items-center justify-center rounded-2xl text-sm font-semibold transition-[border-radius,background-color] focus-visible:outline-2 focus-visible:outline-ring ${
-        active ? "rounded-xl bg-primary text-primary-foreground" : "bg-card text-foreground hover:rounded-xl hover:bg-primary/70"
+      className={`relative grid size-10 place-items-center text-sm font-semibold transition-[border-radius,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+        active ? "rounded-xl bg-primary text-primary-foreground" : "rounded-2xl bg-white/5 text-zinc-300 hover:rounded-xl hover:bg-white/10"
       }`}
     >
-      {active && <span aria-hidden className="absolute -left-2 h-8 w-1 rounded-r bg-foreground" />}
       {initials}
     </Link>
   );

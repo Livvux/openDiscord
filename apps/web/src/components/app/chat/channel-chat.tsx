@@ -103,9 +103,9 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
               {loadError && <p role="alert" className="text-sm text-destructive">{loadError}</p>}
             </div>
           ) : (
-            <div className="px-4 pb-4">
-              <h2 className="text-2xl font-semibold">Welcome to #{channel.name}</h2>
-              <p className="text-muted-foreground">This is the start of the channel.</p>
+            <div className="px-5 pb-2">
+              <h2 className="text-xl font-semibold text-zinc-100">Welcome to #{channel.name}</h2>
+              <p className="text-sm text-zinc-400">This is the start of the channel.</p>
             </div>
           )}
           <div role="log" aria-label={`Messages in #${channel.name}`} aria-live="polite" aria-relevant="additions">
@@ -135,14 +135,14 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
         </div>
       </div>
       {sendError && (
-        <p role="alert" className="px-4 pb-1 text-sm text-destructive">
+        <p role="alert" className="px-5 pb-1 text-sm text-destructive">
           {sendError}
         </p>
       )}
       {canSend ? (
         <Composer channelName={channel.name} draft={draft} setDraft={setDraft} onSend={onSend} />
       ) : (
-        <p className="border-t px-4 py-3 text-sm text-muted-foreground">You don&apos;t have permission to send messages here.</p>
+        <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>
       )}
     </div>
   );

@@ -34,7 +34,7 @@ export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" |
             <button
               type="button"
               aria-label="Create a community"
-              className="flex size-12 items-center justify-center rounded-2xl bg-card text-brand-online transition hover:rounded-xl hover:bg-brand-online hover:text-white focus-visible:outline-2 focus-visible:outline-ring"
+              className="grid size-10 place-items-center rounded-2xl bg-white/5 text-brand-mint transition-[border-radius,background-color] hover:rounded-xl hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
           }
         >

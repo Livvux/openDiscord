@@ -10,7 +10,7 @@ export async function CommunityRail() {
   const communities = await listCommunities(user.id);
   return (
     <>
-      <ul className="flex flex-1 flex-col items-center gap-2 overflow-y-auto py-3">
+      <ul className="flex flex-1 flex-col items-center gap-3 overflow-y-auto py-4">
         {communities.map((c) => (
           <li key={c.id}>
             <RailLink href={`/app/c/${c.id}`} name={c.name} />
@@ -23,7 +23,7 @@ export async function CommunityRail() {
       <Link
         href="/app/settings"
         aria-label={`Account settings for ${user.name}`}
-        className="mb-3 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="mb-4 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <Avatar name={user.name} />
       </Link>

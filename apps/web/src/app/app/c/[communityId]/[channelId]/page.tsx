@@ -1,4 +1,3 @@
-import { HashIcon } from "lucide-react";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog";
@@ -28,12 +27,14 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
 
   return (
     <>
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/5 px-3 md:px-5">
         <MobileNavToggle />
-        <HashIcon aria-hidden className="size-5 text-muted-foreground" />
-        <h1 className="font-semibold">{channel.name}</h1>
+        <h1 className="font-medium text-zinc-200">
+          <span aria-hidden className="text-zinc-400"># </span>
+          {channel.name}
+        </h1>
         {channel.topic && (
-          <p className="hidden truncate border-l pl-3 text-sm text-muted-foreground sm:block">{channel.topic}</p>
+          <p className="hidden truncate border-l border-white/10 pl-3 text-sm text-zinc-400 sm:block">{channel.topic}</p>
         )}
         <div className="ml-auto">
           {has(view.authority, Permission.ManageChannels) && (

@@ -29,6 +29,7 @@ html {
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-inter);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-panel: var(--panel);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -130,39 +131,45 @@ html {
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* App theme, matching the client preview on the landing page (app-mockup.tsx):
+   charcoal canvas, darker community rail, faint channel panel, white/5 hairlines, indigo active state.
+   Secondary text uses zinc-400 instead of the preview's zinc-500/600 to meet WCAG AA contrast. */
 .dark {
   --background: var(--color-brand-charcoal);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.24 0.03 265);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  --foreground: #f4f4f5; /* zinc-100 */
+  --card: color-mix(in oklab, var(--color-brand-charcoal) 96%, white);
+  --card-foreground: #f4f4f5;
+  --popover: color-mix(in oklab, var(--color-brand-charcoal) 94%, white);
+  --popover-foreground: #f4f4f5;
   /* indigo-600: brand indigo darkened to keep white text above 4.5:1 (WCAG AA). */
   --primary: #4f46e5;
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --primary-foreground: #ffffff;
+  --secondary: rgb(255 255 255 / 5%);
+  --secondary-foreground: #e4e4e7;
+  --muted: rgb(255 255 255 / 5%);
+  --muted-foreground: #a1a1aa; /* zinc-400 */
+  --accent: rgb(255 255 255 / 10%);
+  --accent-foreground: #ffffff;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: rgb(255 255 255 / 6%);
+  --input: rgb(255 255 255 / 12%);
+  --ring: #6366f1;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Community rail: black/30 over charcoal. */
+  --sidebar: color-mix(in oklab, var(--color-brand-charcoal) 70%, black);
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(255 255 255 / 10%);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgb(255 255 255 / 5%);
+  --sidebar-ring: #6366f1;
+  /* Channel panel: white/2 over charcoal. */
+  --panel: color-mix(in oklab, var(--color-brand-charcoal) 98%, white);
 }
 
 @layer base {

@@ -26,7 +26,7 @@ export function Composer({ channelName, draft, setDraft, onSend }: ComposerProps
         e.preventDefault();
         submit();
       }}
-      className="flex items-end gap-2 border-t p-3"
+      className="mx-4 mb-4 flex items-end gap-2 rounded-lg bg-white/5 py-1 pr-1 pl-4 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
     >
       <label htmlFor="composer" className="sr-only">
         Message #{channelName}
@@ -46,14 +46,14 @@ export function Composer({ channelName, draft, setDraft, onSend }: ComposerProps
         maxLength={MESSAGE_MAX_LENGTH}
         placeholder={`Message #${channelName}`}
         aria-describedby={remaining < 200 ? "composer-remaining" : undefined}
-        className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400"
       />
       {remaining < 200 && (
-        <span id="composer-remaining" className="pb-2 text-xs text-muted-foreground">
+        <span id="composer-remaining" className="pb-2.5 text-[11px] text-zinc-400">
           {remaining}
         </span>
       )}
-      <Button type="submit" size="icon-lg" aria-label="Send message" disabled={!draft.trim()}>
+      <Button type="submit" size="icon" aria-label="Send message" disabled={!draft.trim()} className="mb-1">
         <SendHorizontalIcon />
       </Button>
     </form>

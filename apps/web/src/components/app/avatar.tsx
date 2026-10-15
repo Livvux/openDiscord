@@ -1,21 +1,23 @@
-/** Initials on a colour derived from the name. No uploaded images yet, so no third-party requests. */
-export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" | "lg" }) {
-  const initials = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => [...w][0]?.toUpperCase() ?? "")
-    .join("");
-  let hash = 0;
-  for (const ch of name) hash = (hash * 31 + ch.codePointAt(0)!) % 360;
-  const sizes = { sm: "size-8 text-xs", md: "size-10 text-sm", lg: "size-12 text-base" };
+/** Initial on a translucent disc, as in the landing-page preview. No uploaded images, so no third-party requests. */
+export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+  const initial = [...name.trim()][0]?.toUpperCase() ?? "?";
+  const sizes = { sm: "size-7 text-[11px]", md: "size-8 text-xs" };
   return (
     <span
       aria-hidden
-      className={`${sizes[size]} inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white select-none`}
-      style={{ backgroundColor: `oklch(0.55 0.13 ${hash})` }}
+      className={`${sizes[size]} grid shrink-0 place-items-center rounded-full bg-white/10 font-medium text-zinc-100 select-none`}
     >
-      {initials || "?"}
+      {initial}
     </span>
   );
+}
+
+// Light tints from the preview (amber/sky/emerald …); all ≥ 7:1 on charcoal.
+const NAME_COLORS = ["text-amber-300", "text-sky-300", "text-emerald-300", "text-rose-300", "text-violet-300", "text-cyan-300"];
+
+/** Stable per-person name colour so speakers are easy to tell apart. */
+export function nameColor(seed: string): string {
+  let hash = 0;
+  for (const ch of seed) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
+  return NAME_COLORS[hash % NAME_COLORS.length];
 }

@@ -6,7 +6,7 @@ import { deleteMessage, editMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import type { MessageView } from "@/server/messages";
-import { Avatar } from "../avatar";
+import { Avatar, nameColor } from "../avatar";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -46,17 +46,17 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
 
   return (
     <li
-      className={`group relative flex gap-3 px-4 hover:bg-muted/30 focus-within:bg-muted/30 [content-visibility:auto] ${grouped ? "py-0.5" : "mt-3 py-1"}`}
+      className={`group relative flex gap-3 px-5 hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"}`}
       aria-busy={pending || undefined}
     >
-      <div className="w-10 shrink-0">
+      <div className="w-8 shrink-0">
         {!grouped && <Avatar name={message.authorName} />}
       </div>
       <div className="min-w-0 flex-1">
         {!grouped && (
           <p className="flex items-baseline gap-2">
-            <span className="font-semibold">{message.authorName}</span>
-            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-xs text-muted-foreground" suppressHydrationWarning>
+            <span className={`font-medium ${nameColor(message.authorId)}`}>{message.authorName}</span>
+            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-[11px] text-zinc-400" suppressHydrationWarning>
               {dateTimeFormat.format(created)}
             </time>
           </p>
@@ -65,9 +65,9 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
         {editing ? (
           <EditForm initial={message.content} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
-          <p className="break-words whitespace-pre-wrap">
+          <p className="break-words whitespace-pre-wrap text-zinc-300">
             {message.content}
-            {message.editedAt && <span className="ml-1 text-xs text-muted-foreground">(edited)</span>}
+            {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
           </p>
         )}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -115,9 +115,9 @@ function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pen
             if (value.trim()) onSave(value);
           }
         }}
-        className="field-sizing-content min-h-10 w-full resize-none rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none focus-visible:border-ring"
+        className="field-sizing-content min-h-10 w-full resize-none rounded-lg bg-white/5 px-3 py-2 text-zinc-100 ring-1 ring-white/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[11px] text-zinc-400">
         Escape to <button type="button" className="underline" onClick={onCancel}>cancel</button> · Enter to{" "}
         <button type="submit" className="underline" disabled={pending}>save</button>
       </p>
@@ -127,9 +127,9 @@ function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pen
 
 export function PendingItem({ content }: { content: string }) {
   return (
-    <li className="flex gap-3 px-4 py-0.5 opacity-60" aria-label="Sending">
-      <div className="w-10 shrink-0" />
-      <p className="min-w-0 flex-1 break-words whitespace-pre-wrap">{content}</p>
+    <li className="flex gap-3 px-5 py-0.5 opacity-60" aria-label="Sending">
+      <div className="w-8 shrink-0" />
+      <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">{content}</p>
     </li>
   );
 }

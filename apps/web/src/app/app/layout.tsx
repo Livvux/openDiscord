@@ -9,10 +9,10 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 export default function AppLayout({ children }: LayoutProps<"/app">) {
   return (
     <MobileNavProvider>
-      <div className="flex h-dvh overflow-hidden bg-background text-foreground">
+      <div className="flex h-dvh overflow-hidden bg-background text-sm text-foreground">
         <MobilePanel
           label="Communities"
-          className="flex w-[4.5rem] shrink-0 flex-col items-center border-r bg-sidebar max-md:left-0"
+          className="flex w-16 shrink-0 flex-col items-center border-r border-sidebar-border bg-sidebar max-md:left-0"
         >
           <Suspense fallback={<div className="py-3 text-xs text-muted-foreground">…</div>}>
             <CommunityRail />

@@ -19,7 +19,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
   const view = await loadCommunityView(user.id, communityId);
   return (
     <RealtimeProvider communityId={view.id}>
-      <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r bg-sidebar max-md:left-[4.5rem]">
+      <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">
         <ChannelSidebar view={view} />
       </MobilePanel>
       <div className="flex min-w-0 flex-1 flex-col">{children}</div>
