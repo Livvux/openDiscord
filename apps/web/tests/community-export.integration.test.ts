@@ -1,8 +1,8 @@
 // Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, community, session } from "@/db/schema";
+import { attachment, community, instanceSettings, session, user, userSuspension } from "@/db/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createCategory, setChannelCategory } from "@/server/categories";
 import { exportCommunity, importCommunity, type CommunityExport } from "@/server/community-export";
@@ -156,4 +156,57 @@ describe("private archive staging commit", () => {
     await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("Sign in again");
     expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
   });
+  it.each(["revoke", "suspend"])("rechecks %s after waiting for the importing user lock", async (change) => {
+    const { id, sessionId, data } = await fixture();
+    const file = await staged(id);
+    const holder: { pending?: Promise<PromiseSettledResult<string>> } = {};
+    await db.transaction(async (tx) => {
+      await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
+      holder.pending = importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] }).then(
+        (value): PromiseSettledResult<string> => ({ status: "fulfilled", value }),
+        (reason: unknown): PromiseSettledResult<string> => ({ status: "rejected", reason }),
+      );
+      await expect.poll(async () => (await db.execute<{ waiting: boolean }>(sql`
+        select exists(select 1 from pg_stat_activity where wait_event_type = 'Lock'
+          and query like '%from "user"%for update%') as waiting
+      `)).rows[0]?.waiting).toBe(true);
+      if (change === "revoke") await tx.delete(session).where(eq(session.id, sessionId));
+      else await tx.insert(userSuspension).values({ userId: id, reason: "Concurrent suspension" });
+    });
+    if (!holder.pending) throw new Error("Import was not started");
+    const result = await holder.pending;
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") expect(result.reason).toMatchObject({ code: change === "revoke" ? "unauthorized" : "forbidden" });
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+  });
+  it("serializes the owned-community cap with a concurrent normal create", async () => {
+    const { id, data } = await fixture();
+    const [previous] = await db.select().from(instanceSettings).where(eq(instanceSettings.id, "instance"));
+    await db.insert(instanceSettings).values({ id: "instance", ownedCommunities: 1 }).onConflictDoUpdate({ target: instanceSettings.id, set: { ownedCommunities: 1 } });
+    try {
+      const results = await Promise.allSettled([createCommunity(id, "Concurrent create"), importCommunity(id, { ...data, messages: [] })]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      for (const result of results) if (result.status === "rejected") expect(String(result.reason)).toContain("at most 1");
+      expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(1);
+    } finally {
+      if (previous) await db.update(instanceSettings).set({ ownedCommunities: previous.ownedCommunities }).where(eq(instanceSettings.id, "instance"));
+      else await db.delete(instanceSettings).where(eq(instanceSettings.id, "instance"));
+    }
+  });
+  it("rolls back all earlier link batches when a later staged file is foreign", async () => {
+    const { id, sessionId, data } = await fixture();
+    const rows = await db.insert(attachment).values(Array.from({ length: 1001 }, (_, index) => ({
+      uploaderId: index === 1000 ? owner : id, key: `attachments/${randomUUID()}.bin`, contentType: "application/octet-stream", filename: "staged.bin", size: 1, width: 0, height: 0,
+    }))).returning({ id: attachment.id, uploaderId: attachment.uploaderId });
+    stagedIds.push(...rows.map((row) => row.id));
+    const foreign = rows.find((row) => row.uploaderId === owner);
+    if (!foreign) throw new Error("Foreign fixture missing");
+    const ordered = [...rows.filter((row) => row.uploaderId === id), foreign];
+    const messages = ordered.map((_, index) => ({ ...data.messages[0], key: `batch-${index}`, replyToKey: null, threadKey: null, attachments: 1 }));
+    await expect(importCommunity(id, { ...data, messages }, { sessionId, attachments: ordered.map((row, index) => ({ id: row.id, messageKey: messages[index].key })) })).rejects.toThrow("no longer available");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+    const unchanged = await db.select().from(attachment).where(inArray(attachment.id, ordered.map((row) => row.id)));
+    expect(unchanged.every((row) => row.messageId === null && row.channelId === null && row.linkedAt === null)).toBe(true);
+  });
+
 });
