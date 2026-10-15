@@ -5,7 +5,7 @@ const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 test.describe("private community images", () => {
   test.skip(!process.env.R2_ENDPOINT && !process.env.ATTACHMENT_DIR, "needs private attachment storage");
-  test("manager library, composer, reactions and deletion fallback on desktop and mobile", async ({ browser }, testInfo) => {
+  test("manager library, composer, reactions and deletion fallback on desktop and mobile", async ({ browser, isMobile }, testInfo) => {
     test.setTimeout(120_000);
     const page = await newUserPage(browser);
     const errors: string[] = [];
@@ -28,7 +28,10 @@ test.describe("private community images", () => {
     await expectNoA11yViolations(page);
     await page.goto(channelUrl);
     const toggle = page.getByRole("button", { name: "Open navigation", exact: true });
-    if (await toggle.isVisible()) await toggle.click();
+    if (isMobile) {
+      await expect(toggle).toBeVisible();
+      await toggle.click();
+    }
     const invite = await createInviteLink(page);
     await page.keyboard.press("Escape");
     const chat = await joinAsNewUser(browser, "Image Member", invite);
