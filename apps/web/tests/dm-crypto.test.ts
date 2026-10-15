@@ -33,6 +33,13 @@ describe("pinned Matrix cryptographic primitives", () => {
     const first = await C.OlmMachine.initialize(user, new C.DeviceId(randomUUID()), undefined, undefined, logger);
     const second = await C.OlmMachine.initialize(user, new C.DeviceId(randomUUID()), undefined, undefined, logger);
     try {
+      // Explicit manual archive recovery must remain independent of automatic gossip.
+      for (const machine of [first, second]) {
+        machine.roomKeyForwardingEnabled = false;
+        machine.roomKeyRequestsEnabled = false;
+        expect(machine.roomKeyForwardingEnabled).toBe(false);
+        expect(machine.roomKeyRequestsEnabled).toBe(false);
+      }
       await first.bootstrapCrossSigning(false);
       const snapshot = { secrets: (await first.exportSecretsBundle()).to_json(), roomKeys: await first.exportRoomKeys(() => true) };
       const attachment = C.Attachment.encrypt(new TextEncoder().encode(JSON.stringify(snapshot)));

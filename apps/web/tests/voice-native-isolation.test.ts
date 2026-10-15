@@ -81,7 +81,10 @@ describe("native shared-machine isolation prerequisite (characterization, not pr
       // No raw plaintext/key material enters assertion output.
       expect(result.summary).toHaveLength(1);
       expect(result.outgoing.filter((request) => request.eventType === "m.room_key" || request.eventType === "m.forwarded_room_key" || request.eventType === "m.secret.send")).toHaveLength(0);
-      expect(after - before).toBe(trust === C.TrustRequirement.Untrusted ? 1 : 0);
+      // Remote CI 38802162379 observed import even under CrossSigned for this unverified sender.
+      // Decryption trust is not a native state-dispatch boundary.
+      expect(after - before).toBe(1);
+      console.info("[native-isolation]", JSON.stringify({ peer: "unverified-peer", eventType: "m.room_key", trust, nativeResult: result.summary, importedRoomKeys: after - before, outgoingTypes: result.outgoing.map((request) => request.eventType ?? request.requestType) }));
       const content = JSON.parse(await sender.machine.encryptRoomEvent(room, "m.room.message", JSON.stringify({ body: "fixture" }))) as unknown;
       const timeline = JSON.stringify({ sender: sender.user.toString(), type: "m.room.encrypted", event_id: "$fixture", origin_server_ts: 1, content });
       // An imported key must not bypass the actual DM strict native trust gate.

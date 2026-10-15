@@ -19,6 +19,8 @@ afterAll(() => users.cleanup());
 
 /** Real SDK state machines use the production PostgreSQL transport, with no invented keys or local-trust override. */
 class Endpoint {
+  submissions = 0;
+  markedSent = 0;
   private constructor(readonly auth: DmDeviceAuth, readonly machine: C.OlmMachine) {}
   static async open(userId: string, restoredSecrets?: string) {
     const auth = { userId, sessionId: randomUUID(), deviceId: randomUUID(), secret: randomBytes(32).toString("hex") };
@@ -38,6 +40,7 @@ class Endpoint {
     return endpoint;
   }
   async out(request: Request) {
+    this.submissions++;
     const body: unknown = JSON.parse(request.body);
     let response: Record<string, unknown>;
     if (request.type === C.RequestType.KeysUpload) response = await handleCryptoRequest(this.auth, { kind: "upload", body });
@@ -46,7 +49,10 @@ class Endpoint {
     else if (request.type === C.RequestType.SignatureUpload) response = await handleCryptoRequest(this.auth, { kind: "signatures", body });
     else if (request instanceof C.ToDeviceRequest) response = await handleCryptoRequest(this.auth, { kind: "send", requestId: request.txn_id, eventType: request.event_type, body });
     else throw new Error("Unexpected SDK request in fixture");
-    if (request.id) await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(response));
+    if (request.id) {
+      await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(response));
+      this.markedSent++;
+    }
   }
   async flush() { for (const request of await this.machine.outgoingRequests()) await this.out(request); }
   async query(ids: string[]) { await this.out(this.machine.queryKeysForUsers(ids.map((id) => new C.UserId(matrixUser(id))))); }
@@ -129,6 +135,45 @@ describe("Matrix and PostgreSQL integration", () => {
         expect(unowned.length).toBe(0);
         // No request from this rejected scope is submitted or marked sent.
       }
+      const exportedAttackKeys = JSON.parse(await a.machine.exportRoomKeys((key) => key.roomId.toString() === attackRoom.toString())) as Record<string, unknown>[];
+      const attackKey = exportedAttackKeys[0];
+      if (!attackKey) throw new Error("Native exported fixture missing");
+      const claimed = attackKey.sender_claimed_keys as Record<string, unknown>;
+      const adversarial: { type: string; content: Record<string, unknown> }[] = [
+        { type: "m.forwarded_room_key", content: { ...attackKey, sender_claimed_ed25519_key: claimed.ed25519, forwarding_curve25519_key_chain: [] } },
+        { type: "m.room_key_request", content: { action: "request", requesting_device_id: b.auth.deviceId, request_id: "fixture-key-request", body: { algorithm: attackKey.algorithm, room_id: attackKey.room_id, sender_key: attackKey.sender_key, session_id: attackKey.session_id } } },
+        { type: "m.secret.request", content: { action: "request", requesting_device_id: b.auth.deviceId, request_id: "fixture-secret-request", name: "m.cross_signing.master" } },
+        { type: "m.secret.send", content: { request_id: "unsolicited-fixture", secret: "invalid-fixture" } },
+        { type: "m.key.verification.done", content: { transaction_id: "unknown-foreign-flow" } },
+      ];
+      const maliciousPeer = await b.machine.getDevice(new C.UserId(matrixUser(alice)), new C.DeviceId(a.auth.deviceId));
+      if (!maliciousPeer) throw new Error("Native malicious peer fixture missing");
+      for (const attack of adversarial) {
+        const submitted = a.submissions, marked = a.markedSent;
+        const secretSnapshot = (await a.machine.exportSecretsBundle()).to_json();
+        const roomCount = (await a.machine.roomKeyCounts()).total;
+        const opaque = JSON.parse(await maliciousPeer.encryptToDeviceEvent(attack.type, {
+          ...attack.content, purpose: "opendiscord.voice", callId: "foreign-call", generation: 999,
+        }, C.CollectStrategy.onlyTrustedDevices())) as unknown;
+        const processed = await a.machine.receiveSyncChanges(JSON.stringify([{
+          sender: matrixUser(bob), type: "m.room.encrypted", content: opaque,
+          purpose: "opendiscord.voice", callId: "another-call",
+        }]), new C.DeviceLists([], []), new Map([["signed_curve25519", 50]]), undefined, new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
+        expect(processed.length).toBe(1);
+        expect(processed[0] instanceof C.DecryptedToDeviceEvent).toBe(true);
+        expect((await a.machine.roomKeyCounts()).total - roomCount).toBe(0);
+        expect((await a.machine.getDevice(new C.UserId(matrixUser(bob)), new C.DeviceId(b.auth.deviceId)))?.isVerified()).toBe(true);
+        expect(a.machine.getVerification(new C.UserId(matrixUser(bob)), "unknown-foreign-flow")).toBeUndefined();
+        expect((await a.machine.exportSecretsBundle()).to_json() === secretSnapshot).toBe(true);
+        for (let round = 0; round < 4; round++) {
+          const pending = await a.machine.outgoingRequests();
+          // Opaque m.room.encrypted outputs are unowned too; never default to DM/own-device routing.
+          expect(pending.filter((request) => request instanceof C.ToDeviceRequest).length).toBe(0);
+        }
+        expect(a.submissions - submitted).toBe(0);
+        expect(a.markedSent - marked).toBe(0);
+        console.info("[native-isolation]", JSON.stringify({ peer: "verified-peer", eventType: attack.type, nativeResult: processed.map((event) => event.constructor.name), importedRoomKeys: 0, submissions: 0, markedSent: 0 }));
+      }
       const claim = await a.machine.getMissingSessions([new C.UserId(matrixUser(bob))]);
       if (claim) await a.out(claim);
       const room = new C.RoomId(matrixRoom(conversation));
@@ -210,6 +255,7 @@ describe("Matrix and PostgreSQL integration", () => {
         request_id: "fixture-voice-secret-request", name: "m.cross_signing.master",
         purpose: "opendiscord.voice", callId: "foreign-own-device-call",
       }, C.CollectStrategy.onlyTrustedDevices())) as unknown;
+      const submitted = source.submissions, marked = source.markedSent;
       const returned = await source.machine.receiveSyncChanges(JSON.stringify([{
         sender: matrixUser(user), type: "m.room.encrypted", content: encrypted, purpose: "opendiscord.voice",
       }]), new C.DeviceLists([], []), new Map([["signed_curve25519", 50]]), undefined, new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
@@ -227,6 +273,9 @@ describe("Matrix and PostgreSQL integration", () => {
       expect(reattached.filter((request) => request instanceof C.ToDeviceRequest && request.event_type === "m.room.encrypted").length).toBeGreaterThan(0);
       const mailbox = syncSchema.parse(await handleCryptoRequest(recipient.auth, { kind: "sync" }));
       expect(mailbox.events.length).toBe(0);
+      expect(source.submissions - submitted).toBe(0);
+      expect(source.markedSent - marked).toBe(0);
+      console.info("[native-isolation]", JSON.stringify({ peer: "verified-own-device", eventType: "m.secret.request", nativeResult: returned.map((event) => event.constructor.name), opaqueOutputObservations: opaqueOutputs, recipientMailboxEvents: 0, submissions: 0, markedSent: 0 }));
     } finally { source.machine.close(); recipient.machine.close(); }
   }, 20_000);
 
