@@ -2,9 +2,13 @@ import { expect, test, type Page } from "@playwright/test";
 import { createInviteLink, expectNoA11yViolations, newUserPage, sendMessage, signUp } from "./helpers";
 
 async function showNavigationFor(page: Page, buttonName: string) {
-  if (!await page.getByRole("button", { name: buttonName, exact: true }).first().isVisible()) {
-    await page.getByRole("button", { name: "Open navigation" }).click();
+  const button = page.getByRole("button", { name: buttonName, exact: true }).first();
+  const navigation = page.getByRole("button", { name: "Open navigation" });
+  await expect(button.or(navigation).first()).toBeVisible();
+  if (!await button.isVisible()) {
+    await navigation.click();
   }
+  await expect(button).toBeVisible();
 }
 
 test("rules join, updated acknowledgement and private ban appeal review", async ({ browser }, testInfo) => {

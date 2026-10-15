@@ -18,7 +18,7 @@ export function BanAppealForm({ communityId }: { communityId: string }) {
   }}>
     <label className="grid gap-2">Appeal explanation<textarea name="content" required maxLength={2000} rows={4} className="w-full rounded-lg border bg-background p-3" /></label>
     <p className="text-xs text-muted-foreground">One appeal per ban, up to 2,000 characters. Community moderators with ban permission can read it. Do not include sensitive personal information.</p>
-    <Button disabled={pending} className="justify-self-start">Submit ban appeal</Button>
+    <Button type="submit" disabled={pending} className="justify-self-start">Submit ban appeal</Button>
     {error && <p role="alert" className="text-destructive">{error}</p>}
   </form>;
 }
@@ -41,7 +41,7 @@ function AppealReview({ communityId, appeal }: { communityId: string; appeal: Ap
     }}>
       <label className="grid gap-1">Decision<select name="resolution" className="rounded-lg border bg-background p-2"><option value="uphold">Uphold ban</option><option value="unban">Remove ban</option></select></label>
       <label className="grid gap-1">Reply to appellant (optional)<textarea name="note" maxLength={512} rows={2} className="rounded-lg border bg-background p-2" /></label>
-      <Button disabled={pending} className="justify-self-start">Resolve appeal for {appeal.name}</Button>
+      <Button type="submit" disabled={pending} className="justify-self-start">Resolve appeal for {appeal.name}</Button>
     </form>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
   </li>;

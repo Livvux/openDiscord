@@ -27,7 +27,7 @@ export function CommunityRules({ communityId, rules, canManage = false }: { comm
       </label>
       <p className="text-xs text-muted-foreground">Plain text, up to 4,000 characters. These are community participation rules. Saving changes asks members to acknowledge the new version when required.</p>
       <label className="flex items-center gap-2"><input name="required" type="checkbox" defaultChecked={rules.required} />Require acknowledgement before joining or sending messages</label>
-      <Button className="justify-self-start" disabled={pending}>Save community rules</Button>
+      <Button type="submit" className="justify-self-start" disabled={pending}>Save community rules</Button>
       {saved && <p role="status">Rules saved.</p>}
     </form> : <p className="whitespace-pre-wrap break-words text-sm">{rules.text || "This community has not published rules."}</p>}
     {!rules.accepted && rules.text && <div className="grid justify-items-start gap-2">
