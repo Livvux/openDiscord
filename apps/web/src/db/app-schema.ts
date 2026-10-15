@@ -2,6 +2,7 @@
 // and double as pagination cursors.
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   check,
   foreignKey,
@@ -146,8 +147,33 @@ export const message = pgTable(
     content: text("content").notNull(),
     createdAt: createdAt(),
     editedAt: timestamp("edited_at", { withTimezone: true }),
+    /** The message this one replies to (same channel); unlinked when that message is deleted. */
+    replyToId: uuid("reply_to_id").references((): AnyPgColumn => message.id, { onDelete: "set null" }),
+    pinnedAt: timestamp("pinned_at", { withTimezone: true }),
   },
-  (t) => [index("message_channel_idx").on(t.channelId, t.id), index("message_author_idx").on(t.authorId, t.createdAt)],
+  (t) => [
+    index("message_channel_idx").on(t.channelId, t.id),
+    index("message_author_idx").on(t.authorId, t.createdAt),
+    index("message_pinned_idx").on(t.channelId, t.pinnedAt).where(sql`${t.pinnedAt} is not null`),
+    // Deleting a message unlinks its replies; this keeps that FK action cheap.
+    index("message_reply_idx").on(t.replyToId).where(sql`${t.replyToId} is not null`),
+  ],
+);
+
+/** One emoji reaction by one person on one message. */
+export const reaction = pgTable(
+  "reaction",
+  {
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => message.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    emoji: text("emoji").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.messageId, t.userId, t.emoji] })],
 );
 
 /** A member mentioned in a message (`<@userId>` in the content). */

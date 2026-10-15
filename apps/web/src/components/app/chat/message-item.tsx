@@ -1,12 +1,13 @@
 "use client";
 
-import { PencilIcon, Trash2Icon, UserXIcon } from "lucide-react";
+import { CornerUpLeftIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
-import { useId, useState, useTransition } from "react";
-import { blockUser, deleteMessage, editMessage } from "@/app/app/actions";
+import { useId, useRef, useState, useTransition } from "react";
+import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
-import { decodeMentions, encodeMentions, splitMentions, type Mention } from "@/lib/mentions";
+import { renderMarkdown } from "@/lib/markdown";
+import { decodeMentions, encodeMentions, type Mention } from "@/lib/mentions";
 import type { MessageView } from "@/server/messages";
 import { ReportDialog } from "../report-dialog";
 import { Avatar, nameColor } from "../avatar";
@@ -14,20 +15,43 @@ import { Avatar, nameColor } from "../avatar";
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-/** Renders stored content with `<@id>` tokens as readable, highlighted names. */
-function MessageContent({ content, mentions, currentUserId }: { content: string; mentions: readonly Mention[]; currentUserId?: string }) {
+export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "👀", "✅"];
+
+/** Renders stored content: the Markdown subset, with `<@id>` tokens as readable, highlighted names. */
+export function MessageContent({ content, mentions, currentUserId }: { content: string; mentions: readonly Mention[]; currentUserId?: string }) {
   const names = new Map(mentions.map((m) => [m.id, m.name]));
-  return splitMentions(content).map((part, i) =>
-    part.type === "text" ? (
-      part.text
-    ) : (
-      <span
-        key={i}
-        className={`rounded px-0.5 font-medium ${part.id === currentUserId ? "bg-amber-400/25 text-amber-100" : "bg-primary/20 text-indigo-200"}`}
-      >
-        @{names.get(part.id) ?? "unknown member"}
-      </span>
-    ),
+  return renderMarkdown(content, (id, key) => (
+    <span
+      key={key}
+      className={`rounded px-0.5 font-medium ${id === currentUserId ? "bg-amber-400/25 text-amber-100" : "bg-primary/20 text-indigo-200"}`}
+    >
+      @{names.get(id) ?? "unknown member"}
+    </span>
+  ));
+}
+
+function ReactionPicker({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+  return (
+    <div
+      role="group"
+      aria-label="Add a reaction"
+      onKeyDown={(e) => e.key === "Escape" && onClose()}
+      // Inline, not floating: rows use content-visibility, whose paint containment would clip a popover.
+      className="mt-1 flex w-fit flex-wrap gap-0.5 rounded-lg border bg-popover p-1 shadow-lg"
+    >
+      {QUICK_REACTIONS.map((emoji, i) => (
+        <button
+          key={emoji}
+          type="button"
+          autoFocus={i === 0}
+          aria-label={`React with ${emoji}`}
+          onClick={() => onPick(emoji)}
+          className="grid size-8 place-items-center rounded-md text-lg hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {emoji}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -39,11 +63,21 @@ interface MessageItemProps {
   grouped: boolean;
   canEdit: boolean;
   canDelete: boolean;
+  /** May reply and react (send permission in this channel). */
+  canReact: boolean;
+  /** May pin (manage messages in this channel). */
+  canPin: boolean;
+  /** The replied-to author is blocked by the viewer: hide the preview text. */
+  replyBlocked: boolean;
   onDeleted: (id: string) => void;
+  onReply: (message: MessageView) => void;
 }
 
-export function MessageItem({ message, currentUserId, blocked, grouped, canEdit, canDelete, onDeleted }: MessageItemProps) {
+export function MessageItem(props: MessageItemProps) {
+  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply } = props;
   const [editing, setEditing] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const reactButton = useRef<HTMLButtonElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -65,6 +99,31 @@ export function MessageItem({ message, currentUserId, blocked, grouped, canEdit,
       const result = await blockUser(message.authorId);
       if (!result.ok) setError(result.error);
     });
+  }
+
+  function run(action: () => Promise<{ ok: boolean; error?: string }>) {
+    startTransition(async () => {
+      const result = await action();
+      setError(result.ok ? null : (result.error ?? "Something went wrong."));
+    });
+  }
+
+  function closePicker() {
+    setPicking(false);
+    // The picker unmounts; keep keyboard focus where it was opened.
+    reactButton.current?.focus();
+  }
+
+  function react(emoji: string) {
+    closePicker();
+    run(() => toggleReaction(message.id, emoji));
+  }
+
+  function jumpToReply(e: React.MouseEvent<HTMLButtonElement>, id: string) {
+    const target = e.currentTarget.closest('[role="log"]')?.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+    if (!target) return setError("The original message isn't loaded. Load older messages to see it.");
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.focus();
   }
 
   function onSaveEdit(content: string) {
@@ -91,19 +150,34 @@ export function MessageItem({ message, currentUserId, blocked, grouped, canEdit,
 
   return (
     <li
-      className={`group relative flex gap-3 px-5 hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"} ${mentionsMe ? "border-l-2 border-amber-400 bg-amber-400/[0.07]" : ""}`}
+      data-message-id={message.id}
+      tabIndex={-1}
+      className={`group relative flex gap-3 px-5 outline-none hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"} ${mentionsMe ? "border-l-2 border-amber-400 bg-amber-400/[0.07]" : ""}`}
       aria-busy={pending || undefined}
     >
       <div className="w-8 shrink-0">
         {!grouped && <Avatar name={message.authorName} />}
       </div>
       <div className="min-w-0 flex-1">
+        {message.replyTo && (
+          <button
+            type="button"
+            onClick={(e) => jumpToReply(e, message.replyTo!.id)}
+            className="flex max-w-full items-center gap-1 truncate text-left text-xs text-zinc-400 hover:text-zinc-200"
+          >
+            <CornerUpLeftIcon aria-hidden className="size-3 shrink-0" />
+            <span className="sr-only">Reply to </span>
+            <span className={`font-medium ${nameColor(message.replyTo.authorId)}`}>{message.replyTo.authorName}</span>
+            <span className="truncate">{replyBlocked ? "Message from a blocked person" : message.replyTo.excerpt || "an image"}</span>
+          </button>
+        )}
         {!grouped && (
           <p className="flex items-baseline gap-2">
             <span className={`font-medium ${nameColor(message.authorId)}`}>{message.authorName}</span>
             <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="text-[11px] text-zinc-400" suppressHydrationWarning>
               {dateTimeFormat.format(created)}
             </time>
+            {message.pinned && <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-400"><PinIcon aria-hidden className="size-3" />Pinned</span>}
           </p>
         )}
         {grouped && <span className="sr-only" suppressHydrationWarning>{message.authorName}, {timeFormat.format(created)}: </span>}
@@ -111,10 +185,10 @@ export function MessageItem({ message, currentUserId, blocked, grouped, canEdit,
           <EditForm initial={decodeMentions(message.content, message.mentions)} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
           (message.content || message.editedAt) && (
-            <p className="break-words whitespace-pre-wrap text-zinc-300">
+            <div className="break-words whitespace-pre-wrap text-zinc-300">
               <MessageContent content={message.content} mentions={message.mentions} currentUserId={currentUserId} />
               {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
-            </p>
+            </div>
           )
         )}
         {message.attachments.length > 0 && (
@@ -142,10 +216,54 @@ export function MessageItem({ message, currentUserId, blocked, grouped, canEdit,
             ))}
           </ul>
         )}
+        {message.reactions.length > 0 && (
+          <ul aria-label="Reactions" className="mt-1 flex flex-wrap gap-1">
+            {message.reactions.map((r) => {
+              const mine = r.userIds.includes(currentUserId);
+              return (
+                <li key={r.emoji}>
+                  <button
+                    type="button"
+                    aria-pressed={mine}
+                    aria-label={`${r.emoji} ${r.userIds.length} ${r.userIds.length === 1 ? "reaction" : "reactions"}${mine ? ", including you" : ""}`}
+                    disabled={!canReact || pending}
+                    onClick={() => react(r.emoji)}
+                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ${mine ? "bg-primary/25 text-indigo-100 ring-primary/60" : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"}`}
+                  >
+                    <span aria-hidden>{r.emoji}</span>
+                    <span aria-hidden>{r.userIds.length}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {picking && <ReactionPicker onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       {!editing && (
         <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:self-start max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+          {canReact && (
+            <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
+              <CornerUpLeftIcon />
+            </Button>
+          )}
+          {canReact && (
+            <Button ref={reactButton} variant="ghost" size="icon-sm" aria-label="Add reaction" aria-expanded={picking} onClick={() => setPicking((p) => !p)}>
+              <SmilePlusIcon />
+            </Button>
+          )}
+          {canPin && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={message.pinned ? "Unpin message" : "Pin message"}
+              disabled={pending}
+              onClick={() => run(() => setPinned(message.id, !message.pinned))}
+            >
+              {message.pinned ? <PinOffIcon /> : <PinIcon />}
+            </Button>
+          )}
           <ReportDialog messageId={message.id} />
           {message.authorId !== currentUserId && !blocked && (
             <Button variant="ghost" size="icon-sm" aria-label={`Block ${message.authorName}`} onClick={onBlock} disabled={pending}>
@@ -207,10 +325,10 @@ export function PendingItem({ content, mentions, images }: { content: string; me
   return (
     <li className="flex gap-3 px-5 py-0.5 opacity-60" aria-label="Sending">
       <div className="w-8 shrink-0" />
-      <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
+      <div className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
         <MessageContent content={content} mentions={mentions} />
         {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 image" : `${images} images`}…</span>}
-      </p>
+      </div>
     </li>
   );
 }

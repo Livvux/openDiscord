@@ -71,7 +71,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Categories | ❌ | P2 |
 | Direct messages | ❌ | **P1** (with E2EE) |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
-| Replies, mentions, reactions | 🟡 | Mentions with autocomplete, badges and opt-in desktop notifications ✅; replies and reactions P1 |
+| Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ❌ | P2 |
 | Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P2 |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
@@ -80,7 +80,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | 🟡 | Expiring, limited-use, revocable invites; pause and join requirements ✅; rules/onboarding screen P2 |
 | Presence and status | ❌ | P1 |
-| Edit, delete, moderate messages | ✅ | Pinning P1 |
+| Edit, delete, moderate messages | ✅ | Pinning (max 50 per channel, audited); safe Markdown subset (code, quotes, bold/italic/strike, http(s) links) rendered without raw HTML |
 | Opt-in public, indexable channels | ❌ | P3 |
 
 ### 4. Voice, video and screen sharing
@@ -170,7 +170,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Voice channels (LiveKit) | — | Optional compose profile with LiveKit + TURN; join/speak permissions enforced by short-lived server-issued tokens |
 | Direct messages with audited E2EE | blocking, audited protocol library ([D10](DECISIONS.md)) | Server stores ciphertext only; key verification UI; docs state guarantees and limits |
 | Search | channel permissions | Postgres full-text search limited to readable channels |
-| Replies, reactions, pins, Markdown | — | Safe Markdown subset rendered without raw HTML |
+| Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | mentions | Opt-in presence; per-community all/mentions/nothing |
 | Basic AutoMod | — | Per-community blocked words and link rules, audited |
 

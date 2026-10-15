@@ -4,7 +4,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { markChannelRead, sendMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
-import type { MessagePage } from "@/server/messages";
+import type { MessagePage, MessageView } from "@/server/messages";
 import { decodeMentions, type Mention } from "@/lib/mentions";
 import { useRealtime } from "../realtime-provider";
 import { useClearUnread } from "../unread-provider";
@@ -42,6 +42,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
   const [pending, setPending] = useState<Pending[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [replyTo, setReplyTo] = useState<MessageView | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const heightBeforeOlder = useRef<number | null>(null);
@@ -93,7 +94,9 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     setSendError(null);
     nearBottom.current = true;
     setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
-    const result = await sendMessage(channel.id, content, attachmentIds);
+    const replyToId = replyTo?.id ?? null;
+    setReplyTo(null);
+    const result = await sendMessage(channel.id, content, attachmentIds, replyToId);
     setPending((p) => p.filter((x) => x.tempId !== tempId));
     if (result.ok) {
       upsert(result.data);
@@ -162,7 +165,11 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
                   grouped={grouped && m.id !== firstUnread}
                   canEdit={m.authorId === currentUserId}
                   canDelete={m.authorId === currentUserId || canModerate}
+                  canReact={canSend}
+                  canPin={canModerate}
+                  replyBlocked={!!m.replyTo && blockedIds.includes(m.replyTo.authorId)}
                   onDeleted={remove}
+                  onReply={setReplyTo}
                 />
                 </Fragment>
               );
@@ -188,6 +195,8 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
           onSend={onSend}
           mediaEnabled={mediaEnabled}
           communityId={communityId}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
         />
       ) : (
         <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>

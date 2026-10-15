@@ -1,4 +1,8 @@
 import type { MessagePage, MessageView } from "@/server/messages";
+import { excerptOf } from "./mentions";
+
+/** Same length as the server-side reply previews (src/server/message-extras.ts). */
+const REPLY_EXCERPT_LENGTH = 100;
 
 export interface LoadedMessages {
   /** Oldest first. */
@@ -25,4 +29,16 @@ export function applyResync(current: LoadedMessages, page: MessagePage): LoadedM
   if (!oldestInPage || !newestLocal || newestLocal < oldestInPage) return { messages: page.messages, hasMore: true };
   const olderThanPage = current.messages.filter((m) => m.id < oldestInPage);
   return { messages: [...olderThanPage, ...page.messages], hasMore: current.hasMore };
+}
+
+/** Keeps reply previews current: a deleted original removes them, an edited one refreshes their text. */
+export function syncReplies(messages: readonly MessageView[], changed: { deletedId: string } | { updated: MessageView }): MessageView[] {
+  const id = "deletedId" in changed ? changed.deletedId : changed.updated.id;
+  if (!messages.some((m) => m.replyTo?.id === id)) return messages as MessageView[];
+  return messages.map((m) => {
+    if (m.replyTo?.id !== id) return m;
+    if ("deletedId" in changed) return { ...m, replyTo: null };
+    const { content, mentions } = changed.updated;
+    return { ...m, replyTo: { ...m.replyTo, excerpt: excerptOf(content, mentions, REPLY_EXCERPT_LENGTH) } };
+  });
 }
