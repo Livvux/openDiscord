@@ -89,8 +89,21 @@ For voice on Dokploy, run LiveKit with `livekit.yaml` as its own service, route 
 stripped) or a subdomain to its port 7880 in Traefik, open 7881/tcp and 7882/udp, and set
 `LIVEKIT_URL` accordingly plus `LIVEKIT_API_URL` to LiveKit's internal address.
 - If you put a CDN such as Cloudflare in front, it terminates TLS and can see traffic; tell your users.
-- `BETTER_AUTH_SECRET` signs sessions and encrypts TOTP secrets. Rotating it signs everyone out and
-  invalidates enrolled authenticator apps (users must set 2FA up again). Rotate it if it leaks.
+- Keep `BETTER_AUTH_SECRET` stable for legacy encrypted records and HMAC rate-limit keys.
+  Better Auth 1.7.7 also supports optional `BETTER_AUTH_SECRETS`, comma-separated `version:secret`
+  entries, newest first (for example `2:<new-random-secret>,1:<previous-random-secret>`). Each secret
+  must contain 32–256 non-whitespace characters; use independently generated random values.
+  Both Compose stacks forward this setting. With it, new encrypted auth records use the first key;
+  retained keys decrypt previous versioned records, and `BETTER_AUTH_SECRET` decrypts legacy records.
+- Before rotation, make and verify an encrypted backup that also protects every required auth key.
+  Add the new key first while retaining all previous versions and the legacy secret. Deploy identical
+  configuration to all replicas together. Expect signed session cookies and outstanding auth links to
+  become invalid when the primary key changes: users may need to sign in again. Retained encryption
+  keys preserve TOTP/backup-code decryption; this is not a guarantee that all auth tokens survive.
+- Do not retire a key while any stored auth ciphertext or retained backup still needs it. This release
+  does not bulk re-encrypt old rows. For rollback retain both keys and put the old primary first;
+  removing the new key would strand records created during the rollout. A compromised-key incident
+  requires revocation and a recovery/re-enrolment plan; simply retaining the leaked key is not remediation.
 - Passkeys are bound to `DOMAIN`. Changing the domain invalidates registered passkeys.
 - Encrypt the disk that holds the `pgdata` volume and your backups.
 

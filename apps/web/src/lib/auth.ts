@@ -11,6 +11,7 @@ import { authRateLimitStore } from "@/server/rate-limit-store";
 import { AccountBlocked, assertActiveUser, getInstanceSettings, isInstanceAdmin } from "@/server/instance-policy";
 import { mailEnabled, sendMail } from "./mail";
 import { sessionDeviceLabel } from "./session-device";
+import { authSecrets } from "./auth-secrets";
 import { REGISTRATION_HEADER, registrationAttestation } from "./registration-policy";
 import { getMinimumAge } from "@/server/operator-policy";
 
@@ -37,9 +38,10 @@ if (process.env.NODE_ENV === "production" && !turnstileSecret) {
   console.warn("[auth] TURNSTILE_SECRET_KEY is not set: sign-ups are not protected by Turnstile.");
 }
 
-// Reads BETTER_AUTH_SECRET and BETTER_AUTH_URL from the environment.
+// Keep BETTER_AUTH_SECRET for legacy ciphertext; new encrypted records use the first versioned key.
 export const auth = betterAuth({
   appName: APP_NAME,
+  secrets: authSecrets(process.env.BETTER_AUTH_SECRETS),
   database: drizzleAdapter(db, { provider: "pg", schema }),
   emailAndPassword: {
     enabled: true,
