@@ -21,7 +21,7 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#44 (excluding open proof PR #40) in production
+`main` runs the text-chat MVP, encrypted DMs and merged implementation increments through #47 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
@@ -184,5 +184,5 @@ Published operator rules and minimum-age attestation shipped in #34; legal revie
 
 ### P3 — later
 
-Private custom emoji/stickers and library-complete archives shipped in #41. Explicit public channels and community discovery shipped in #44. Native desktop shells remain in draft #45: Windows/macOS unsigned bundles build successfully; Linux runtime acceptance is still failing. Signing, notarization and platform/device acceptance remain open. Mobile native clients are not implemented. Native auth multi-key rotation and automated
+Private custom emoji/stickers and library-complete archives shipped in #41. Explicit public channels and community discovery shipped in #44. Native desktop shells shipped as an unsigned preview in #45: Windows/macOS/Linux bundles pass remote build checks, and the Linux native fixture passes navigation, IPC denial, HTTPS/blob save and cancellation. Signing, notarization, full application flows and Windows/macOS runtime/device acceptance remain open. Mobile native clients are not implemented. Native auth multi-key rotation and automated
 license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.
