@@ -58,7 +58,7 @@ describe("isolated native generation retirement candidate", () => {
       const request = new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [b.binding.user]: { [b.binding.device]: JSON.parse(encrypted) } } }));
       const originalBody = request.body;
       server.advance(); await dispatcher.retire(request);
-      expect(request.body).toBe(originalBody);
+      expect(request.body === originalBody).toBe(true);
       expect(server.queued(b)).toBe(0); expect(b.received).toHaveLength(0);
       await a.send(b, "Legitimate recovery"); await b.sync();
       expect(b.received.at(-1)?.message).toBe("Legitimate recovery");
@@ -88,7 +88,7 @@ describe("isolated native generation retirement candidate", () => {
       await a.machine.markRequestAsSent(claim.id, claim.type, JSON.stringify(response.nativeResponse));
       // Genuine absence is not a session. It may request work again: bound retries rather than spin.
       const second = await a.machine.getMissingSessions([new C.UserId(b.binding.user)]);
-      expect(second).toBeDefined();
+      expect(second).toBeInstanceOf(C.KeysClaimRequest);
       const query = a.machine.queryKeysForUsers([new C.UserId(b.binding.user)]);
       const queryResponse = await server.process(a, query, server.generation, "send", randomUUID());
       expect(queryResponse.nativeResponse).toEqual({ device_keys: { [b.binding.user]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
@@ -158,11 +158,15 @@ describe("isolated native generation retirement candidate", () => {
           if (!(pending.request instanceof C.ToDeviceRequest)) throw new Error("Expected native ToDevice.");
           expect(pending.request.event_type).toBe(`m.key.verification.${phase}`);
           const immutable = { id: pending.request.id, type: pending.request.type, body: pending.request.body };
-          if (removed) server.remove(b);
+          if (removed) {
+            server.remove(b);
+            await expect(server.process(a, pending.request, server.generation, "send", randomUUID())).rejects.toThrow("Destination is outside this active call");
+            expect(left.completions.has(pending.request.id)).toBe(false);
+          }
           server.advance();
           for (const dispatcher of dispatchers) if (server.owns(dispatcher.owner.binding)) await dispatcher.cancelAndRetire();
           expect(await oldFlow).toBe("interrupted");
-          expect({ id: pending.request.id, type: pending.request.type, body: pending.request.body }).toEqual(immutable);
+          expect(pending.request.id === immutable.id && pending.request.type === immutable.type && pending.request.body === immutable.body).toBe(true);
           expect(server.retired.length).toBeGreaterThan(0);
           expect(server.retired.every((receipt) => receipt.enqueued === 0 && receipt.disposition === "processed-retired")).toBe(true);
           expect(identity(a)).toEqual(before);

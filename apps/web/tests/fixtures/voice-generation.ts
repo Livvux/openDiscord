@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
+import { z } from "zod";
 import { EphemeralVoice, VoiceTransport } from "./ephemeral-voice";
 
 export type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
@@ -7,9 +8,10 @@ type Operation = "send" | "retire";
 export type Receipt = { generation: number; disposition: "processed-current" | "processed-retired" | "processed-absent" | "processed-refused"; enqueued: number; nativeResponse: Record<string, unknown>; digest: string };
 type Pending = { request: NativeRequest; reject: (error: Error) => void };
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+class GenerationInterrupted extends Error {}
 
 export function identity(owner: EphemeralVoice) {
-  return { curve: owner.machine.identityKeys.curve25519.toBase64(), ed: owner.machine.identityKeys.ed25519.toBase64() };
+  return createHash("sha256").update(JSON.stringify([owner.machine.identityKeys.curve25519.toBase64(), owner.machine.identityKeys.ed25519.toBase64()])).digest("hex");
 }
 
 /** An isolated in-memory test server; no application transport is imported. */
@@ -92,12 +94,45 @@ export class GenerationDispatcher {
   readonly completions = new Map<string, number>();
   private readonly ids = new Map<string, string>();
   private readonly original: EphemeralVoice["out"];
+  private readonly originalSync: EphemeralVoice["sync"];
   private pause?: { matches: (request: NativeRequest) => boolean; resolve: (pending: Pending) => void };
   private pending?: Pending;
 
   constructor(readonly owner: EphemeralVoice, readonly server: GenerationServer) {
     this.original = owner.out.bind(owner);
+    this.originalSync = owner.sync.bind(owner);
     owner.out = (request) => this.send(request);
+    owner.sync = () => this.sync();
+  }
+  private async sync(): Promise<void> {
+    try { await this.receiveAndFlush(); }
+    catch (error) {
+      if (!(error instanceof GenerationInterrupted)) this.owner.close();
+      throw error;
+    }
+  }
+  private async receiveAndFlush(): Promise<void> {
+    const generation = this.server.generation;
+    const { events, count, fallback } = this.server.take(this.owner);
+    const processed = await this.owner.machine.receiveSyncChanges(JSON.stringify(events), new C.DeviceLists([], []), new Map([["signed_curve25519", count]]), new Set(fallback ? ["signed_curve25519"] : []), new C.DecryptionSettings(C.TrustRequirement.CrossSigned));
+    if (generation !== this.server.generation) throw new GenerationInterrupted("Old sync response fenced from current UI/control state.");
+    for (const item of processed) {
+      if (item instanceof C.PlainTextToDeviceEvent) {
+        const event = z.object({ sender: z.string(), type: z.string(), content: z.object({ transaction_id: z.string() }).passthrough() }).parse(JSON.parse(item.rawEvent));
+        if (!event.type.startsWith("m.key.verification.") || !this.owner.hasFlow(event.sender, event.content.transaction_id)) throw new Error("Unowned SAS event.");
+      } else if (item instanceof C.DecryptedToDeviceEvent) {
+        const binding = z.object({ call: z.uuid(), member: z.uuid(), user: z.string(), device: z.uuid() }).strict();
+        const event = z.object({ sender: z.string(), type: z.literal("app.opendiscord.voice.proof"), content: z.object({ version: z.literal(1), purpose: z.literal("ephemeral-voice-proof"), sender: binding, recipient: binding, transaction: z.uuid(), message: z.string().max(128) }).strict() }).parse(JSON.parse(item.rawEvent));
+        const payload = event.content;
+        if (!item.encryptionInfo.isSenderVerified() || event.sender !== payload.sender.user || item.encryptionInfo.sender.toString() !== payload.sender.user || item.encryptionInfo.senderDevice?.toString() !== payload.sender.device || Object.keys(this.owner.binding).some((key) => payload.recipient[key as keyof typeof payload.recipient] !== this.owner.binding[key as keyof typeof this.owner.binding]) || !this.server.owns(payload.sender) || !this.owner.isAdmitted(payload.sender)) throw new Error("Verified control binding mismatch.");
+        if (this.owner.received.some((old) => old.transaction === payload.transaction) || this.owner.received.length >= 64) throw new Error("Control transaction rejected.");
+        this.owner.received.push(payload);
+      } else throw new Error("Unsupported processed native event.");
+    }
+    // The accepted fixture's generic sync error handler disposes the owner even
+    // for a deliberate generation interruption. This adapter keeps the public
+    // machine alive while the interrupted test operation unwinds.
+    await this.owner.flush();
   }
   private transportId(request: NativeRequest, operation: Operation): string {
     const key = JSON.stringify([this.server.generation, operation, request.id, request.type, request.body]);
@@ -137,7 +172,7 @@ export class GenerationDispatcher {
     const pending = this.pending;
     const receipt = await this.server.process(this.owner, pending.request, this.server.generation, "send", this.transportId(pending.request, "send"));
     await this.acceptResponse(pending.request, receipt);
-    pending.reject(new Error("Proof paused after actual response processing.")); this.pending = undefined;
+    pending.reject(new GenerationInterrupted("Proof paused after actual response processing.")); this.pending = undefined;
     return receipt;
   }
   async cancelAndRetire(): Promise<void> {
@@ -157,11 +192,12 @@ export class GenerationDispatcher {
       if (!request.id || seen.has(request.id)) continue;
       seen.add(request.id); await this.retire(request);
     }
-    this.pending?.reject(new Error("Generation changed; old operation interrupted."));
+    this.pending?.reject(new GenerationInterrupted("Generation changed; old operation interrupted."));
     this.pending = undefined; this.pause = undefined;
   }
   release(): void {
     this.pending?.reject(new Error("Proof disposed.")); this.pending = undefined;
     this.owner.out = this.original;
+    this.owner.sync = this.originalSync;
   }
 }
