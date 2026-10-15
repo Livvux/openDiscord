@@ -1,0 +1,57 @@
+import Link from "next/link";
+import { connection } from "next/server";
+import { Logo } from "@/components/logo";
+import { Footer } from "@/components/marketing/footer";
+import { GITHUB_URL } from "@/lib/site";
+import { getMinimumAge, getOperatorDetails, isOfficialInstance } from "@/server/operator-policy";
+
+export type LegalDocumentKind = "imprint" | "privacy" | "terms" | "guidelines";
+const titles = { imprint: "Imprint / Anbieterkennzeichnung", privacy: "Privacy notice", terms: "Terms of use", guidelines: "Community Guidelines" };
+
+export async function LegalDocument({ kind }: { kind: LegalDocumentKind }) {
+  await connection();
+  const operator = getOperatorDetails();
+  const minimumAge = getMinimumAge();
+  const official = isOfficialInstance();
+  return <>
+    <header className="border-b border-white/10"><div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-5"><Logo /><Link href="/" className="link text-sm">Back to home</Link></div></header>
+    <main className="mx-auto w-full max-w-3xl px-6 py-16">
+      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{titles[kind]}</h1>
+      <p className="mt-4 text-sm text-muted-foreground">Updated 15 October 2026</p>
+      <div className="mt-10 space-y-8 text-base leading-relaxed [&_h2]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold [&_p+p]:mt-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6 [&_a]:underline [&_a]:underline-offset-4">
+        {kind === "imprint" && <>
+          <section><h2>Service provider</h2>{operator ? <address className="whitespace-pre-line not-italic">{operator.name}{"\n"}{operator.address}{"\n"}{operator.country}{"\n"}<a href={`mailto:${operator.email}`}>{operator.email}</a></address> : <p>This instance has not configured public operator details. Contact your instance administrator.</p>}</section>
+          <section><h2>About this service</h2><p>openDiscord provides hosted community chat. The software is open source under AGPL-3.0-only; its source and contribution policies are available in the <a href={GITHUB_URL}>project repository</a>.</p></section>
+        </>}
+        {kind === "privacy" && <>
+          <section><h2>Who is responsible</h2>{operator ? <p>{operator.name}, {operator.address.replace(/\n/g, ", ")}, {operator.country}, operates this instance and is responsible for its processing of personal data. Contact: <a href={`mailto:${operator.email}`}>{operator.email}</a>.</p> : <p>Your instance operator is responsible for personal-data processing. Public contact details have not been configured on this instance.</p>}</section>
+          <section><h2>Data and purposes</h2><ul>
+            <li>Email address, display name and a password hash support account registration, sign-in, verification and recovery. Optional passkeys store public keys; two-factor authentication stores protected authentication secrets.</li>
+            <li>Memberships, roles, messages and uploaded files provide community communication. Community content is readable by the server and by people with permission to access it. Encryption guarantees for individual communication features are stated in those features.</li>
+            <li>Session identifiers, timestamps and coarse browser/platform labels maintain sign-in and show your devices. The application does not retain raw IP addresses with sessions. Abuse limits store keyed hashes and counters.</li>
+            <li>Reports, restriction reasons, appeals and moderation audit records support safety and accountability. Relevant community moderators or instance administrators can access them according to their permissions.</li>
+            <li>Registration requires a self-attestation that you are at least {minimumAge}. We do not request a birth date or identity documents for this check.</li>
+          </ul><p>Account and communication processing serves the provision of the requested service (Article 6(1)(b) GDPR). Security, abuse prevention and moderation serve our legitimate interests in protecting the service and its users (Article 6(1)(f)). Required account data is necessary to provide an account; optional features can be left unused.</p></section>
+          <section><h2>Recipients and infrastructure</h2><p>Other users receive content according to channel and community permissions. Hosting, storage and email-delivery providers process data needed to operate the service. The official instance uses Cloudflare for its proxy and object storage; the proxy receives connection information such as IP address and browser headers. Optional Turnstile anti-spam verification sends browser information to Cloudflare.</p><p>Providers may process information outside the European Economic Area. Information about applicable processing arrangements and transfer safeguards is available from the operator; Cloudflare publishes its <a href="https://www.cloudflare.com/cloudflare-customer-dpa/">data processing terms</a>. Self-hosted instances can configure different infrastructure. Opening GitHub contribution or sponsorship links connects you to GitHub.</p></section>
+          <section><h2>Storage and deletion</h2><p>Account data remains until deletion or an applicable retention requirement. Messages remain until deleted by their author, an authorized moderator, account deletion or community deletion. Uploaded files become inaccessible when their linked content is removed and are subsequently swept from storage.</p><p>The software retention policy removes expired sessions and verification records, old rate-limit records after one day, and audit records and resolved reports or appeals after 180 days. Unresolved reports and active restrictions remain until resolved or removed. Actual cleanup requires scheduled operator maintenance.</p>{official ? <p>This instance runs scheduled maintenance and daily encrypted backups. Backup copies expire after 30 days; deletion reaches those copies when they expire. Existing backup copies are protected from normal application access.</p> : <p>Your operator defines backup schedules, retention and maintenance. Contact them for the actual backup expiry and cleanup schedule of this instance.</p>}</section>
+          <section><h2>Browser storage and optional notifications</h2><p>Necessary authentication cookies keep you signed in. Browser storage supports application state and, where an encrypted feature uses it, local cryptographic material. Presence, desktop notifications and Web Push are optional. Push subscriptions are stored while enabled; your browser push provider receives delivery metadata. Disable these features in settings or revoke browser permissions at any time.</p><p>The application includes no advertising or analytics SDK. Infrastructure-level connection processing is described above. Automated spam, rate and keyword checks may reject requests; moderators review reports and appeals.</p></section>
+          <section><h2>Your rights</h2><p>You can request access, correction, deletion, restriction and portability where applicable, and object to processing based on legitimate interests. Settings provide account export, correction and deletion. Communities you own must first be deleted; instance administrators must have their administrative role removed before deleting their account. Contact the operator for requests not covered by settings or for information about retained moderation records.</p><p>You can lodge a complaint with a data-protection supervisory authority, including the <a href="https://www.baden-wuerttemberg.datenschutz.de/beschwerde/">LfDI Baden-Württemberg</a> for the official operator. This does not affect your other rights.</p></section>
+          <section><h2>Technical details</h2><p>The <a href={`${GITHUB_URL}/blob/main/docs/PRIVACY.md`}>technical privacy documentation</a> describes the software data inventory and security boundaries.</p></section>
+        </>}
+        {kind === "terms" && <>
+          <section><h2>Eligibility and accounts</h2><p>You must be at least {minimumAge} to register on this instance and provide an email address you control. Keep your credentials and recovery material secure. When Closed Alpha is enabled, verified accounts also require operator approval.</p></section>
+          <section><h2>Using the service</h2><p>Follow the <Link href="/guidelines">Community Guidelines</Link> and the rules of each community you join. Share only content you have the right to share. You remain responsible for your contributions. Community permissions and financial support are independent.</p></section>
+          <section><h2>Moderation and review</h2><p>Authorized moderators can remove content or restrict participation. The application records moderation reasons and provides community-ban explanations and appeals. Instance-level concerns can be sent to the operator. Abuse, security incidents or maintenance may require temporary restrictions or service interruption.</p></section>
+          <section><h2>Leaving and data</h2><p>You can export your account data and delete your account in settings. Ownership and administrative responsibilities must be resolved before deletion. The <Link href="/privacy">Privacy notice</Link> explains processing and retention. Preserve your own copies of information important to you.</p></section>
+          <section><h2>Contact and changes</h2><p>Contact details are in the <Link href="/imprint">Imprint</Link>. Material policy changes are published with an updated version and registration uses the current policy. Statutory rights remain unaffected.</p></section>
+        </>}
+        {kind === "guidelines" && <>
+          <section><h2>Respect people and their privacy</h2><ul><li>No targeted harassment, threats, hateful abuse or impersonation intended to deceive.</li><li>Do not publish private information, credentials or intimate content belonging to others without authorization.</li><li>No sexual exploitation, grooming or sexual content involving minors. Do not request identity documents from other users.</li></ul></section>
+          <section><h2>Keep communities safe</h2><ul><li>No malware, phishing, scams, illegal content or instructions intended to compromise other users.</li><li>No spam, coordinated raids, ban evasion or attempts to bypass permissions.</li><li>Respect copyright and community rules. Label sensitive material appropriately and follow moderator directions.</li></ul></section>
+          <section><h2>Report and appeal</h2><p>Use in-app reporting for messages or communities and personal blocking when needed. Give moderators enough context without including unnecessary sensitive information. A community ban can be reviewed through the restrictions and appeals flow. For instance-level issues, contact the operator listed in the <Link href="/imprint">Imprint</Link>.</p></section>
+        </>}
+      </div>
+    </main>
+    <Footer />
+  </>;
+}

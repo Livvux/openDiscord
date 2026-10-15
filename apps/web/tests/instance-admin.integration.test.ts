@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -124,7 +125,7 @@ describe("instance administration", () => {
     const settings = { registrationOpen: false, inviteMode: "disabled" as const, ownedCommunities: 1, channelsPerCommunity: 1, rolesPerCommunity: 1, activeInvitesPerCommunity: 1 };
     try {
       await admin.updateInstanceSettings(root, settings, "Temporarily tighten limits");
-      await expect(auth.api.signUpEmail({ body: { email: `${randomUUID()}@example.test`, name: "Blocked signup", password: "correct horse battery" } })).rejects.toThrow(/Registration is closed/);
+      await expect(auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email: `${randomUUID()}@example.test`, name: "Blocked signup", password: "correct horse battery" } })).rejects.toThrow(/Registration is closed/);
       await expect(createInvite(chatter, c.communityId, { maxUses: null, expiresInHours: null })).rejects.toThrow(/disabled/);
       await expect(acceptInvite(outsider, inviteCode)).rejects.toThrow(/disabled/);
       await expect(createCommunity(chatter, "Over limit")).rejects.toThrow(/at most 1/);
@@ -175,7 +176,7 @@ describe("admin authentication lifecycle", () => {
     await db.delete(user).where(eq(user.id, accountId));
   });
   it("allows administrators to enable and disable optional two-factor authentication", async () => {
-    const signup = await auth.api.signUpEmail({ body: { email, password, name: "Optional 2FA Admin" }, returnHeaders: true });
+    const signup = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Optional 2FA Admin" }, returnHeaders: true });
     accountId = signup.response.user.id;
     headers = new Headers({ cookie: signup.headers.get("set-cookie")!.split(";")[0] });
     await db.insert(instanceAdmin).values({ userId: accountId });

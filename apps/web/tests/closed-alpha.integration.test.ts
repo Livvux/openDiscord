@@ -1,3 +1,4 @@
+import { REGISTRATION_HEADERS } from "./helpers";
 // Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
@@ -20,7 +21,7 @@ let previous: boolean;
 async function signUp(name: string) {
   const email = `alpha-${randomUUID()}@example.test`;
   emails.push(email);
-  return auth.api.signUpEmail({ body: { email, password, name } }).then(
+  return auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name } }).then(
     (res) => ({ email, error: null, res }),
     (error: { body?: { code?: string } }) => ({ email, error, res: null }),
   );
@@ -68,7 +69,7 @@ describe("closed alpha", () => {
   it("doesn't let clients pick their own approval status", async () => {
     const email = `alpha-${randomUUID()}@example.test`;
     emails.push(email);
-    await auth.api.signUpEmail({ body: { email, password, name: "Sneaky", approvalStatus: "approved" } as never }).catch(() => null);
+    await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email, password, name: "Sneaky", approvalStatus: "approved" } as never }).catch(() => null);
     expect((await statusOf(email))?.s ?? "pending").toBe("pending");
   });
 

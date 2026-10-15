@@ -32,6 +32,7 @@ test("closed alpha: requests wait for approval, approved accounts get in", async
     await applicant.getByLabel("Display name").fill("Alpha Applicant");
     await applicant.getByLabel("Email").fill(applicantEmail);
     await applicant.getByLabel("Password").fill(PASSWORD);
+    await applicant.getByRole("checkbox", { name: /I am at least/ }).check();
     await expect(applicant.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
     await applicant.getByRole("button", { name: "Request access" }).click();
     await expect(applicant.getByRole("heading", { name: "You're on the list" })).toBeVisible();

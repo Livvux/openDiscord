@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { BLOCKED_MESSAGES, type BlockedState } from "@/lib/account-state";
 import { authClient } from "@/lib/auth-client";
 import { Turnstile } from "@/components/app/turnstile";
+import { REGISTRATION_HEADER, registrationAttestation } from "@/lib/registration-policy";
 import { safeNextPath } from "@/lib/safe-redirect";
 import { TwoFactorStep } from "./two-factor-step";
 
@@ -17,11 +18,12 @@ interface AuthFormProps {
   mode: "sign-in" | "sign-up";
   /** Sign-up only: new accounts need an administrator's approval. */
   closedAlpha?: boolean;
+  minimumAge?: number;
   /** Sign-up only: Cloudflare Turnstile is required when set. */
   turnstileSiteKey?: string;
 }
 
-export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFormProps) {
+export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstileSiteKey }: AuthFormProps) {
   const params = useSearchParams();
   const [error, setError] = useState<string | null>(() => {
     // Set by the server when a signed-in account is blocked (src/server/session.ts).
@@ -44,6 +46,10 @@ export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFo
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email"));
     const password = String(form.get("password"));
+    if (isSignUp && form.get("registrationPolicy") !== "accepted") {
+      setError(`Confirm that you are at least ${minimumAge} and accept the registration policy.`);
+      return;
+    }
     if (captchaRequired && !captchaToken) {
       setError("Complete the anti-spam check first.");
       return;
@@ -55,7 +61,7 @@ export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFo
     const { data, error } = isSignUp
       ? await authClient.signUp.email(
           { email, password, name: String(form.get("name")), callbackURL: next },
-          { headers: captchaToken ? { "x-captcha-response": captchaToken } : undefined },
+          { headers: { [REGISTRATION_HEADER]: registrationAttestation(minimumAge), ...(captchaToken ? { "x-captcha-response": captchaToken } : {}) } },
         )
       : await authClient.signIn.email({ email, password, callbackURL: next });
 
@@ -151,6 +157,12 @@ export function AuthForm({ mode, closedAlpha = false, turnstileSiteKey }: AuthFo
             Forgot your password?
           </Link>
         )}
+        {isSignUp && <div className="flex items-start gap-3 text-sm">
+          <input id="registration-policy" name="registrationPolicy" type="checkbox" value="accepted" required className="mt-1 size-4 shrink-0" />
+          <label htmlFor="registration-policy" className="leading-relaxed">
+            I am at least {minimumAge} years old and agree to the <Link href="/terms" className="link">Terms</Link> and <Link href="/guidelines" className="link">Community Guidelines</Link>. I have read the <Link href="/privacy" className="link">Privacy notice</Link>.
+          </label>
+        </div>}
         {error && <FormError>{error}</FormError>}
         {notice && <FormNotice>{notice}</FormNotice>}
         <Button type="submit" size="lg" disabled={pending}>
