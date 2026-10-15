@@ -30,7 +30,7 @@
 - [x] Write concurrent rate-counter and lease-cap tests, expiry and idempotent-release tests.
 - [x] Implement atomic Postgres limits and leases with no new dependency; update all callers and existing limiter tests.
 - [x] Generate migration through drizzle-kit; check generated SQL and metadata.
-- [ ] Run focused tests remotely, lint/typecheck/build and existing SSE/auth integration/E2E checks.
+- [x] Run focused tests remotely, lint/typecheck/build and existing SSE/auth integration/E2E checks.
 - [x] Review and commit the increment.
 
 ### Task 2: Retention and minimized session metadata
@@ -46,20 +46,21 @@
 
 - [x] Verify installed Better Auth source/types and official documentation.
 - [x] Implement SMTP-gated current-address confirmation/new-address verification and settings UI.
-- [ ] Test unauthenticated/stale-session/duplicate-address/confirmation flows, plus desktop and mobile settings.
+- [x] Test unauthenticated/stale-session/duplicate-address/confirmation flows, plus desktop and mobile settings. SMTP-enabled real-inbox acceptance remains separate.
 - [x] Review and commit.
 
 ### Task 4: Operational release evidence
 
 - [x] Add minimal readiness checks and protected/operator maintenance execution.
-- [ ] Configure production scheduling, encrypted off-host backups and alerts, with backups and reversible changes.
-- [ ] Rehearse restore remotely in isolation; validate TURN and separate physical-device acceptance.
-- [ ] Deploy only verified increments, verify public edge and runtime revision.
+- [x] Configure production scheduling, encrypted off-host backups and alerts, with backups and reversible changes.
+- [x] Rehearse production-data restore remotely in isolation.
+- [ ] Validate TURN and physical-device acceptance separately.
+- [x] Deploy verified increments #29, #31, #32 and #33; verify public edge and runtime revision. Future increments retain this gate.
 
 ### Task 5: Community trust
 
-- [ ] Design and implement scoped onboarding/rules and ban explanations/appeals with permission tests and UI flows.
-- [ ] Publish factual operator policies; track external legal review separately.
+- [x] Design and implement scoped onboarding/rules and ban explanations/appeals with permission tests and UI flows.
+- [x] Publish factual operator policies and 16-year self-attestation; external legal review remains open.
 
 ### Task 6: DMs and authenticated E2EE
 
@@ -81,10 +82,13 @@
 
 ### Release increment evidence (2026-10-15)
 
-- PR #29 contains shared counters/leases (0023), bounded retention, coarse device labels, verified email correction, readiness checks, encrypted CI restore rehearsal, dependency-license declarations, and community rules/appeals (0024).
-- Independent implementation, security and final integration reviews approved the code through d7a8859. Export/import rules and private moderation-data portability were corrected during review.
-- Remote CI at d7a8859 passed lint, types, migrations, unit/integration tests, encrypted restore rehearsal, production build and Docker build. Community desktop/mobile browser acceptance exposed form-submit and navigation synchronization defects; fixes and a fresh exact-head run remain required before release.
-- Production: encrypted off-host backup uploaded, complete ciphertext readback matched SHA-256, private bucket lifecycle and daily timer configured. No production-data restore success is claimed: the isolated restore is prepared but the separately stored recovery key awaits 1Password authorization.
-- Production maintenance scheduling and deployment of PR #29 remain pending. CI restore uses disposable fixtures; it does not substitute for the production-data restore.
-- SMTP-disabled settings behavior is browser-covered; SMTP-enabled delivery and physical-device voice/push acceptance remain separate checks.
-- DMs are in implementation with Matrix crypto WASM 18.9.0. No plaintext fallback or completed/audited E2EE claim is made. Voice E2EE has not shipped.
+- [PR #29](https://github.com/Livvux/openDiscord/pull/29): shared counters/leases (0023), retention, coarse device labels, verified email correction, readiness, encrypted CI restore rehearsal, license declarations and community rules/appeals (0024). Browser acceptance caught form-submit and navigation defects; these were corrected before exact-head CI 38770569738 passed at 5429508. Merged as 84e94ca and deployed.
+- [PR #31](https://github.com/Livvux/openDiscord/pull/31): funding and governance, operator-reported EUR250/month and the operator's GitHub Sponsors URL. Exact-head CI 38771691377 passed at 3b96a4f; merged as 0fc06d8. Public desktop browser and CI mobile/desktop checks passed.
+- [PR #32](https://github.com/Livvux/openDiscord/pull/32): private filesystem/S3 attachment abstraction and optional fail-closed ClamAV protocol integration. Exact-head CI 38772166696 passed at fd62bec, including actual authenticated attachment browser round trips. Merged as bcd84ef and deployed. Production still uses private R2; no production scanner is configured. Scanner tests use a protocol simulator, not a signature engine.
+- [PR #33](https://github.com/Livvux/openDiscord/pull/33): bounded maintenance lifecycle, external health/backup alert jobs and automatic Dokploy environment-file permissions. Exact-head CI 38774365244 passed at 3721181; merged and deployed as 4ee3d46. Live systemd job results and automatic mode0600 after redeploy verified.
+- Production encrypted off-host backup readback matched SHA-256; private bucket, 30-day lifecycle and daily timer configured. Two real isolated production-data restores succeeded; the post-release archive restored 34 public tables and 25 migrations. That archive had zero attachment references, so it does not prove restoration of existing media. Temporary database, recovery-key input and probe user were removed.
+- Public health/readiness return 200. Maintenance is scheduled hourly; its first apply minimized one legacy session's metadata and deleted no active records. Health and backup failure/staleness monitors run on separate hosts; SMTP accepted test notifications to the existing operator address. Inbox delivery is not proven by SMTP acceptance alone.
+- Cloudflare configuration now disables injected RUM only for opendiscord.app. API readback and live browser DOM/network checks on funding and sign-in found no Cloudflare Analytics script/request after propagation; CSP was not relaxed.
+- [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation. Exact-head CI 38778505661 passed at 77ffba8; merged and deployed as 90920fe. Public browser verified approved operator details and the required age checkbox; ready200 and environment mode0600. No date of birth or identity document is collected. External legal review remains open.
+- [PR #30](https://github.com/Livvux/openDiscord/pull/30): encrypted DMs with Matrix crypto WASM18.9.0 are still in implementation and runtime verification. No plaintext fallback or completed/audited E2EE claim is made. Voice E2EE has not shipped.
+- SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, TURN, physical-device voice and push delivery remain separate acceptance checks.

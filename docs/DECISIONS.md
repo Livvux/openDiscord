@@ -62,7 +62,7 @@ and removes or mutes those who lost access, best effort. Signalling is proxied a
 app's domain; the Content-Security-Policy is set per request (`src/proxy.ts`) so it can name the
 operator's LiveKit server, which a build-time header config can't know.
 
-## D9. Attachments (images and files shipped; local volume planned)
+## D9. Attachments (images, files and local volume shipped)
 
 Any S3-compatible store (Cloudflare R2 by default, MinIO, Garage, AWS S3), signed with SigV4 via
 `aws4fetch` instead of the much larger AWS SDK. Images only (PNG, JPEG, WebP, GIF, max 8 MB, 4 per
@@ -71,7 +71,7 @@ isn't a real raster image. Objects are private and served through `/api/attachme
 checks channel membership on every request. Deleted messages unlink their images immediately; a sweeper
 removes unlinked objects after an hour. Other files (max 25 MB) are stored byte-for-byte and served only
 as downloads with a generic content type, so they can't execute on the app origin; the original name is
-cleaned and shown as text. Local-volume storage and a ClamAV sidecar remain open.
+cleaned and shown as text. An absolute private ATTACHMENT_DIR can replace S3. Optional CLAMAV_HOST scanning fails closed before storage; production scanner deployment and signature maintenance remain operator responsibilities.
 
 ## D10. End-to-end encryption (planned, P1)
 
@@ -89,3 +89,34 @@ terminates TLS and therefore sees traffic; the official instance must disclose t
 With Cache Components, pages stream; a `notFound()` after the shell is sent renders the 404 UI with a
 200 status. Access control does not depend on the status code: no data is rendered, and APIs return
 real 401/403/404 statuses.
+
+## D13. Federation research: retain instance boundaries
+
+**Research decision, 2026-10-15:** openDiscord does not implement federation. A future explicit
+community bridge should use a maintained Matrix homeserver, rather than turning our message tables
+into a partial Matrix server. The crypto WASM integration in draft #30 is a client cryptography
+component; it does not implement homeserver federation or make openDiscord Matrix-compatible.
+
+Matrix federation requires signed server traffic, room-event authorization and state resolution,
+remote membership and device handling, not just forwarding text. Our local role overrides, private
+appeals, account identifiers and retention jobs do not map automatically onto that model. See the
+[Matrix server-server specification](https://spec.matrix.org/latest/server-server-api/) and
+[room-version authorization rules](https://spec.matrix.org/latest/rooms/v12/).
+
+ActivityPub supplies actor inbox/outbox delivery and activities, rather than our channel-permission
+and encrypted-device model. It may suit a later public-announcement feed; it is not a private-chat
+transport substitute. Remote recipients can retain delivered data, so a local deletion cannot promise
+that every remote copy disappears. See the [W3C ActivityPub recommendation](https://www.w3.org/TR/activitypub/).
+
+Before any bridge can ship, it needs explicit owner enablement and visible participant consent,
+separate remote identities, channel-scoped outbound permissions, no implicit historical backfill,
+loop/idempotency controls, bounded retries, remote abuse/block handling and a documented deletion
+boundary. DMs, private appeals, credentials and device recovery material must never be bridged.
+Encrypted rooms require a separate endpoint/trust design; a server-operated decrypting bridge would
+be a disclosed participant with plaintext access, not encryption against that operator.
+
+**Acceptance for a future implementation:** test with two independently operated homeservers,
+including revoked membership, retry duplicates, private-channel exclusion, attachment permissions,
+remote deletion limitations and operator shutdown. Until then there are no federation endpoints,
+remote-delivery guarantees or compatibility claims. This completes the research decision, not a
+federation implementation.
