@@ -116,7 +116,8 @@ export class VoiceTransport {
           if (!target) throw new Error("Unknown signature target.");
           const ownSignature = signed.signatures?.[owner.binding.user];
           if (!ownSignature) throw new Error("Missing own signature.");
-          target.signatures = { ...target.signatures, [owner.binding.user]: ownSignature }; targets++;
+          // Native cross-signing uploads add a signature; retain the original device self-signature.
+          target.signatures = { ...target.signatures, [owner.binding.user]: { ...target.signatures?.[owner.binding.user], ...ownSignature } }; targets++;
         }
       }
       response = { failures: {} };
@@ -145,7 +146,9 @@ export class VoiceTransport {
     return { events: record.inbox.splice(0), count: record.prekeys.size, fallback: record.fallback };
   }
   queued(owner: EphemeralVoice): number { return this.record(owner.binding.user, owner.binding.device).inbox.length; }
-  remove(owner: EphemeralVoice): void { this.records.delete(owner.binding.user); }
+  remove(owner: EphemeralVoice): void {
+    if (this.records.get(owner.binding.user)?.owner === owner) this.records.delete(owner.binding.user);
+  }
 }
 
 /** Independent memory-only voice owner, deliberately unavailable to production imports. */
@@ -162,8 +165,8 @@ export class EphemeralVoice {
     const machine = await C.OlmMachine.initialize(new C.UserId(binding.user), new C.DeviceId(binding.device), undefined, undefined, logger);
     machine.roomKeyRequestsEnabled = false; machine.roomKeyForwardingEnabled = false;
     const owner = new EphemeralVoice(transport, binding, machine);
-    transport.enroll(owner);
     try {
+      transport.enroll(owner);
       await owner.flush();
       const bootstrap = await machine.bootstrapCrossSigning(false);
       if (bootstrap.uploadKeysRequest) await owner.out(bootstrap.uploadKeysRequest);
