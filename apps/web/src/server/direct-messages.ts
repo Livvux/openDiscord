@@ -165,7 +165,10 @@ function parseDeviceEvent(type: string, input: unknown): Record<string, unknown>
   throw invalid("Unsupported device event.");
 }
 const cryptoRequest = z.discriminatedUnion("kind", [
-  z.object({ kind: z.enum(["upload", "query", "signing", "signatures"]), body: object }),
+  z.object({ kind: z.literal("upload"), body: object }),
+  z.object({ kind: z.literal("query"), body: object }),
+  z.object({ kind: z.literal("signing"), body: object }),
+  z.object({ kind: z.literal("signatures"), body: object }),
   z.object({ kind: z.literal("claim"), body: object, requestId: z.string().min(1).max(128) }),
   z.object({ kind: z.literal("send"), body: object, requestId: z.string().min(1).max(128), eventType: z.string().max(100) }),
   z.object({ kind: z.literal("sync") }),
