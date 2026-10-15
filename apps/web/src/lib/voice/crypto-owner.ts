@@ -32,7 +32,7 @@ export class VoiceCryptoOwner {
   private audience: VoiceControlParty[] = [];
   private cleanup?: Promise<void>;
   private readonly lifetimeLost = () => { this.stop("lifetime-lost"); };
-  private constructor(private readonly options: VoiceOwnerOptions, private snapshot: VoiceSnapshot, private readonly machine: C.OlmMachine, private readonly release: () => void) {}
+  private constructor(private readonly options: VoiceOwnerOptions, private snapshot: VoiceSnapshot, private readonly machine: C.OlmMachine, private readonly release: () => Promise<void>) {}
 
   static async create(options: VoiceOwnerOptions): Promise<VoiceCryptoOwner> {
     const release = consumeVoiceOwnerGuard(options.guard, options.accountId);
@@ -62,7 +62,7 @@ export class VoiceCryptoOwner {
       return owner;
     } catch (error) {
       if (owner) await owner.close("bootstrap-failed");
-      else { try { machine?.close(); } finally { release(); options.onFence("bootstrap-failed"); } }
+      else { try { machine?.close(); } finally { await release(); options.onFence("bootstrap-failed"); } }
       throw error;
     }
   }
@@ -92,7 +92,7 @@ export class VoiceCryptoOwner {
     try { this.options.onFence(reason); } finally { void this.cleanupNative(); }
   }
   private cleanupNative(): Promise<void> {
-    return this.cleanup ??= this.tail.catch(() => undefined).then(() => { try { this.options.lifetime.signal.removeEventListener("abort", this.lifetimeLost); this.flows.clear(); this.registry.clear(); this.completedPeers.clear(); this.machine.close(); } finally { this.release(); } });
+    return this.cleanup ??= this.tail.catch(() => undefined).then(async () => { try { this.options.lifetime.signal.removeEventListener("abort", this.lifetimeLost); this.flows.clear(); this.registry.clear(); this.completedPeers.clear(); this.machine.close(); } finally { await this.release(); } });
   }
   close(reason = "closed"): Promise<void> { this.stop(reason); return this.cleanupNative(); }
   private binding(): VoiceBinding { return { callId: this.snapshot.callId, memberId: this.snapshot.memberId, joinNonce: this.snapshot.joinNonce, expectedGeneration: this.snapshot.generation }; }

@@ -85,7 +85,7 @@ describe("unreachable serial voice owner", () => {
       await expect(VoiceCryptoOwner.create({ accountId, guard, snapshot: current, lifetime: { signal: new AbortController().signal, assertCurrent() {} }, transport: unitTransport(), onFence })).rejects.toThrow("capability");
       expect(await owner.receive()).toEqual([]);
     } finally { const closed = owner.close(); expect(onFence).toHaveBeenCalledWith("closed"); await closed; }
-    const next = await acquireVoiceOwnerGuard(accountId); releaseUnusedVoiceOwnerGuard(next);
+    const next = await acquireVoiceOwnerGuard(accountId); await releaseUnusedVoiceOwnerGuard(next);
   });
   it("keeps native DM keys unchanged, synchronously fences transition and refuses lifetime resurrection", async () => {
     locks(); await C.initAsync();
@@ -163,7 +163,7 @@ describe("unreachable serial voice owner", () => {
       expect(value.onFence).toHaveBeenCalledWith("lifetime-lost");
       await expect(value.owner.receive()).rejects.toThrow("closed");
       await value.owner.close();
-      const guard = await acquireVoiceOwnerGuard(value.current.members[0].userId); releaseUnusedVoiceOwnerGuard(guard);
+      const guard = await acquireVoiceOwnerGuard(value.current.members[0].userId); await releaseUnusedVoiceOwnerGuard(guard);
     } finally { await value.owner.close(); value.peer.close(); }
   });
 
