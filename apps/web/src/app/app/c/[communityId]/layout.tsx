@@ -1,4 +1,6 @@
 import { Suspense } from "react";
+import { CommunityRules } from "@/components/app/community-rules";
+import { getCommunityRules } from "@/server/community-trust";
 import { ChannelSidebar } from "@/components/app/channel-sidebar";
 import { MobilePanel } from "@/components/app/mobile-nav";
 import { PresenceProvider } from "@/components/app/presence-provider";
@@ -20,6 +22,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
   const { communityId } = await params;
   const user = await requirePageUser();
   const [view, blocked] = await Promise.all([loadCommunityView(user.id, communityId), blockedIds(user.id)]);
+  const rules = await getCommunityRules(user.id, view.id);
   return (
     <RealtimeProvider communityId={view.id}>
       <PresenceProvider communityId={view.id}>
@@ -32,7 +35,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
       <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">
         <ChannelSidebar view={view} />
       </MobilePanel>
-      <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col">{rules.required && !rules.accepted && <section aria-label="Required community rules" className="max-h-[50dvh] shrink-0 overflow-y-auto border-b p-4"><h2 className="mb-2 font-semibold">Community rules updated</h2><CommunityRules communityId={view.id} rules={rules} /></section>}{children}</div>
       </UnreadProvider>
       </PresenceProvider>
     </RealtimeProvider>

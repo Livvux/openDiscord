@@ -44,10 +44,11 @@ async function Invite({ params }: Pick<PageProps<"/invite/[code]">, "params">) {
         </>
       }
     >
+      {preview.rules && <section className="mb-4 grid max-h-72 gap-2 overflow-y-auto rounded-lg border p-3"><h2 className="font-semibold">Community rules</h2><p className="whitespace-pre-wrap break-words text-sm">{preview.rules}</p></section>}
       {preview.paused ? (
         <p role="status" className="text-sm text-muted-foreground">This community has paused new members. Ask the person who invited you.</p>
       ) : session ? (
-        <JoinButton code={preview.code} />
+        <JoinButton code={preview.code} rulesVersion={preview.rulesVersion} rulesRequired={preview.rulesRequired} />
       ) : (
         <div className="grid gap-3">
           <Link href={`/sign-up?next=${next}`} className={buttonVariants({ size: "lg" })}>

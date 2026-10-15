@@ -31,7 +31,7 @@ export function MembersManager({ communityId, currentUserId, authority, members,
   }
 
   function moderate(kind: "kick" | "ban", m: MemberSummary) {
-    const reason = window.prompt(`${kind === "kick" ? "Kick" : "Ban"} ${m.name}? Optional reason (shown in the audit log):`);
+    const reason = window.prompt(`${kind === "kick" ? "Kick" : "Ban"} ${m.name}? Optional reason (shown in the audit log${kind === "ban" ? " and to the banned person" : ""}):`);
     if (reason === null) return;
     run(() => (kind === "kick" ? kickMember : banMember)(communityId, m.userId, reason));
   }

@@ -5,6 +5,7 @@ import { refresh } from "next/cache";
 import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
+import * as trust from "@/server/community-trust";
 import * as communities from "@/server/communities";
 import * as integrations from "@/server/integrations";
 import { toResult, type ActionResult } from "@/server/errors";
@@ -49,7 +50,7 @@ export const deleteChannel = async (channelId: string) => run((u) => communities
 export const createInvite = async (communityId: string, options: { expiresInHours: number | null; maxUses: number | null }) =>
   run((u) => communities.createInvite(u, communityId, options), false);
 export const revokeInvite = async (code: string) => run((u) => communities.revokeInvite(u, code));
-export const acceptInvite = async (code: string) => run((u) => communities.acceptInvite(u, code), false);
+export const acceptInvite = async (code: string, rulesVersion?: number) => run((u) => communities.acceptInvite(u, code, rulesVersion), false);
 
 // Messages update the UI through the realtime stream, so they skip the router refresh.
 export const sendMessage = async (
@@ -114,3 +115,8 @@ export const setMemberRole = async (roleId: string, userId: string, assigned: bo
 
 export const reportContent = async (input: { communityId?: string; messageId?: string; reason: string }) =>
   run(async (u) => (await import("@/server/reports")).reportContent(u, input), false);
+
+export const updateCommunityRules = async (id: string, input: { text: string; required: boolean }) => run((u) => trust.updateCommunityRules(u, id, input));
+export const acknowledgeCommunityRules = async (id: string, version: number) => run((u) => trust.acknowledgeCommunityRules(u, id, version));
+export const submitBanAppeal = async (id: string, content: string) => run((u) => trust.submitBanAppeal(u, id, content));
+export const resolveBanAppeal = async (id: string, appealId: string, resolution: "uphold" | "unban", note: string) => run((u) => trust.resolveBanAppeal(u, id, appealId, resolution, note));

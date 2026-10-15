@@ -169,6 +169,13 @@
       "when": 1792079296679,
       "tag": "0023_red_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792080082972,
+      "tag": "0024_sticky_darwin",
+      "breakpoints": true
     }
   ]
 }

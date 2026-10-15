@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { CommunityRules } from "@/components/app/community-rules";
+import { BanAppeals } from "@/components/app/ban-appeals";
+import { getCommunityRules, listBanAppeals } from "@/server/community-trust";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { BanList, DangerZone, InviteList, RenameCommunity } from "@/components/app/settings/community-admin";
 import { MembersManager } from "@/components/app/settings/members-manager";
@@ -20,6 +23,10 @@ import { requirePageUser } from "@/server/session";
 export const metadata: Metadata = { title: "Community settings" };
 
 const AUDIT_LABELS: Record<string, string> = {
+  "community.rules": "updated community rules",
+  "ban.appeal": "submitted a ban appeal",
+  "ban.appeal.uphold": "upheld a ban appeal for",
+  "ban.appeal.unban": "accepted a ban appeal for",
   "member.kick": "kicked",
   "member.ban": "banned",
   "member.unban": "unbanned",
@@ -55,7 +62,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (["role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import"].includes(e.action)) return null;
+  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -100,10 +107,12 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
     has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? listIntegrations(user.id, view.id) : null,
   ]);
+  const [rules, appeals] = await Promise.all([getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
   return (
     <div className="mx-auto max-w-3xl px-6">
+      <Section id="community-rules" title="Community rules"><CommunityRules communityId={view.id} rules={rules} canManage={has(a, Permission.ManageCommunity)} /></Section>
       {has(a, Permission.ManageCommunity) && (
         <Section id="overview" title="Overview">
           <RenameCommunity communityId={view.id} name={view.name} />
@@ -159,6 +168,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
           <BanList communityId={view.id} bans={bans} />
         </Section>
       )}
+      {appeals && <Section id="ban-appeals" title="Ban appeals" description="The latest 100 appeals. Only moderators with ban permission can review them; the ban issuer’s rank also applies."><BanAppeals communityId={view.id} appeals={appeals} /></Section>}
       {audit && (
         <Section id="audit" title="Audit log" description="The last 100 moderation actions. Message contents are never logged.">
           {audit.length === 0 ? (

@@ -2,7 +2,7 @@ import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, integration, message, reaction, user, userBlock } from "@/db/schema";
-import { channelAuthorities, loadMember, requireChannel } from "./access";
+import { channelAuthorities, loadMember, lockCommunity, requireChannel } from "./access";
 import { enforceAutomod } from "./automod";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
@@ -189,6 +189,8 @@ export async function sendMessage(
   }
   const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
   const { row, mentioned } = await db.transaction(async (tx) => {
+    await lockCommunity(tx, ch.communityId);
+    await requireChannel(tx, channelId, userId, Permission.SendMessages);
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
     await linkAttachments(tx, userId, channelId, created.id, ids);
     return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
@@ -220,6 +222,8 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   await enforceAutomod(row.communityId, userId, authority, content);
   // Edits update who is mentioned but never notify: otherwise editing a mention out and back in re-pings.
   await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    await requireChannel(tx, row.message.channelId, userId, Permission.SendMessages);
     await tx.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));
     await syncMentions(tx, row.communityId, row.message.id, userId, content);
   });
