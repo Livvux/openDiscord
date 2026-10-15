@@ -2,6 +2,7 @@
 // Thin wrappers: authenticate, call the service (which validates and authorises), refresh the UI.
 // Next.js rejects cross-origin Server Action calls, which covers CSRF.
 import { refresh } from "next/cache";
+import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
 import * as communities from "@/server/communities";
 import { toResult, type ActionResult } from "@/server/errors";
@@ -65,6 +66,9 @@ export const blockUser = async (userId: string) => run((u) => blocks.blockUser(u
 export const unblockUser = async (userId: string) => run((u) => blocks.unblockUser(u, userId));
 export const updateCommunitySafety = async (communityId: string, input: Partial<communities.CommunitySafety>) =>
   run((u) => communities.updateCommunitySafety(u, communityId, input));
+
+export const updateAutomod = async (communityId: string, rules: { words: string[]; blockLinks: boolean }) =>
+  run((u) => automod.updateAutomod(u, communityId, rules));
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>
   run((u) => moderation.kickMember(u, communityId, userId, reason));

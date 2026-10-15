@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, message, reaction, user, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, requireChannel } from "./access";
+import { enforceAutomod } from "./automod";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
@@ -123,7 +124,8 @@ export async function sendMessage(
   const ids = parse(attachmentIds, rawAttachments);
   // A message with images may have no text.
   const content = ids.length > 0 && typeof rawContent === "string" && !rawContent.trim() ? "" : parse(messageContent, rawContent);
-  const { channel: ch } = await requireChannel(db, channelId, userId, Permission.SendMessages);
+  const { channel: ch, authority } = await requireChannel(db, channelId, userId, Permission.SendMessages);
+  await enforceAutomod(ch.communityId, userId, authority, content);
 
   const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);
   const [{ recent }] = await db
@@ -163,8 +165,9 @@ export async function editMessage(userId: string, rawMessageId: unknown, rawCont
   const content = parse(messageContent, rawContent);
   const row = await loadOwnedMessage(rawMessageId);
   // Muted members (no SendMessages) can't rewrite their history either.
-  await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
+  const { authority } = await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   if (row.message.authorId !== userId) throw forbidden("You can only edit your own messages.");
+  await enforceAutomod(row.communityId, userId, authority, content);
   // Edits update who is mentioned but never notify: otherwise editing a mention out and back in re-pings.
   await db.transaction(async (tx) => {
     await tx.update(message).set({ content, editedAt: new Date() }).where(eq(message.id, row.message.id));

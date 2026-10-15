@@ -34,6 +34,10 @@ export const community = pgTable("community", {
   minAccountAgeHours: integer("min_account_age_hours").notNull().default(0),
   /** More joins than this within 10 minutes pauses invites; 0 = off. */
   raidJoinLimit: integer("raid_join_limit").notNull().default(30),
+  /** AutoMod: messages containing these words (case-insensitive, whole words) are refused. */
+  automodWords: text("automod_words").array().notNull().default(sql`'{}'::text[]`),
+  /** AutoMod: refuse messages with links, except from people who can manage messages. */
+  automodBlockLinks: boolean("automod_block_links").notNull().default(false),
   // restrict: an owner must delete or hand over the community before deleting their account.
   ownerId: text("owner_id")
     .notNull()

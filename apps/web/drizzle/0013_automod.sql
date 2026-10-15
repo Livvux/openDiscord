@@ -1,0 +1,2 @@
+ALTER TABLE "community" ADD COLUMN "automod_words" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "community" ADD COLUMN "automod_block_links" boolean DEFAULT false NOT NULL;
