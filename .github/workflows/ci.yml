@@ -72,8 +72,16 @@ jobs:
         # Deliberately omit participant, SDP, ICE credential and token logs.
         run: docker logs opendiscord-ci-livekit 2>&1 | sed -n '/starting LiveKit server/p'
       - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: playwright-traces, path: apps/web/test-results }
+        # A failed initial attempt must survive a successful retry on disposable CI accounts.
+        if: always()
+        with:
+          name: playwright-traces
+          path: |
+            apps/web/test-results/**/trace.zip
+            apps/web/test-results/**/error-context.md
+            apps/web/test-results/**/signup-diagnostics.json
+          retention-days: 3
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

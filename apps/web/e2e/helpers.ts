@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import { REGISTRATION_HEADER, registrationAttestation } from "../src/lib/registration-policy";
+import { safeNextPath } from "../src/lib/safe-redirect";
 
 export const PASSWORD = "correct horse battery";
 let ipCounter = 0;
@@ -47,9 +49,38 @@ export async function signUp(page: Page, name: string, path = "/sign-up") {
   await form.getByRole("checkbox", { name: /I am at least/ }).check();
   // Wait for the Turnstile widget (test key: passes without interaction) to hand out its token.
   await expect(form.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
-  await form.getByRole("button", { name: "Create account" }).click();
-  // Signed in once the app (or the `next` target) has loaded.
-  await expect(page).not.toHaveURL(/\/sign-up/);
+  const signupUrl = new URL(page.url());
+  const destination = new URL(safeNextPath(signupUrl.searchParams.get("next")), signupUrl.origin).href;
+  const started = performance.now();
+  const diagnostics: { phase: string; status: number | null; apiErrorCode: string | null; responseMs: number | null; redirectMs: number | null } = {
+    phase: "auth-response", status: null, apiErrorCode: null, responseMs: null, redirectMs: null,
+  };
+  try {
+    // Subscribe before clicking; the redirect deadline starts only after the native POST responds.
+    const [response] = await Promise.all([
+      page.waitForResponse((response) => response.request().method() === "POST"
+        && response.url() === `${signupUrl.origin}/api/auth/sign-up/email`),
+      form.getByRole("button", { name: "Create account" }).click(),
+    ]);
+    diagnostics.status = response.status();
+    if (await response.finished()) throw new Error("Sign-up POST response did not finish.");
+    diagnostics.responseMs = Math.round(performance.now() - started);
+    if (!response.ok()) {
+      const body: unknown = await response.json().catch(() => null);
+      if (body && typeof body === "object" && "code" in body && typeof body.code === "string" && /^[A-Z0-9_]{1,100}$/.test(body.code)) {
+        diagnostics.apiErrorCode = body.code;
+      }
+      throw new Error(`Sign-up POST failed: HTTP ${response.status()} (${diagnostics.apiErrorCode ?? "unknown error code"}).`);
+    }
+    diagnostics.phase = "redirect";
+    const responded = performance.now();
+    await expect(page).toHaveURL(destination, { timeout: 5_000 });
+    diagnostics.redirectMs = Math.round(performance.now() - responded);
+    diagnostics.phase = "complete";
+  } finally {
+    // Aggregate timings/status only: never write response bodies, account data, cookies or tokens.
+    await writeFile(test.info().outputPath("signup-diagnostics.json"), JSON.stringify(diagnostics));
+  }
   return email;
 }
 
