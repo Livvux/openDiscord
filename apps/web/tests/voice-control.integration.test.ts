@@ -87,8 +87,8 @@ async function upload(e: Endpoint, prekeys: Record<string, unknown> = {}) {
   await crypto(e, { kind: "upload", body: { device_keys: keys(e), one_time_keys: prekeys } });
 }
 const keyContent = (letter: string) => ({ key: letter.repeat(43), signatures: {} });
-const claim = (e: Endpoint, requestId = randomUUID()) => ({ kind: "claim", requestId, body: { one_time_keys: { [e.snapshot.voiceUserId]: { [e.snapshot.voiceDeviceId]: "signed_curve25519" } } } });
-const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "send", requestId, eventType: "m.key.verification.request", body: { messages: { [b.snapshot.voiceUserId]: { [b.snapshot.voiceDeviceId]: { from_device: a.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } });
+const claim = (e: Endpoint, requestId = randomUUID()) => ({ kind: "claim", requestId, nativeRequestId: requestId, body: { one_time_keys: { [e.snapshot.voiceUserId]: { [e.snapshot.voiceDeviceId]: "signed_curve25519" } } } });
+const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "send", requestId, nativeRequestId: requestId, nativeTxnId: requestId, eventType: "m.key.verification.request", body: { messages: { [b.snapshot.voiceUserId]: { [b.snapshot.voiceDeviceId]: { from_device: a.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } });
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
@@ -155,7 +155,7 @@ describe("voice-only scope, immutable public state and replay", () => {
     await upload(a); await upload(b, { "signed_curve25519:one": keyContent("d") });
     const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`, device = randomUUID();
     expect(await crypto(a, { kind: "query", body: { device_keys: { [unknown]: [] } } })).toEqual({ device_keys: {}, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
-    const request = { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
+    const request = { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
     expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
     expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
@@ -192,7 +192,7 @@ describe("voice-only scope, immutable public state and replay", () => {
       const device = b.snapshot.voiceDeviceId;
       const requests = [
         { kind: "query", body: { device_keys: { [target]: [] } } },
-        { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [target]: { [device]: "signed_curve25519" } } } },
+        { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [target]: { [device]: "signed_curve25519" } } } },
         { kind: "signatures", body: { [target]: { [device]: keys(b) } } },
         { ...send(a, b), body: { messages: { [target]: { [device]: { transaction_id: randomUUID() } } } } },
       ];
@@ -407,13 +407,13 @@ class NativeVoice {
   async out(request: NativeRequest) {
     const body: unknown = JSON.parse(request.body);
     let response: Record<string, unknown>;
-    if (request instanceof C.KeysUploadRequest) { this.sizes.push(Buffer.byteLength(request.body)); response = await crypto(this.endpoint, { kind: "upload", body, requestId: request.id }); }
-    else if (request instanceof C.KeysQueryRequest) response = await crypto(this.endpoint, { kind: "query", body, requestId: request.id });
-    else if (request instanceof C.KeysClaimRequest) response = await crypto(this.endpoint, { kind: "claim", body, requestId: request.id });
-    else if (request instanceof C.SignatureUploadRequest) response = await crypto(this.endpoint, { kind: "signatures", body, ...(request.id ? { requestId: request.id } : {}) });
-    else if (request instanceof C.ToDeviceRequest) response = await crypto(this.endpoint, { kind: "send", body, requestId: request.txn_id, eventType: request.event_type });
+    if (request instanceof C.KeysUploadRequest) { this.sizes.push(Buffer.byteLength(request.body)); response = await crypto(this.endpoint, { kind: "upload", body, requestId: request.id, nativeRequestId: request.id }); }
+    else if (request instanceof C.KeysQueryRequest) response = await crypto(this.endpoint, { kind: "query", body, requestId: request.id, nativeRequestId: request.id });
+    else if (request instanceof C.KeysClaimRequest) response = await crypto(this.endpoint, { kind: "claim", body, requestId: request.id, nativeRequestId: request.id });
+    else if (request instanceof C.SignatureUploadRequest) response = await crypto(this.endpoint, { kind: "signatures", body, ...(request.id ? { requestId: request.id, nativeRequestId: request.id } : {}) });
+    else if (request instanceof C.ToDeviceRequest) response = await crypto(this.endpoint, { kind: "send", body, requestId: request.txn_id, nativeRequestId: request.id, nativeTxnId: request.txn_id, eventType: request.event_type });
     else throw new Error("Unowned native request kind in voice server fixture.");
-    if (request.id) await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(response));
+    if (request.id) await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(request instanceof C.ToDeviceRequest ? response.nativeResponse : response));
   }
   async flush() {
     for (let i = 0; i < 4; i++) {
