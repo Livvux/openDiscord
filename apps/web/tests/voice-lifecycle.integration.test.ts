@@ -209,6 +209,7 @@ async function voiceWaiters(count: number) {
 }
 type F = Awaited<ReturnType<typeof fixture>>;
 type P = Awaited<ReturnType<typeof peer>>;
+const enrollmentAuth = (p: P) => ({ userId: p.userId, sessionId: p.sessionId, anchorDeviceId: p.anchorDeviceId, anchorSecret: p.anchorSecret });
 const scopedMutations: { name: string; run: (f: F, p: P) => Promise<unknown> }[] = [
   { name: "leave", run: (f, p) => leaveCommunity(p.userId, f.communityId) },
   { name: "kick", run: (f, p) => kickMember(f.userId, f.communityId, p.userId) },
@@ -242,7 +243,7 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
   it("keeps the same user's unrelated community enrollment live after a scoped kick", async () => {
     const f = await fixture(), p = await peer(f), other = await fixture();
     await db.insert(member).values({ communityId: other.communityId, userId: p.userId });
-    const unrelated = await joinVoiceControl(p, { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const unrelated = await joinVoiceControl(enrollmentAuth(p), { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
     await kickMember(f.userId, f.communityId, p.userId);
     expect(await state(p.snapshot.memberId)).toBe("left");
     expect(await state(unrelated.memberId)).toBe("waiting");
@@ -260,7 +261,7 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
     await setChannelOverride(f.userId, f.channelId, everyone.id, 0, Permission.Speak);
     await setChannelOverride(f.userId, f.channelId, source, Permission.Speak, 0);
     // A fresh enrollment is needed after the intervening source loss.
-    const fresh = await joinVoiceControl(q, { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const fresh = await joinVoiceControl(enrollmentAuth(q), { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
     await deleteRole(f.userId, source);
     expect(await state(fresh.memberId)).toBe("left");
   });
@@ -384,7 +385,7 @@ describe("native account write granularity and multi-session cascades", () => {
     await db.insert(member).values({ communityId: other.communityId, userId: p.userId });
     const secondSession = randomUUID();
     await db.insert(session).values({ id: secondSession, userId: p.userId, token: randomUUID(), expiresAt: new Date(Date.now() + 3_600_000) });
-    const second = await joinVoiceControl({ ...p, sessionId: secondSession }, { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const second = await joinVoiceControl({ ...enrollmentAuth(p), sessionId: secondSession }, { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
     const native = drizzleAdapter(db, { provider: "pg", schema })(auth.options);
     await native.deleteMany({ model: "session", where: [{ field: "userId", value: p.userId }] });
     for (const snapshot of [p.snapshot, second]) {

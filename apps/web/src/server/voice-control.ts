@@ -1,4 +1,4 @@
-// Unactivated internal draft: no transport, SFU client, tokens, timers or lifecycle hooks.
+// Unactivated internal draft: no transport, SFU client, tokens or timers.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, asc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
