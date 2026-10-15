@@ -70,7 +70,9 @@ export class HistoryStore {
       const identityBytes = new TextEncoder().encode(JSON.stringify({ snapshot, importedAt: Date.now() }));
       if (identityBytes.length > DM_MAX_BACKUP_BYTES) throw new Error("Recovery exceeds the 4 MB limit.");
       const attachment = this.C.Attachment.encrypt(identityBytes);
-      identityRow = { id, ciphertext: attachment.encryptedData, information: attachment.mediaEncryptionInfo };
+      const information = attachment.mediaEncryptionInfo;
+      if (!information) { attachment.free(); throw new Error("Could not encrypt pending identity recovery."); }
+      identityRow = { id, ciphertext: attachment.encryptedData, information };
       attachment.free();
     }
     return new Promise((resolve, reject) => {
