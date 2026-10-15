@@ -127,6 +127,8 @@ describe("private encrypted conversations", () => {
       { signerId: outsider, targetId: bob, keyId: bDevice, signatures: { "ed25519:other-contact": "z".repeat(86) } },
       { signerId: alice, targetId: bob, keyId: bDevice, signatures: { "ed25519:known-contact": "y".repeat(86) } },
     ]);
+    const keys = publicKeys(bob, bDevice);
+    await handleCryptoRequest(authB(), { kind: "upload", body: { device_keys: { ...keys, signatures: { ...keys.signatures, [matrix(outsider)]: { "ed25519:embedded-contact": "x".repeat(86) } } } } });
     const response = await handleCryptoRequest(authA(), { kind: "query", body: { device_keys: { [matrix(bob)]: [] } } });
     expect(JSON.stringify(response)).not.toContain(matrix(outsider));
     expect(JSON.stringify(response)).toContain(matrix(bob));

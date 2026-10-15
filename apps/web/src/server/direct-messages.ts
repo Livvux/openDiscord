@@ -289,7 +289,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
             const signer = matrixUser(signature.signerId);
             merged[signer] = { ...record(merged[signer] ?? {}), ...signature.signatures };
           }
-          return { ...value, signatures: merged };
+          return { ...value, signatures: Object.fromEntries(Object.entries(merged).filter(([signer]) => signer === matrixId || signer === ownUser)) };
         };
         device_keys[matrixId] = Object.fromEntries(devices.filter((d) => d.keys).map((d) => [d.id, attach(d.id, d.keys!)]));
         const [identity] = await tx.select().from(dmIdentity).where(eq(dmIdentity.userId, target));
