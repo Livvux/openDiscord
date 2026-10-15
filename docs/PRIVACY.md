@@ -1,0 +1,57 @@
+# Privacy and data handling
+
+This describes what the software stores. Operators of an instance (including opendiscord.app) are the
+data controllers and must publish their own privacy notice; this document is the technical basis for it.
+
+## Encryption: what is and isn't protected
+
+| Data | In transit | At rest | End-to-end encrypted |
+| --- | --- | --- | --- |
+| Community messages | TLS | Plaintext in Postgres (protect the disk) | **No** |
+| Passwords | TLS | Salted hash (Better Auth, scrypt) | n/a |
+| TOTP secrets, backup codes | TLS | Encrypted with `BETTER_AUTH_SECRET` | n/a |
+| Passkeys | TLS | Public keys only | n/a |
+
+**Nothing in openDiscord is end-to-end encrypted today.** The operator of an instance can technically
+read community messages. TLS and server-side storage protection are not E2EE, and the product must
+never claim otherwise. E2EE direct messages are planned with an audited protocol ([DECISIONS.md](DECISIONS.md) D10).
+
+## Data inventory
+
+| Data | Purpose | Visible to | Retention |
+| --- | --- | --- | --- |
+| Email address | Sign-in, verification, password reset | The person and the operator | Until account deletion |
+| Display name | Shown next to messages and in member lists | Members of shared communities | Until changed or deleted |
+| Password hash | Authentication | Nobody (server only) | Until changed or deleted |
+| Sessions: creation/expiry time, user agent | Keep you signed in; "signed-in devices" list | The person | Until expiry (7 days by default) or sign-out; expired rows are purged by a P1 job |
+| IP addresses | Rate limiting in memory | Nobody | **Not stored** |
+| Communities, memberships, roles | Running the community | Members | Until the community is deleted or you leave |
+| Messages | Conversation | Members of the community | Until deleted by author, moderator, community deletion or account deletion |
+| Bans | Moderation | Moderators with ban permission | Until unbanned, community deleted or the banned account deleted |
+| Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |
+| Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
+
+There are no analytics, tracking pixels, advertising identifiers, third-party fonts or third-party
+scripts. The Content Security Policy blocks requests to other origins.
+
+## Your rights (GDPR)
+
+- **Access and portability:** Settings → Your data → Download my data (JSON: profile, sessions,
+  security settings, memberships, owned communities, all your messages).
+- **Correction:** change your display name in settings. Email change is P1.
+- **Erasure:** Settings → Delete account. This permanently deletes your account, sessions, 2FA and
+  passkeys, memberships, bans against you, and every message you wrote. Audit entries about you keep the
+  action but lose the link to your account. If you own communities, delete them first, so members
+  aren't left with an ownerless community.
+- **Restriction/objection:** there is no profiling or optional processing to object to.
+
+## Search engines and public access
+
+Private areas (`/app`, `/invite`, `/api`) are excluded via `robots.txt` and `noindex`. All APIs
+require membership. Public, indexable channels will exist only as an explicit opt-in (P2).
+
+## Backups
+
+Backups made with `scripts/backup.sh` contain all of the above. Store them encrypted, restrict access,
+and delete them on a schedule; deleted accounts disappear from the live database immediately and from
+backups when those expire.
