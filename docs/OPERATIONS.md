@@ -75,8 +75,26 @@ script's lock. No alerts contain user/message contents.
 
 The actual encrypted off-host production backup was decrypted and restored with PostgreSQL 18.6
 on a separate host. The temporary service had no network access, a dedicated temporary user,
-read-only host filesystems and a Unix socket only. Recovery completed with 31 public tables and
-23 migrations. This archive contained zero attachment references; production-media recovery with
+read-only host filesystems and a Unix socket only. The initial recovery completed with 31 public tables and
+23 migrations. After the release deployed, a fresh encrypted backup restored successfully with
+34 public tables and 25 migrations. This archive contained zero attachment references; production-media recovery with
 existing attachments remains a separate acceptance case. The temporary database, recovery-key
 credential, encrypted input copy and temporary user were removed and their absence checked.
 This is operational recovery evidence, not a security audit.
+
+
+### Hosted maintenance lifecycle
+
+`scripts/production-maintenance.sh` serializes hourly maintenance, requires a verified backup younger
+than 30 hours and refuses to build or pull a missing release image. Each statement has a 15-second
+budget and a 2-second lock budget. The overall CLI deadline is five minutes; the EXIT trap explicitly
+removes only the uniquely labelled maintenance container created by that run. Killing a Docker Compose client
+alone does not stop its container. The systemd service should allow a 330-second stop budget and a
+20-second graceful stop period so cleanup can finish. A pre-existing labelled project job is preserved and
+reported as a failure rather than silently removed.
+
+Dokploy recreates this installation's `.env` with broad read permissions during deployment. The
+hosted installation uses a path-triggered oneshot running `scripts/secure-dokploy-env.sh` to restore
+owner-only access after replacement. It reads only the file mode, never its contents, and does no
+work when the mode is already 0600. Keep its path unit scoped to the app's exact `.env`; do not
+change the permissions or runtime settings of unrelated deployments.
