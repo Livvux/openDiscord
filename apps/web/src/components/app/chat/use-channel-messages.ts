@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { MessagePage, MessageView } from "@/server/messages";
-import { applyResync, mergeMessages, type LoadedMessages } from "@/lib/merge-messages";
+import { applyResync, mergeMessages, syncReplies, type LoadedMessages } from "@/lib/merge-messages";
 import { useRealtime } from "../realtime-provider";
 
 async function fetchPage(channelId: string, before?: string): Promise<MessagePage> {
@@ -29,10 +29,10 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage) 
         switch (event.type) {
           case "message.created":
           case "message.updated":
-            if (event.message.channelId === channelId) setMessages((m) => mergeMessages(m, [event.message]));
+            if (event.message.channelId === channelId) setMessages((m) => syncReplies(mergeMessages(m, [event.message]), { updated: event.message }));
             break;
           case "message.deleted":
-            if (event.channelId === channelId) setMessages((m) => m.filter((x) => x.id !== event.messageId));
+            if (event.channelId === channelId) setMessages((m) => syncReplies(m.filter((x) => x.id !== event.messageId), { deletedId: event.messageId }));
             break;
           case "resync":
             // Catch up on anything missed while disconnected.
@@ -61,7 +61,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage) 
   }, [channelId, loadingOlder, messages]);
 
   const upsert = useCallback((message: MessageView) => setMessages((m) => mergeMessages(m, [message])), [setMessages]);
-  const remove = useCallback((id: string) => setMessages((m) => m.filter((x) => x.id !== id)), [setMessages]);
+  const remove = useCallback((id: string) => setMessages((m) => syncReplies(m.filter((x) => x.id !== id), { deletedId: id })), [setMessages]);
 
   return { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove };
 }

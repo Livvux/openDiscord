@@ -9,6 +9,7 @@ import { errorResponse } from "@/server/http";
 import { getMessageForBroadcast, type MessageView } from "@/server/messages";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
+import { excerptOf } from "@/lib/mentions";
 
 const HEARTBEAT_MS = 25_000;
 const MAX_LIFETIME_MS = 10 * 60_000;
@@ -27,11 +28,7 @@ export interface MentionNotice {
   excerpt: string;
 }
 
-function excerpt(message: MessageView): string {
-  const names = new Map(message.mentions.map((m) => [m.id, m.name]));
-  const text = message.content.replace(/<@([A-Za-z0-9_-]+)>/g, (_, id: string) => `@${names.get(id) ?? "someone"}`);
-  return text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH - 1)}…` : text;
-}
+const excerpt = (message: MessageView) => excerptOf(message.content, message.mentions, EXCERPT_LENGTH);
 
 /** Re-checks visibility at delivery: access may have changed since the mention was written. */
 async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "mention.created" }>): Promise<MentionNotice | null> {

@@ -41,3 +41,10 @@ export function mentionQuery(text: string, caret: number): { query: string; star
   const match = /(^|\s)@([^\s@<>]{0,32})$/.exec(text.slice(0, caret));
   return match ? { query: match[2], start: caret - match[2].length - 1 } : null;
 }
+
+/** Plain one-line preview: mention tokens become names, then the text is cut to `length`. */
+export function excerptOf(content: string, mentions: readonly Mention[], length: number): string {
+  const names = new Map(mentions.map((m) => [m.id, m.name]));
+  const text = content.replace(TOKEN, (_, id: string) => `@${names.get(id) ?? "member"}`);
+  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
+}

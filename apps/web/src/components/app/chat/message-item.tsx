@@ -2,7 +2,7 @@
 
 import { CornerUpLeftIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
-import { useId, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
@@ -67,14 +67,17 @@ interface MessageItemProps {
   canReact: boolean;
   /** May pin (manage messages in this channel). */
   canPin: boolean;
+  /** The replied-to author is blocked by the viewer: hide the preview text. */
+  replyBlocked: boolean;
   onDeleted: (id: string) => void;
   onReply: (message: MessageView) => void;
 }
 
 export function MessageItem(props: MessageItemProps) {
-  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, onDeleted, onReply } = props;
+  const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply } = props;
   const [editing, setEditing] = useState(false);
   const [picking, setPicking] = useState(false);
+  const reactButton = useRef<HTMLButtonElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -105,15 +108,22 @@ export function MessageItem(props: MessageItemProps) {
     });
   }
 
-  function react(emoji: string) {
+  function closePicker() {
     setPicking(false);
+    // The picker unmounts; keep keyboard focus where it was opened.
+    reactButton.current?.focus();
+  }
+
+  function react(emoji: string) {
+    closePicker();
     run(() => toggleReaction(message.id, emoji));
   }
 
   function jumpToReply(e: React.MouseEvent<HTMLButtonElement>, id: string) {
     const target = e.currentTarget.closest('[role="log"]')?.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
-    target?.focus();
+    if (!target) return setError("The original message isn't loaded. Load older messages to see it.");
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.focus();
   }
 
   function onSaveEdit(content: string) {
@@ -158,7 +168,7 @@ export function MessageItem(props: MessageItemProps) {
             <CornerUpLeftIcon aria-hidden className="size-3 shrink-0" />
             <span className="sr-only">Reply to </span>
             <span className={`font-medium ${nameColor(message.replyTo.authorId)}`}>{message.replyTo.authorName}</span>
-            <span className="truncate">{message.replyTo.excerpt || "an image"}</span>
+            <span className="truncate">{replyBlocked ? "Message from a blocked person" : message.replyTo.excerpt || "an image"}</span>
           </button>
         )}
         {!grouped && (
@@ -215,7 +225,7 @@ export function MessageItem(props: MessageItemProps) {
                   <button
                     type="button"
                     aria-pressed={mine}
-                    aria-label={`${r.emoji} ${r.userIds.length}${mine ? ", including you" : ""}`}
+                    aria-label={`${r.emoji} ${r.userIds.length} ${r.userIds.length === 1 ? "reaction" : "reactions"}${mine ? ", including you" : ""}`}
                     disabled={!canReact || pending}
                     onClick={() => react(r.emoji)}
                     className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ${mine ? "bg-primary/25 text-indigo-100 ring-primary/60" : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"}`}
@@ -228,7 +238,7 @@ export function MessageItem(props: MessageItemProps) {
             })}
           </ul>
         )}
-        {picking && <ReactionPicker onPick={react} onClose={() => setPicking(false)} />}
+        {picking && <ReactionPicker onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       {!editing && (
@@ -239,7 +249,7 @@ export function MessageItem(props: MessageItemProps) {
             </Button>
           )}
           {canReact && (
-            <Button variant="ghost" size="icon-sm" aria-label="Add reaction" aria-expanded={picking} onClick={() => setPicking((p) => !p)}>
+            <Button ref={reactButton} variant="ghost" size="icon-sm" aria-label="Add reaction" aria-expanded={picking} onClick={() => setPicking((p) => !p)}>
               <SmilePlusIcon />
             </Button>
           )}

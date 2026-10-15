@@ -32,9 +32,9 @@ test.describe("replies, reactions, pins and markdown", () => {
     await rules.getByRole("button", { name: "Add reaction" }).click();
     await member.getByRole("button", { name: "React with 🎉" }).click();
     const ownerRules = owner.getByRole("log").getByRole("listitem").filter({ hasText: "Rules" }).first();
-    await expect(ownerRules.getByRole("button", { name: "🎉 1" })).toBeVisible();
-    await ownerRules.getByRole("button", { name: "🎉 1" }).click();
-    await expect(member.getByRole("button", { name: "🎉 2, including you" })).toBeVisible();
+    await expect(ownerRules.getByRole("button", { name: "🎉 1 reaction" })).toBeVisible();
+    await ownerRules.getByRole("button", { name: "🎉 1 reaction" }).click();
+    await expect(member.getByRole("button", { name: "🎉 2 reactions, including you" })).toBeVisible();
 
     // The owner pins; the member sees it in the pinned list. Members can't pin.
     await ownerRules.hover();

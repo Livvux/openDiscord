@@ -3,6 +3,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { message, reaction, user } from "@/db/schema";
+import { excerptOf } from "@/lib/mentions";
 import { mentionsFor } from "./mentions";
 
 export interface ReactionView {
@@ -19,14 +20,14 @@ export interface ReplyPreview {
 }
 
 export const MAX_EMOJIS_PER_MESSAGE = 20;
-const EXCERPT_LENGTH = 100;
+export const REPLY_EXCERPT_LENGTH = 100;
 
-/** One emoji: pictographs with optional variation selectors, skin tones and ZWJ sequences. No text. */
+const PICTO = String.raw`\p{Extended_Pictographic}(?:\ufe0f|\p{Emoji_Modifier})?`;
+/** Exactly one emoji: a keycap, a flag, or a pictograph with optional variation, skin tone and ZWJ parts. */
 export const emoji = z
   .string()
-  .max(32)
-  .regex(/^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|‍|️|⃣|[#*0-9])+$/u, "Pick an emoji.")
-  .refine((s) => /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s), "Pick an emoji.");
+  .max(16)
+  .regex(new RegExp(String.raw`^(?:[#*0-9]\ufe0f?\u20e3|\p{Regional_Indicator}{2}|${PICTO}(?:\u200d${PICTO})*)$`, "u"), "Pick an emoji.");
 
 export async function reactionsFor(messageIds: string[]): Promise<Map<string, ReactionView[]>> {
   const byMessage = new Map<string, ReactionView[]>();
@@ -55,11 +56,5 @@ export async function replyPreviews(ids: string[]): Promise<Map<string, ReplyPre
     .innerJoin(user, eq(user.id, message.authorId))
     .where(inArray(message.id, ids));
   const mentions = await mentionsFor(rows.map((r) => r.id));
-  return new Map(
-    rows.map(({ content, ...r }) => {
-      const names = new Map((mentions.get(r.id) ?? []).map((m) => [m.id, m.name]));
-      const text = content.replace(/<@([A-Za-z0-9_-]+)>/g, (_, id: string) => `@${names.get(id) ?? "member"}`);
-      return [r.id, { ...r, excerpt: text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH - 1)}…` : text }];
-    }),
-  );
+  return new Map(rows.map(({ content, ...r }) => [r.id, { ...r, excerpt: excerptOf(content, mentions.get(r.id) ?? [], REPLY_EXCERPT_LENGTH) }]));
 }

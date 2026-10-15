@@ -6,7 +6,7 @@ import { MAX_EMOJIS_PER_MESSAGE } from "@/server/message-extras";
 import { listAuditLog, listRoles } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
 import { db } from "@/db";
-import { message } from "@/db/schema";
+import { message, reaction } from "@/db/schema";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
@@ -61,16 +61,27 @@ describe("reactions", () => {
     await expect(toggleReaction(member, msg.id, "👍🏽")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "👨‍👩‍👧")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "🇩🇪")).resolves.toBeUndefined();
-    for (const bad of ["lol", "<b>", "1", "👍x", ""]) await expect(toggleReaction(member, msg.id, bad)).rejects.toThrow();
+    await expect(toggleReaction(member, msg.id, "❤️")).resolves.toBeUndefined();
+    await expect(toggleReaction(member, msg.id, "1️⃣")).resolves.toBeUndefined();
+    for (const bad of ["lol", "<b>", "1", "👍x", "", "😀0000", "👍👍", "🇩"]) await expect(toggleReaction(member, msg.id, bad)).rejects.toThrow();
   });
 
   it("caps distinct emojis per message", async () => {
     const [msg] = await db.insert(message).values({ channelId: generalId, authorId: owner, content: "many" }).returning();
     const emojis = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛"];
-    for (const e of emojis.slice(0, MAX_EMOJIS_PER_MESSAGE)) await toggleReaction(owner, msg.id, e);
+    // Seeded directly: toggling 20 times would hit the reaction burst limit.
+    await db.insert(reaction).values(emojis.slice(0, MAX_EMOJIS_PER_MESSAGE).map((emoji) => ({ messageId: msg.id, userId: owner, emoji })));
     await expect(toggleReaction(member, msg.id, emojis[MAX_EMOJIS_PER_MESSAGE])).rejects.toThrow("at most");
     // Joining an existing emoji is still allowed.
     await expect(toggleReaction(member, msg.id, emojis[0])).resolves.toBeUndefined();
+  });
+
+  it("rate-limits reaction toggles per person", async () => {
+    const msg = await sendMessage(reader, generalId, "spam target");
+    const spammer = await users.create("Spammer");
+    await acceptInvite(spammer, await createInvite(owner, communityId, { expiresInHours: 24, maxUses: 1 }));
+    for (let i = 0; i < 10; i++) await toggleReaction(spammer, msg.id, "👍");
+    await expect(toggleReaction(spammer, msg.id, "👍")).rejects.toThrow("too often");
   });
 
   it("needs send permission in the channel", async () => {

@@ -43,3 +43,18 @@ describe("markdown subset", () => {
     expect(html("**hi <@u1>**")).toBe("<strong>hi <b>@u1</b></strong>");
   });
 });
+
+describe("links in sentences", () => {
+  it("keeps balanced parentheses and drops sentence punctuation", () => {
+    expect(html("(see https://en.wikipedia.org/wiki/Foo_(bar)).")).toContain('href="https://en.wikipedia.org/wiki/Foo_(bar)"');
+    expect(html("go to https://example.com!")).toContain('href="https://example.com"');
+    expect(html("go to https://example.com!")).toMatch(/<\/a>!$/);
+    expect(html("just https://")).not.toContain("<a");
+  });
+
+  it("stays fast on adversarial input", () => {
+    const start = performance.now();
+    html(`${"http://".repeat(500)}${".".repeat(500)} ${"```".repeat(400)}`);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+});

@@ -7,7 +7,7 @@ export type MentionRenderer = (id: string, key: string) => ReactNode;
 
 const FENCE = /```(?:[\w+-]{1,20}\n)?([\s\S]*?)```/g;
 const INLINE =
-  /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(~~[^~\n]+?~~)|((?<![\w*])\*(?![\s*])[^*\n]*?[^\s*]\*(?![\w*])|(?<![\w_])_(?![\s_])[^_\n]*?[^\s_]_(?![\w_]))|(<@[A-Za-z0-9_-]{1,64}>)|(https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"])/g;
+  /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(~~[^~\n]+?~~)|((?<![\w*])\*(?![\s*])[^*\n]*?[^\s*]\*(?![\w*])|(?<![\w_])_(?![\s_])[^_\n]*?[^\s_]_(?![\w_]))|(<@[A-Za-z0-9_-]{1,64}>)|(https?:\/\/[^\s<>]+)/g;
 
 function inline(text: string, mention: MentionRenderer, prefix: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -23,10 +23,26 @@ function inline(text: string, mention: MentionRenderer, prefix: string): ReactNo
     else if (italic) out.push(<em key={key}>{inline(italic.slice(1, -1), mention, key)}</em>);
     else if (mentionToken) out.push(mention(mentionToken.slice(2, -1), key));
     else if (url) {
+      // Trailing punctuation belongs to the sentence; a closing parenthesis only if it has no partner in the URL.
+      let end = url.length;
+      let unmatched = (url.match(/\)/g)?.length ?? 0) - (url.match(/\(/g)?.length ?? 0);
+      while (end > 0) {
+        const c = url[end - 1];
+        if (c === ")" && unmatched > 0) unmatched--;
+        else if (!/[.,;:!?'"\]]/.test(c)) break;
+        end--;
+      }
+      const href = url.slice(0, end);
+      if (href.length <= url.indexOf("//") + 2) {
+        out.push(token);
+        last = m.index + token.length;
+        continue;
+      }
       out.push(
-        <a key={key} href={url} target="_blank" rel="noopener noreferrer nofollow ugc" className="text-sky-300 underline underline-offset-2 hover:text-sky-200">
-          {url}
+        <a key={key} href={href} target="_blank" rel="noopener noreferrer nofollow ugc" className="text-sky-300 underline underline-offset-2 hover:text-sky-200">
+          {href}
         </a>,
+        url.slice(end),
       );
     } else out.push(token);
     last = m.index + token.length;

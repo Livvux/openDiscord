@@ -6,6 +6,7 @@ import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type 
 import { AppError, forbidden, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
 import { emoji, MAX_EMOJIS_PER_MESSAGE, reactionsFor, replyPreviews, type ReactionView, type ReplyPreview } from "./message-extras";
+import { consume } from "./limits";
 import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
 import { messageContent, parse, uuid } from "./validation";
@@ -198,6 +199,8 @@ export async function deleteMessage(userId: string, rawMessageId: unknown) {
 /** Adds or removes the caller's reaction. Reacting needs the same permission as writing. */
 export async function toggleReaction(userId: string, rawMessageId: unknown, rawEmoji: unknown): Promise<void> {
   const value = parse(emoji, rawEmoji);
+  // Every toggle re-sends the message to all viewers, so it gets its own burst limit.
+  consume(`reaction:${userId}`, 10, 10_000);
   const row = await loadOwnedMessage(rawMessageId);
   await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   await db.transaction(async (tx) => {
@@ -221,12 +224,14 @@ export const MAX_PINS_PER_CHANNEL = 50;
 export async function setPinned(userId: string, rawMessageId: unknown, pinned: boolean): Promise<void> {
   const row = await loadOwnedMessage(rawMessageId);
   await requireChannel(db, row.message.channelId, userId, Permission.ManageMessages);
-  if (pinned && !row.message.pinnedAt) {
-    const [{ pins }] = await db.select({ pins: count() }).from(message)
-      .where(and(eq(message.channelId, row.message.channelId), isNotNull(message.pinnedAt)));
-    if (pins >= MAX_PINS_PER_CHANNEL) throw new AppError("conflict", `A channel can have at most ${MAX_PINS_PER_CHANNEL} pinned messages.`);
-  }
   await db.transaction(async (tx) => {
+    if (pinned && !row.message.pinnedAt) {
+      // Serialise pins per channel so concurrent pins can't pass the cap.
+      await tx.execute(sql`select 1 from ${channel} where ${channel.id} = ${row.message.channelId} for update`);
+      const [{ pins }] = await tx.select({ pins: count() }).from(message)
+        .where(and(eq(message.channelId, row.message.channelId), isNotNull(message.pinnedAt)));
+      if (pins >= MAX_PINS_PER_CHANNEL) throw new AppError("conflict", `A channel can have at most ${MAX_PINS_PER_CHANNEL} pinned messages.`);
+    }
     await tx.update(message).set({ pinnedAt: pinned ? (row.message.pinnedAt ?? new Date()) : null }).where(eq(message.id, row.message.id));
     await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: pinned ? "message.pin" : "message.unpin", targetId: row.message.authorId });
   });

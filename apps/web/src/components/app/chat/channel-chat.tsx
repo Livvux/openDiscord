@@ -167,6 +167,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
                   canDelete={m.authorId === currentUserId || canModerate}
                   canReact={canSend}
                   canPin={canModerate}
+                  replyBlocked={!!m.replyTo && blockedIds.includes(m.replyTo.authorId)}
                   onDeleted={remove}
                   onReply={setReplyTo}
                 />
