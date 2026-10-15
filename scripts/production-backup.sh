@@ -73,6 +73,9 @@ if test -f "$OPENDISCORD_VOICE_COMPOSE_DIR/.env"; then
 fi
 cp "$OPENDISCORD_VOICE_COMPOSE_DIR/docker-compose.yml" "$work/config/voice-compose.yml"
 cp /etc/dokploy/traefik/dynamic/opendiscord.yml "$work/config/traefik.yml"
+if test -f /etc/dokploy/traefik/dynamic/opendiscord-turn.yml; then
+  cp /etc/dokploy/traefik/dynamic/opendiscord-turn.yml "$work/config/traefik-turn.yml"
+fi
 cp /etc/nftables.d/dokploy-public-ingress.nft "$work/config/firewall.nft"
 # Stream tar directly to age: there is no unencrypted archive on persistent disk.
 tar -C "$work" -czf - database.dump media config manifest.txt | age -R "$recipient" -o "$work/recovery.tar.gz.age"
