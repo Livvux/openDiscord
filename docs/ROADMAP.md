@@ -62,7 +62,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. Attachments are not included |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
-| Federation-ready design | 🟡 | UUID ids, no global user directory. Federation research P3 |
+| Federation research | ✅ research only | [DECISIONS.md D13](DECISIONS.md#d13-federation-research-retain-instance-boundaries): retain instance boundaries; future opt-in Matrix bridge requires separate consent, permissions and acceptance. No federation implemented |
 
 ### 3. Messaging and communities
 
@@ -185,6 +185,6 @@ Published operator rules and minimum-age attestation are under verification in #
 
 ### P3 — later
 
-Custom emojis and stickers, native app shells, federation research (ActivityPub/Matrix bridges),
+Custom emojis and stickers, native app shells,
 opt-in public indexable channels and community discovery, secret multi-key rotation. Automated
-license declaration checks are implemented; professional compatibility review remains separate.
+license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.
