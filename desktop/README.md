@@ -16,7 +16,7 @@ Downloads from the instance and blob exports bound to that origin require a nati
 
 ## Evidence and release gates
 
-The Desktop bundles workflow builds actual OS packages and uploads short-lived GitHub CI artifacts with SHA256SUMS. These are unsigned (macOS may be ad-hoc signed), unnotarized developer previews; OS trust prompts are expected. Artifact existence and compilation do not establish a safe release. No automatic updates, public release or download listing is configured. Review the dependency license inventory and cargo-audit result; these are technical evidence, not legal approval.
+The Desktop bundles workflow builds actual OS packages and uploads short-lived GitHub CI artifacts with SHA256SUMS. These are unsigned Windows/Linux and ad-hoc signed macOS developer previews, without notarization or an Apple-authenticated identity; OS trust prompts are expected. CI verifies the macOS app signature and the app inside the mounted read-only DMG; this verifies bundle coherence, not distribution trust or macOS UI acceptance. Artifact existence and compilation do not establish a safe release. No automatic updates, public release or download listing is configured. Review the dependency license inventory and cargo-audit result; these are technical evidence, not legal approval.
 
 Before public distribution, record OS/version/WebView and acceptance results for each of:
 

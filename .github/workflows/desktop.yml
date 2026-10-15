@@ -50,8 +50,18 @@ jobs:
           cargo install cargo-audit --locked
           cargo audit
           cargo metadata --locked --format-version 1 > dependency-metadata.json
-      - name: Build unsigned native bundles
+      - name: Build native preview bundles
         run: cargo tauri build --ci
+      - name: Verify macOS ad-hoc preview bundles
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict --verbose=2 target/release/bundle/macos/OpenDiscord.app
+          mount_path="$RUNNER_TEMP/opendiscord-preview-mount"
+          mkdir -p "$mount_path"
+          hdiutil attach target/release/bundle/dmg/*.dmg -readonly -nobrowse -mountpoint "$mount_path"
+          trap 'hdiutil detach "$mount_path"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount_path/OpenDiscord.app"
+          codesign -dv --verbose=2 "$mount_path/OpenDiscord.app"
       - name: Linux native runtime acceptance
         if: runner.os == 'Linux'
         run: |
