@@ -2,6 +2,36 @@
 
 mod policy;
 
+#[cfg(target_os = "linux")]
+fn save_destination(filename: &str) -> Option<std::path::PathBuf> {
+    use gtk::prelude::*;
+
+    // Wry calls this on the existing GTK main thread. A second GTK event thread
+    // would deadlock while the synchronous download callback waits for its result.
+    let dialog = gtk::FileChooserNative::new(
+        Some("Save OpenDiscord download"),
+        None::<&gtk::Window>,
+        gtk::FileChooserAction::Save,
+        Some("Save"),
+        Some("Cancel"),
+    );
+    dialog.set_current_name(filename);
+    dialog.set_do_overwrite_confirmation(true);
+    let destination = (dialog.run() == gtk::ResponseType::Accept)
+        .then(|| dialog.filename())
+        .flatten();
+    dialog.destroy();
+    destination
+}
+
+#[cfg(not(target_os = "linux"))]
+fn save_destination(filename: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Save OpenDiscord download")
+        .set_file_name(filename)
+        .save_file()
+}
+
 fn main() {
     let instance = policy::instance(
         option_env!("OPENDISCORD_INSTANCE_URL").unwrap_or("https://opendiscord.app"),
@@ -35,11 +65,7 @@ fn main() {
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or("download");
-                    if let Some(path) = rfd::FileDialog::new()
-                        .set_title("Save OpenDiscord download")
-                        .set_file_name(filename)
-                        .save_file()
-                    {
+                    if let Some(path) = save_destination(filename) {
                         *destination = path;
                         true
                     } else {
