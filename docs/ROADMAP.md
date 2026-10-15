@@ -73,7 +73,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ❌ | P2 |
-| Attachments | 🟡 | Images in S3-compatible storage (R2) with server-side validation and EXIF stripping; other file types, local volume, optional ClamAV P2 |
+| Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local volume and optional ClamAV scanning remain open (P2) |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
 | Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
@@ -178,7 +178,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P2 — important improvements
 
-~~Screen sharing and video calls~~ ✅, threads, ~~channel categories~~ ✅, non-image file attachments, bot accounts,
+~~Screen sharing and video calls~~ ✅, threads, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, bot accounts,
 incoming webhooks and a versioned public API (OpenAPI), Web Push notifications (VAPID, no third-party
 service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).

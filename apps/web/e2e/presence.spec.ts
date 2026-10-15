@@ -23,13 +23,17 @@ test.describe("presence and notification level", () => {
     await expectNoA11yViolations(member);
     await member.goto(communityUrl);
 
-    await owner.reload();
-    await expect(owner.getByRole("listitem").filter({ hasText: "Pia Present" }).getByText("(online)")).toBeVisible();
+    // The member's heartbeat lands asynchronously; the owner sees it on a later load.
+    await expect(async () => {
+      await owner.reload();
+      await expect(owner.getByRole("listitem").filter({ hasText: "Pia Present" }).getByText("(online)")).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
 
     // The member mutes the community; only their rail shows it.
     await member.getByRole("link", { name: "Community info" }).click();
     await member.getByRole("radio", { name: /Muted/ }).click();
     await expect(member.getByRole("radio", { name: /Muted/ })).toBeChecked();
+    await expect(member.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
     await member.reload();
     await expect(member.getByRole("link", { name: /Lounge.*muted/ })).toBeVisible();
     await expect(owner.getByRole("link", { name: /Lounge.*muted/ })).toHaveCount(0);

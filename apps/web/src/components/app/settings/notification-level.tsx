@@ -11,6 +11,7 @@ const OPTIONS = [
 export function NotificationLevel({ communityId, level }: { communityId: string; level: "mentions" | "muted" }) {
   const [current, setCurrent] = useState(level);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
   return (
     <fieldset className="grid gap-2" disabled={pending}>
@@ -25,10 +26,12 @@ export function NotificationLevel({ communityId, level }: { communityId: string;
             onChange={() => {
               const previous = current;
               setCurrent(o.value);
+              setSaved(false);
               startTransition(async () => {
                 const result = await setNotificationLevel(communityId, o.value);
                 if (!result.ok) setCurrent(previous);
                 setError(result.ok ? null : result.error);
+                setSaved(result.ok);
               });
             }}
             className="mt-1"
@@ -39,6 +42,7 @@ export function NotificationLevel({ communityId, level }: { communityId: string;
           </span>
         </label>
       ))}
+      {saved && <p role="status" className="text-sm text-muted-foreground">Saved.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </fieldset>
   );

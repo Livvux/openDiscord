@@ -9,6 +9,8 @@ test("protected app redirects anonymous visitors to sign-in", async ({ page }) =
 test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   const email = `e2e-${testInfo.project.name}-${Date.now()}@example.test`;
   const password = "correct horse battery";
+  // Its own client IP: sign-up limits are per IP and kept in Postgres across runs.
+  await page.setExtraHTTPHeaders({ "X-Forwarded-For": `10.251.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}` });
 
   await page.goto("/sign-up");
   await expectNoA11yViolations(page);

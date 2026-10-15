@@ -1,6 +1,6 @@
 "use client";
 
-import { CornerUpLeftIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
+import { CornerUpLeftIcon, FileDownIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
@@ -15,6 +15,12 @@ import { PresenceAvatar } from "../presence-avatar";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "👀", "✅"];
 
@@ -192,9 +198,9 @@ export function MessageItem(props: MessageItemProps) {
             </div>
           )
         )}
-        {message.attachments.length > 0 && (
+        {message.attachments.some((a) => !a.filename) && (
           <ul aria-label="Images" className="mt-1 flex flex-wrap gap-2">
-            {message.attachments.map((a, i) => (
+            {message.attachments.filter((a) => !a.filename).map((a, i) => (
               <li key={a.id}>
                 <a
                   href={`/api/attachments/${a.id}`}
@@ -212,6 +218,23 @@ export function MessageItem(props: MessageItemProps) {
                     loading="lazy"
                     className="h-auto max-h-80 w-auto max-w-[min(100%,28rem)] bg-white/5 object-contain"
                   />
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+        {message.attachments.some((a) => a.filename) && (
+          <ul aria-label="Files" className="mt-1 grid max-w-md gap-1">
+            {message.attachments.filter((a) => a.filename).map((a) => (
+              <li key={a.id}>
+                <a
+                  href={`/api/attachments/${a.id}`}
+                  download={a.filename!}
+                  className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <FileDownIcon aria-hidden className="size-5 shrink-0 text-zinc-300" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-sky-300">{a.filename}</span>
+                  <span className="text-xs text-zinc-400">{formatBytes(a.size)}</span>
                 </a>
               </li>
             ))}
@@ -328,7 +351,7 @@ export function PendingItem({ content, mentions, images }: { content: string; me
       <div className="w-8 shrink-0" />
       <div className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
         <MessageContent content={content} mentions={mentions} />
-        {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 image" : `${images} images`}…</span>}
+        {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 attachment" : `${images} attachments`}…</span>}
       </div>
     </li>
   );

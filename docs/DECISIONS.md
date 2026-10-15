@@ -60,14 +60,16 @@ and removes or mutes those who lost access, best effort. Signalling is proxied a
 app's domain; the Content-Security-Policy is set per request (`src/proxy.ts`) so it can name the
 operator's LiveKit server, which a build-time header config can't know.
 
-## D9. Attachments (images shipped; files and local volume planned)
+## D9. Attachments (images and files shipped; local volume planned)
 
 Any S3-compatible store (Cloudflare R2 by default, MinIO, Garage, AWS S3), signed with SigV4 via
 `aws4fetch` instead of the much larger AWS SDK. Images only (PNG, JPEG, WebP, GIF, max 8 MB, 4 per
 message), decoded and re-encoded to WebP with `sharp`, which drops EXIF/GPS and rejects anything that
 isn't a real raster image. Objects are private and served through `/api/attachments/:id`, which
 checks channel membership on every request. Deleted messages unlink their images immediately; a sweeper
-removes unlinked objects after an hour. Local-volume storage and a ClamAV sidecar remain P1.
+removes unlinked objects after an hour. Other files (max 25 MB) are stored byte-for-byte and served only
+as downloads with a generic content type, so they can't execute on the app origin; the original name is
+cleaned and shown as text. Local-volume storage and a ClamAV sidecar remain open.
 
 ## D10. End-to-end encryption (planned, P1)
 
