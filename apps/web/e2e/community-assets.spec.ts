@@ -44,7 +44,17 @@ test.describe("private community images", () => {
     await expect(log.getByRole("img", { name: "[sticker: test_sticker]", exact: true })).toBeVisible();
     const row = log.getByRole("listitem").filter({ has: chat.getByRole("img", { name: "[sticker: test_sticker]", exact: true }) }).first();
     await row.hover();
-    await row.getByRole("button", { name: "Add reaction" }).click();
+    const reactButton = row.getByRole("button", { name: "Add reaction" });
+    const geometry = await reactButton.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const log = button.closest('[role="log"]')!.getBoundingClientRect();
+      return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right, logTop: log.top, logBottom: log.bottom, width: innerWidth };
+    });
+    expect(geometry.top).toBeGreaterThanOrEqual(Math.max(0, geometry.logTop));
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.logBottom);
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.width);
+    await reactButton.click();
     await row.getByRole("button", { name: "Choose emoji test_emoji", exact: true }).click();
     await expect(row.getByRole("button", { name: /:test_emoji: 1 reaction/ })).toBeVisible();
     await expectNoA11yViolations(chat);

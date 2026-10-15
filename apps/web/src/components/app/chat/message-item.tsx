@@ -293,7 +293,7 @@ export function MessageItem(props: MessageItemProps) {
         {picking && <ReactionPicker channelId={message.channelId} onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {!editing && (
-        <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+        <div className="absolute top-0 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
           {canReact && (
             <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
               <CornerUpLeftIcon />
