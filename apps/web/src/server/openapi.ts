@@ -22,6 +22,13 @@ const message = {
   },
 };
 
+const publicPosting = {
+  type: ["object", "null"],
+  description: "Null for private channels. For public channels, acknowledge the current generation when sending; permanently unpublished channels reject writes.",
+  properties: { generation: { type: "string", format: "uuid" }, unpublished: { type: "boolean" } },
+  required: ["generation", "unpublished"],
+};
+
 export const openApiDocument = {
   openapi: "3.1.0",
   info: {
@@ -44,7 +51,9 @@ export const openApiDocument = {
       get: {
         summary: "Channels the bot can view",
         parameters: [{ name: "communityId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
-        responses: { "200": { description: "OK" }, ...errors },
+        responses: { "200": { description: "OK", content: { "application/json": { schema: { type: "array", items: {
+          type: "object", properties: { id: { type: "string", format: "uuid" }, name: { type: "string" }, topic: { type: ["string", "null"] }, kind: { type: "string", enum: ["text", "voice"] }, categoryId: { type: ["string", "null"], format: "uuid" }, publicPosting, publicPostNotice: { type: "string" } },
+        } } } } }, ...errors },
       },
     },
     "/channels/{channelId}/messages": {
@@ -65,7 +74,12 @@ export const openApiDocument = {
         parameters: [{ name: "channelId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", required: ["content"], properties: { content: { type: "string", maxLength: 4000 }, replyToId: { type: "string", format: "uuid" }, threadId: { type: "string", format: "uuid" } } } } },
+          content: { "application/json": { schema: { type: "object", required: ["content"], properties: {
+            content: { type: "string", maxLength: 4000 },
+            replyToId: { type: ["string", "null"], format: "uuid", description: "Not allowed in public channels." },
+            threadId: { type: ["string", "null"], format: "uuid", description: "Not allowed in public channels." },
+            publicGeneration: { type: ["string", "null"], format: "uuid", description: "Explicit acknowledgement of public posting. Required for public text channels: use publicPosting.generation from the channel list after reviewing publicPostNotice. Missing or stale acknowledgement fails closed; private channels do not require this field." },
+          } } } },
         },
         responses: { "201": { description: "Created", content: { "application/json": { schema: message } } }, ...errors },
       },
