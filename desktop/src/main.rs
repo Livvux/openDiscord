@@ -19,7 +19,7 @@ fn main() {
             .title("OpenDiscord")
             .inner_size(1200.0, 800.0)
             .min_inner_size(360.0, 600.0)
-            .on_navigation(move |target| policy::same_origin(&pinned, target))
+            .on_navigation(move |target| policy::allowed_origin(&pinned, target))
             .on_new_window(|target, _| {
                 if policy::safe_https(&target) {
                     let _ = open::that_detached(target.as_str());
@@ -28,7 +28,7 @@ fn main() {
             })
             .on_download(move |_, event| match event {
                 tauri::webview::DownloadEvent::Requested { url, destination } => {
-                    if !policy::download_origin(&downloads, &url) {
+                    if !policy::allowed_origin(&downloads, &url) {
                         return false;
                     }
                     let filename = destination

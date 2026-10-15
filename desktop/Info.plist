@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>Use your camera when you join an OpenDiscord video call.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Use your microphone when you join an OpenDiscord voice call.</string>
+</dict>
+</plist>

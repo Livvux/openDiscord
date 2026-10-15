@@ -18,6 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
@@ -79,4 +80,12 @@ jobs:
             desktop/dependency-metadata.json
             desktop/native-evidence/
           if-no-files-found: error
+          retention-days: 14
+      - name: Preserve Linux runtime diagnostics on failure
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-diagnostics-${{ github.sha }}
+          path: desktop/native-evidence/
+          if-no-files-found: ignore
           retention-days: 14

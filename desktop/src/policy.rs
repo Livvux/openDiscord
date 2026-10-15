@@ -21,7 +21,7 @@ pub fn same_origin(instance: &Url, target: &Url) -> bool {
     safe_https(target) && instance.origin() == target.origin()
 }
 
-pub fn download_origin(instance: &Url, target: &Url) -> bool {
+pub fn allowed_origin(instance: &Url, target: &Url) -> bool {
     same_origin(instance, target)
         || (target.scheme() == "blob" && target.origin() == instance.origin())
 }
@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn binds_blob_exports_to_instance() {
         let base = instance("https://opendiscord.app").unwrap();
-        assert!(download_origin(
+        assert!(allowed_origin(
             &base,
             &Url::parse("blob:https://opendiscord.app/123").unwrap()
         ));
@@ -41,8 +41,10 @@ mod tests {
             "blob:https://evil.test/123",
             "blob:null/123",
             "data:text/plain,x",
+            "blob:https://opendiscord.app:444/123",
+            "blob:http://opendiscord.app/123",
         ] {
-            assert!(!download_origin(&base, &Url::parse(target).unwrap()));
+            assert!(!allowed_origin(&base, &Url::parse(target).unwrap()));
         }
     }
 

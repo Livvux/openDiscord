@@ -99,9 +99,17 @@ try:
     saved = pathlib.Path('/tmp/opendiscord-native-proof.txt')
     eventually(saved.exists, 'Download not saved')
     assert saved.read_bytes() == b'OpenDiscord native download acceptance\n'
+    script("var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['native blob export'],{type:'application/octet-stream'})); a.download='native-blob.txt'; document.body.append(a); a.click(); return true")
+    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True).returncode == 0, 'Blob Save dialog absent')
+    subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
+    subprocess.run(['xdotool', 'type', '/tmp/opendiscord-native-blob.txt'], check=True)
+    subprocess.run(['xdotool', 'key', 'Return'], check=True)
+    blob_saved = pathlib.Path('/tmp/opendiscord-native-blob.txt')
+    eventually(blob_saved.exists, 'Blob export not saved')
+    assert blob_saved.read_bytes() == b'native blob export'
     (EVIDENCE / 'results.json').write_text(json.dumps({
         'https_launch': True, 'cross_origin_denied': True, 'file_scheme_denied': True,
-        'native_ipc_denied': denial, 'native_save_download_bytes_verified': True,
+        'native_ipc_denied': denial, 'native_save_download_bytes_verified': True, 'native_blob_export_bytes_verified': True,
         'scope': 'Linux fixture only; no application, macOS, Windows or physical-device parity claim'
     }, indent=2))
 finally:
