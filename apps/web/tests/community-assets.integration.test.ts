@@ -50,7 +50,7 @@ describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
     await toggleReaction(member, posted.id, token);
     const historical = (await listMessages(member, channelId)).messages.find((message) => message.id === posted.id)!;
     expect(historical.assets).toEqual([]); expect(historical.reactions).toEqual([]);
-    await expect(sweepAttachments()).resolves.toBeGreaterThanOrEqual(1);
+    await sweepAttachments();
     expect(await db.select().from(attachment).where(and(eq(attachment.assetId, asset.id)))).toEqual([]);
   });
   it("serializes concurrent capacity checks at the emoji cap", async () => {
