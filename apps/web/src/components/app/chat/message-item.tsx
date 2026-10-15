@@ -15,6 +15,10 @@ import { ReportDialog } from "../report-dialog";
 import { nameColor } from "../avatar";
 import { PresenceAvatar } from "../presence-avatar";
 
+import { assetText, assetTokens, assetToken, decodeAssetTokens, encodeAssetShortcodes, type AssetView } from "@/lib/community-assets";
+import { CommunityAssetImage } from "../community-asset-image";
+import { CommunityAssetPicker } from "../community-asset-picker";
+
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -27,7 +31,7 @@ function formatBytes(bytes: number): string {
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "👀", "✅"];
 
 /** Renders stored content: the Markdown subset, with `<@id>` tokens as readable, highlighted names. */
-export function MessageContent({ content, mentions, currentUserId }: { content: string; mentions: readonly Mention[]; currentUserId?: string }) {
+export function MessageContent({ content, mentions, currentUserId, assets = [] }: { content: string; mentions: readonly Mention[]; currentUserId?: string; assets?: readonly AssetView[] }) {
   const names = new Map(mentions.map((m) => [m.id, m.name]));
   return renderMarkdown(content, (id, key) => (
     <span
@@ -36,10 +40,14 @@ export function MessageContent({ content, mentions, currentUserId }: { content: 
     >
       @{names.get(id) ?? "unknown member"}
     </span>
-  ));
+  ), (token, key) => {
+    const ref = assetTokens(token)[0];
+    const asset = assets.find((item) => item.id === ref?.id && item.name === ref.name && item.kind === ref.kind);
+    return asset ? <CommunityAssetImage key={key} asset={asset} /> : <span key={key}>{assetText(token)}</span>;
+  });
 }
 
-function ReactionPicker({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+function ReactionPicker({ onPick, onClose, channelId }: { channelId: string; onPick: (emoji: string) => void; onClose: () => void }) {
   return (
     <div
       role="group"
@@ -48,6 +56,7 @@ function ReactionPicker({ onPick, onClose }: { onPick: (emoji: string) => void; 
       // Inline, not floating: rows use content-visibility, whose paint containment would clip a popover.
       className="mt-1 flex w-fit flex-wrap gap-0.5 rounded-lg border bg-popover p-1 shadow-lg"
     >
+      <CommunityAssetPicker channelId={channelId} emojiOnly onPick={(asset) => onPick(assetToken(asset))} />
       {QUICK_REACTIONS.map((emoji, i) => (
         <button
           key={emoji}
@@ -139,7 +148,7 @@ export function MessageItem(props: MessageItemProps) {
 
   function onSaveEdit(content: string) {
     startTransition(async () => {
-      const result = await editMessage(message.id, encodeMentions(content, message.mentions));
+      const result = await editMessage(message.id, encodeAssetShortcodes(encodeMentions(content, message.mentions), assetTokens(message.content)));
       if (result.ok) {
         setEditing(false);
         setError(null);
@@ -197,11 +206,11 @@ export function MessageItem(props: MessageItemProps) {
         )}
         {grouped && <span className="sr-only" suppressHydrationWarning>{message.authorName}, {timeFormat.format(created)}: </span>}
         {editing ? (
-          <EditForm initial={decodeMentions(message.content, message.mentions)} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
+          <EditForm initial={decodeAssetTokens(decodeMentions(message.content, message.mentions))} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
           (message.content || message.editedAt) && (
             <div className="break-words whitespace-pre-wrap text-zinc-300">
-              <MessageContent content={message.content} mentions={message.mentions} currentUserId={currentUserId} />
+              <MessageContent content={message.content} mentions={message.mentions} assets={message.assets} currentUserId={currentUserId} />
               {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
             </div>
           )
@@ -257,12 +266,12 @@ export function MessageItem(props: MessageItemProps) {
                   <button
                     type="button"
                     aria-pressed={mine}
-                    aria-label={`${r.emoji} ${r.userIds.length} ${r.userIds.length === 1 ? "reaction" : "reactions"}${mine ? ", including you" : ""}`}
+                    aria-label={`${assetText(r.emoji)} ${r.userIds.length} ${r.userIds.length === 1 ? "reaction" : "reactions"}${mine ? ", including you" : ""}`}
                     disabled={!canReact || pending}
                     onClick={() => react(r.emoji)}
                     className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ${mine ? "bg-primary/25 text-indigo-100 ring-primary/60" : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"}`}
                   >
-                    <span aria-hidden>{r.emoji}</span>
+                    <span aria-hidden>{r.asset ? <CommunityAssetImage asset={r.asset} /> : assetText(r.emoji)}</span>
                     <span aria-hidden>{r.userIds.length}</span>
                   </button>
                 </li>
@@ -281,10 +290,10 @@ export function MessageItem(props: MessageItemProps) {
             <span className="font-normal text-zinc-400" suppressHydrationWarning>· last {timeFormat.format(new Date(message.thread.lastAt))}</span>
           </button>
         )}
-        {picking && <ReactionPicker onPick={react} onClose={closePicker} />}
+        {picking && <ReactionPicker channelId={message.channelId} onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {!editing && (
-        <div className="absolute -top-3 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+        <div className="absolute top-0 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
           {canReact && (
             <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
               <CornerUpLeftIcon />

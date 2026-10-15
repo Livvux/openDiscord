@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, community, instanceSettings, session, user, userSuspension } from "@/db/schema";
+import { attachment, community, communityAsset, instanceSettings, session, user, userSuspension } from "@/db/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createCategory, setChannelCategory } from "@/server/categories";
 import { exportCommunity, importCommunity, type CommunityExport } from "@/server/community-export";
@@ -66,7 +66,7 @@ describe("community import", () => {
   let imported: string;
 
   it("accepts older version-one exports without rules", async () => {
-    const id = await importCommunity(importer, { ...exported, community: { name: "Legacy rules" } });
+    const id = await importCommunity(importer, { ...exported, version: 1, assets: undefined, community: { name: "Legacy rules" } });
     expect(await getCommunityRules(importer, id)).toMatchObject({ text: "", required: false });
   });
 
@@ -148,6 +148,19 @@ describe("private archive staging commit", () => {
     await expect(importCommunity(id, data, { sessionId, attachments: [{ id: file, messageKey: data.messages[0].key }] })).rejects.toThrow("no longer available");
     expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
     expect((await db.select().from(attachment).where(eq(attachment.id, file)))[0].messageId).toBeNull();
+  });
+  it("rolls back earlier library links if a later file belongs to another account", async () => {
+    const { id, sessionId, data } = await fixture();
+    const owned = await staged(id);
+    const foreign = await staged(owner);
+    const assets = [{ id: randomUUID(), name: "first", kind: "emoji" }, { id: randomUUID(), name: "second", kind: "sticker" }];
+    await expect(importCommunity(id, { ...data, assets, messages: [] }, { sessionId, attachments: [], assets: [
+      { id: owned, assetKey: assets[0].id }, { id: foreign, assetKey: assets[1].id },
+    ] })).rejects.toThrow("no longer available");
+    expect(await db.select().from(community).where(eq(community.ownerId, id))).toHaveLength(0);
+    expect(await db.select().from(communityAsset).where(inArray(communityAsset.name, ["first", "second"]))).toHaveLength(0);
+    const unchanged = await db.select().from(attachment).where(inArray(attachment.id, [owned, foreign]));
+    expect(unchanged.every((file) => file.assetId === null && file.linkedAt === null)).toBe(true);
   });
   it("rejects a revoked session before creating the community", async () => {
     const { id, sessionId, data } = await fixture();

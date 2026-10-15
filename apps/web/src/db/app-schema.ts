@@ -318,8 +318,20 @@ export const auditLog = pgTable(
   (t) => [index("audit_log_community_idx").on(t.communityId, t.id)],
 );
 
+export const communityAsset = pgTable("community_asset", {
+  id: id(),
+  communityId: uuid("community_id").notNull().references(() => community.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: ["emoji", "sticker"] }).notNull(),
+  createdAt: createdAt(),
+}, (t) => [
+  uniqueIndex("community_asset_name_idx").on(t.communityId, t.name),
+  check("community_asset_name_valid", sql`${t.name} ~ '^[a-z0-9_]{2,32}$'`),
+  check("community_asset_kind_valid", sql`${t.kind} in ('emoji', 'sticker')`),
+]);
+
 /**
- * Image stored in object storage (R2/S3). Uploaded first, then linked to a message on send.
+ * Image stored in object storage (R2/S3). Uploaded first, then linked to a message or library asset.
  * Deleting the message, channel, community or author unlinks it; unlinked objects are swept
  * from storage (src/server/media.ts), and only linked attachments are ever served.
  */
@@ -329,6 +341,7 @@ export const attachment = pgTable(
     id: id(),
     messageId: uuid("message_id").references(() => message.id, { onDelete: "set null" }),
     channelId: uuid("channel_id").references(() => channel.id, { onDelete: "set null" }),
+    assetId: uuid("asset_id").references(() => communityAsset.id, { onDelete: "set null" }),
     uploaderId: text("uploader_id").references(() => user.id, { onDelete: "set null" }),
     /** Set once when sent; a removed message's images can never be re-attached. */
     linkedAt: timestamp("linked_at", { withTimezone: true }),
@@ -342,8 +355,10 @@ export const attachment = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
+    uniqueIndex("attachment_asset_idx").on(t.assetId),
+    check("attachment_asset_link_valid", sql`${t.assetId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.linkedAt} is not null)`),
     index("attachment_message_idx").on(t.messageId),
-    index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null`),
+    index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null and ${t.assetId} is null`),
     index("attachment_uploader_idx").on(t.uploaderId, t.createdAt),
   ],
 );

@@ -1,3 +1,4 @@
+import { assetText } from "@/lib/community-assets";
 // Bots and incoming webhooks. A bot is a member like anyone else: its roles decide what it may do,
 // and the public API calls the same services as the app. A webhook can only post plain messages into
 // its one channel. Tokens are shown once and stored as SHA-256 hashes (they are high-entropy secrets).
@@ -154,7 +155,7 @@ export async function postWebhookMessage(rawId: unknown, rawToken: unknown, rawB
   // Webhooks hold no permissions, so AutoMod always applies to them.
   await enforceAutomod(hook.communityId, hook.userId, resolveAuthority(false, []), content);
   const [created] = await db.insert(message)
-    .values({ channelId: hook.channelId, authorId: hook.userId, content: await mentionsAsText(hook.communityId, content) })
+    .values({ channelId: hook.channelId, authorId: hook.userId, content: assetText(await mentionsAsText(hook.communityId, content)) })
     .returning({ id: message.id });
   await publish({ type: "message.created", communityId: hook.communityId, channelId: hook.channelId, messageId: created.id });
   return (await getMessageForBroadcast(created.id))!.message;

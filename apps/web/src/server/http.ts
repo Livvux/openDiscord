@@ -1,5 +1,5 @@
 import { unstable_rethrow } from "next/navigation";
-import { AppError, HTTP_STATUS } from "./errors";
+import { AppError, forbidden, HTTP_STATUS } from "./errors";
 
 /** JSON error response for route handlers; unexpected errors are logged, not leaked. */
 export function errorResponse(error: unknown): Response {
@@ -38,4 +38,10 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
   } catch {
     throw new AppError("invalid", "Send a JSON body.");
   }
+}
+
+/** Cookie-authenticated raw upload/delete routes require the application's exact origin. */
+export function assertSameOrigin(request: Request): void {
+  const expected = new URL(process.env.BETTER_AUTH_URL ?? request.url).origin;
+  if (request.headers.get("origin") !== expected || request.headers.get("sec-fetch-site") === "cross-site") throw forbidden("Use this instance's application.");
 }

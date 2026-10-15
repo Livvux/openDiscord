@@ -21,13 +21,13 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#38 in production
+`main` runs the text-chat MVP, encrypted DMs and merged releases #12–#39 in production
 (opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
 community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
 cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
 
 Encrypted DMs merged in PR #30 after exact-head CI38785473940 passed 268 unit/integration tests and 43 browser tests, including desktop/mobile SAS, recovery, transfer and identity reset. Production deployment acceptance is recorded separately in the release ledger. Public
-operator policies and required 16-year signup self-attestation shipped in PR #34. Voice E2EE, TURN, physical-device media, real Web Push delivery, external
+operator policies and required 16-year signup self-attestation shipped in PR #34. Production TURN/TLS relay transport acceptance passed in two controlled Chromium clients with TCP443-only egress. Voice E2EE, physical-device media, real Web Push delivery, external
 security/legal review and the remaining product items below are still open.
 
 ## Requirements matrix
@@ -58,7 +58,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Independent instances | ✅ | Docker Compose stack verified end-to-end (TLS, auth, SSE through Caddy) |
 | No mandatory proprietary services | ✅ | SMTP optional; no external APIs |
 | Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh`, round trip tested |
-| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachments. Complete file archives are implemented in draft PR #39, pending browser acceptance and release |
+| Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachment bytes. Complete gzip file archives shipped in PR #39 with private storage, checksummed streams, atomic import and desktop/mobile acceptance; library-complete archive v3 remains in draft PR #41 |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
 | Federation research | ✅ research only | [DECISIONS.md D13](DECISIONS.md#d13-federation-research-retain-instance-boundaries): retain instance boundaries; future opt-in Matrix bridge requires separate consent, permissions and acceptance. No federation implemented |
@@ -169,7 +169,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
-| Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (TURN not bundled; TCP fallback) |
+| Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (official TURN/TLS relay on TCP443 accepted with synthetic two-client Chromium media; physical devices and voice E2EE remain open) |
 | Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
@@ -184,6 +184,6 @@ Published operator rules and minimum-age attestation shipped in #34; legal revie
 
 ### P3 — later
 
-Custom emojis and stickers, native app shells,
+Private custom emoji/stickers are implemented in draft PR #41 with independent review and backend/browser evidence; final exact-head acceptance, merge and production rollout remain separate gates. Native app shells,
 opt-in public indexable channels and community discovery. Native auth multi-key rotation and automated
 license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.

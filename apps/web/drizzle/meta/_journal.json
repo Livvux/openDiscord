@@ -197,6 +197,13 @@
       "when": 1792084863722,
       "tag": "0027_dm_prekey_namespaces",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792091871171,
+      "tag": "0028_community_assets",
+      "breakpoints": true
     }
   ]
 }

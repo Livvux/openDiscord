@@ -1,3 +1,4 @@
+import { assetText } from "./community-assets";
 // Mentions travel as `<@userId>` tokens; people type and read them as `@Display Name`.
 
 export interface Mention {
@@ -45,6 +46,6 @@ export function mentionQuery(text: string, caret: number): { query: string; star
 /** Plain one-line preview: mention tokens become names, then the text is cut to `length`. */
 export function excerptOf(content: string, mentions: readonly Mention[], length: number): string {
   const names = new Map(mentions.map((m) => [m.id, m.name]));
-  const text = content.replace(TOKEN, (_, id: string) => `@${names.get(id) ?? "member"}`);
+  const text = assetText(content).replace(TOKEN, (_, id: string) => `@${names.get(id) ?? "member"}`);
   return text.length > length ? `${text.slice(0, length - 1)}…` : text;
 }

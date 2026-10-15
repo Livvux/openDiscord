@@ -8,6 +8,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { attachment, message } from "@/db/schema";
 import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MAX_ARCHIVE_ATTACHMENTS } from "@/lib/limits";
+import { assetDimension, assetRawLimit, type AssetRef } from "@/lib/community-assets";
 import { requireChannel, type Db } from "./access";
 import { AppError, invalid, notFound } from "./errors";
 import { consume } from "./limits";
@@ -54,12 +55,14 @@ function requireStorage() {
   return storage;
 }
 
+interface ImageProcessingOptions { maximumDimension?: number; maximumFrames?: number; maximumPixels?: number }
+
 /** Decodes, validates and re-encodes an image to WebP without metadata. */
-export async function processImage(input: Uint8Array): Promise<{ data: Buffer; width: number; height: number }> {
+export async function processImage(input: Uint8Array, { maximumDimension = MAX_DIMENSION, maximumFrames = MAX_FRAMES, maximumPixels = MAX_TOTAL_PIXELS }: ImageProcessingOptions = {}): Promise<{ data: Buffer; width: number; height: number }> {
   if (input.byteLength === 0) throw invalid("The file is empty.");
   if (input.byteLength > MAX_ATTACHMENT_BYTES) throw invalid(`Images can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
   // sharp applies the pixel limit to the whole animation, a second guard for the check below.
-  const options = { animated: true, limitInputPixels: MAX_TOTAL_PIXELS, failOn: "error" } as const;
+  const options = { animated: true, limitInputPixels: maximumPixels, failOn: "error" } as const;
   let meta: Metadata;
   try {
     // Header only: no pixel limit here, so oversized images get a clear message below.
@@ -70,12 +73,12 @@ export async function processImage(input: Uint8Array): Promise<{ data: Buffer; w
   // Format comes from the decoder, never from the client: SVG, TIFF, PDF and friends are refused.
   if (!meta.format || !DECODABLE.has(meta.format)) throw invalid("Use a PNG, JPEG, WebP or GIF image.");
   const frames = meta.pages ?? 1;
-  if (frames > MAX_FRAMES) throw invalid(`Animated images can have at most ${MAX_FRAMES} frames.`);
-  if ((meta.width ?? 0) * (meta.pageHeight ?? meta.height ?? 0) * frames > MAX_TOTAL_PIXELS) throw invalid("That image is too large to process.");
+  if (frames > maximumFrames) throw invalid(maximumFrames === 1 ? "Community emoji and stickers must be static images." : `Animated images can have at most ${maximumFrames} frames.`);
+  if ((meta.width ?? 0) * (meta.pageHeight ?? meta.height ?? 0) * frames > maximumPixels) throw invalid("That image is too large to process.");
   try {
     const data = await sharp(input, options)
       .autoOrient()
-      .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: "inside", withoutEnlargement: true })
+      .resize({ width: maximumDimension, height: maximumDimension, fit: "inside", withoutEnlargement: true })
       .webp({ quality: 82 })
       .toBuffer();
     const out = await sharp(data).metadata();
@@ -177,12 +180,24 @@ export async function stageArchiveAttachment(userId: string, image: boolean, fil
   } finally { activeUploads -= 1; }
 }
 
-async function storeUpload(userId: string, channelId: string | null, image: boolean, rawFilename: string | null, raw: Uint8Array, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal): Promise<AttachmentView> {
+/** Static community library uploads use the same private reservation, scanner and processing slots. */
+export async function stageCommunityAssetAttachment(userId: string, kind: AssetRef["kind"], raw: Uint8Array, signal: AbortSignal, forArchive = false): Promise<AttachmentView> {
+  signal.throwIfAborted();
+  await assertActiveUser(userId);
+  if (raw.byteLength === 0 || raw.byteLength > assetRawLimit(kind)) throw invalid("The community image exceeds its upload limit.");
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    return await storeUpload(userId, null, true, null, raw, forArchive ? MAX_ARCHIVE_ATTACHMENTS : MAX_UNLINKED_PER_USER, signal, { maximumDimension: assetDimension(kind), maximumFrames: 1, maximumPixels: 1_048_576 });
+  } finally { activeUploads -= 1; }
+}
+
+async function storeUpload(userId: string, channelId: string | null, image: boolean, rawFilename: string | null, raw: Uint8Array, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal, imageOptions?: ImageProcessingOptions): Promise<AttachmentView> {
   const storage = requireStorage();
   await scanAttachment(raw);
   let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
   if (image) {
-    const processed = await processImage(raw);
+    const processed = await processImage(raw, imageOptions);
     stored = { data: processed.data, contentType: "image/webp", width: processed.width, height: processed.height, filename: null, ext: "webp" };
   } else {
     if (raw.byteLength === 0) throw invalid("The file is empty.");
@@ -196,7 +211,7 @@ async function storeUpload(userId: string, channelId: string | null, image: bool
   const row = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
     const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
-      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId)));
+      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId), isNull(attachment.assetId)));
     if (unlinked >= maximumPending) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
     const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
       .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
@@ -225,7 +240,7 @@ export const attachmentIds = z.array(uuid).max(MAX_ATTACHMENTS_PER_MESSAGE, `Att
 export async function linkAttachments(tx: Db, userId: string, channelId: string, messageId: string, ids: string[]) {
   if (ids.length === 0) return;
   const linked = await tx.update(attachment).set({ messageId, linkedAt: new Date() })
-    .where(and(inArray(attachment.id, ids), eq(attachment.uploaderId, userId), eq(attachment.channelId, channelId), isNull(attachment.messageId), isNull(attachment.linkedAt)))
+    .where(and(inArray(attachment.id, ids), eq(attachment.uploaderId, userId), eq(attachment.channelId, channelId), isNull(attachment.messageId), isNull(attachment.assetId), isNull(attachment.linkedAt)))
     .returning({ id: attachment.id });
   if (linked.length !== new Set(ids).size) throw invalid("An attachment is no longer available. Remove it and attach it again.");
 }
@@ -286,13 +301,19 @@ export function sweepAttachments(now = Date.now()): Promise<number> {
 
 async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
-  const stale = await db.select({ id: attachment.id, key: attachment.key }).from(attachment)
-    .where(and(isNull(attachment.messageId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))))).limit(200);
+  const stale = await db.transaction(async (tx) => {
+    const eligible = and(isNull(attachment.messageId), isNull(attachment.assetId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))));
+    const rows = await tx.select({ id: attachment.id }).from(attachment).where(eligible).limit(200).for("update", { skipLocked: true });
+    if (rows.length === 0) return [];
+    // Claim before storage I/O so a concurrent sender cannot reattach an object being removed.
+    return tx.update(attachment).set({ linkedAt: sql`coalesce(${attachment.linkedAt}, now())` })
+      .where(and(inArray(attachment.id, rows.map((row) => row.id)), eligible)).returning({ id: attachment.id, key: attachment.key });
+  });
   const removed: string[] = [];
   await Promise.all(stale.map(async ({ id, key }) => {
     if (await storage.remove(key).catch(() => false)) removed.push(id);
   }));
-  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId)));
+  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId), isNull(attachment.assetId), isNotNull(attachment.linkedAt)));
   return removed.length;
 }
 

@@ -13,6 +13,7 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message.updated"), communityId: z.string(), channelId: z.string(), messageId: z.string() }),
   z.object({ type: z.literal("message.deleted"), communityId: z.string(), channelId: z.string(), messageId: z.string() }),
   z.object({ type: z.literal("channels.changed"), communityId: z.string() }),
+  z.object({ type: z.literal("assets.changed"), communityId: z.string() }),
   z.object({ type: z.literal("member.removed"), communityId: z.string(), userId: z.string() }),
   z.object({ type: z.literal("community.deleted"), communityId: z.string() }),
   // Personal events go to the person's own stream (`userTopic`), not to the community.
@@ -28,8 +29,8 @@ export const userTopic = (userId: string) => `user:${userId}`;
 const topicOf = (event: RealtimeEvent) => (event.type === "mention.created" ? userTopic(event.userId) : event.communityId);
 type Listener = (event: HubEvent) => void;
 
-export async function publish(event: RealtimeEvent): Promise<void> {
-  await db.execute(sql`select pg_notify(${CHANNEL}, ${JSON.stringify(event)})`);
+export async function publish(event: RealtimeEvent, handle: Pick<typeof db, "execute"> = db): Promise<void> {
+  await handle.execute(sql`select pg_notify(${CHANNEL}, ${JSON.stringify(event)})`);
 }
 
 class Hub {

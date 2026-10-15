@@ -21,3 +21,9 @@ Admission uses a shared per-user rate plus bounded per-process import concurrenc
 - Bind staged rows to this server-side import's collected IDs. Ignore archive-supplied database IDs. Final transaction acquires the same user lock as normal community creation, rechecks active status and current caps, and links only this import's owned/unlinked rows.
 - No eager destructive cleanup after a failed or ambiguously committed final transaction. Unlinked staged rows/objects remain private and retain their quota reservation until the existing one-hour sweeper. Linked objects survive even if the commit acknowledgement was lost. Upload deadline five minutes and final transaction timeout30s keep staging well inside the sweeper TTL.
 - Accept one final footer, reject records after it, and commit only after complete native gzip checksum validation. No resumable imports or new background job infrastructure.
+
+## Community library portability and privacy
+
+Community JSON version 2 includes bounded library metadata and readable message shortcodes, without file bytes; importing JSON does not enroll assets. Version 1 remains readable. Complete gzip archive version 3 includes all live library files, including unused emoji and stickers, with fresh destination IDs and atomic attachment links. Version 2 archives remain readable. Existing reactions are not transferred. Archives are compressed, not encrypted, and are not operator backups.
+
+Personal export version 7 lists community image upload attribution separately from personal messages and projects custom image tokens as readable text. Community images belong to the community: deleting the uploader account preserves the library while dropping uploader attribution. Removing an asset or community makes the bytes eligible for private storage cleanup. Private image access requires current community membership.

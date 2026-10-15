@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { and, asc, count, desc, eq, gt, gte, inArray, lte, sum } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, mention, message, session, user } from "@/db/schema";
+import { attachment, communityAsset, mention, message, session, user } from "@/db/schema";
 import { MAX_ARCHIVE_ATTACHMENTS, MAX_ARCHIVE_MEDIA_BYTES, MAX_ARCHIVE_METADATA_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES } from "@/lib/limits";
+import { assetRawLimit } from "@/lib/community-assets";
 import { requireMember } from "./access";
 import { configuredAttachmentStorage } from "./attachment-storage";
 import { ARCHIVE_LIMITS, decodeCommunityArchive, encodeCommunityArchive } from "./community-archive-codec";
@@ -11,7 +12,7 @@ import { communityExportSchema, exportCommunity, importCommunity, MAX_IMPORT_MES
 import { AppError, forbidden, invalid } from "./errors";
 import { assertActiveUser } from "./instance-policy";
 import { consume } from "./limits";
-import { stageArchiveAttachment } from "./media";
+import { stageArchiveAttachment, stageCommunityAssetAttachment } from "./media";
 import type { SessionUser } from "./session";
 import { parse, uuid } from "./validation";
 
@@ -22,9 +23,9 @@ const DURATION = 5 * 60_000;
 const messageSchema = communityExportSchema.shape.messages.element.extend({ attachments: z.number().int().min(0).max(MAX_ATTACHMENTS_PER_MESSAGE) });
 const dataSchema = communityExportSchema.extend({ exportedAt: z.iso.datetime({ offset: true }), truncated: z.boolean() });
 const recordSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("header"), format: z.literal("opendiscord.community-archive"), version: z.literal(2), data: dataSchema.refine((data) => data.messages.length === 0) }).strict(),
+  z.object({ type: z.literal("header"), format: z.literal("opendiscord.community-archive"), version: z.union([z.literal(2), z.literal(3)]), data: dataSchema.refine((data) => data.messages.length === 0) }).strict(),
   z.object({ type: z.literal("message"), data: messageSchema }).strict(),
-  z.object({ type: z.literal("file"), id: uuid, messageKey: z.string().min(1).max(64), size: z.number().int().positive().max(MAX_FILE_BYTES), contentType: z.enum(["image/webp", "application/octet-stream"]), filename: z.string().max(128).nullable() }).strict(),
+  z.object({ type: z.literal("file"), id: uuid, messageKey: z.string().min(1).max(64).optional(), assetKey: uuid.optional(), size: z.number().int().positive().max(MAX_FILE_BYTES), contentType: z.enum(["image/webp", "application/octet-stream"]), filename: z.string().max(128).nullable() }).strict().refine((file) => Boolean(file.messageKey) !== Boolean(file.assetKey), "Exactly one file target is required."),
   z.object({ type: z.literal("chunk"), index: z.number().int().min(0), data: z.string().min(4).max(87384) }).strict(),
   z.object({ type: z.literal("file-end"), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   z.object({ type: z.literal("end"), messages: z.number().int().min(0).max(MAX_IMPORT_MESSAGES), attachments: z.number().int().min(0).max(MAX_ARCHIVE_ATTACHMENTS), bytes: z.number().int().min(0).max(MAX_ARCHIVE_MEDIA_BYTES) }).strict(),
@@ -60,47 +61,24 @@ export async function exportCommunityArchive(actor: Actor, rawId: unknown, input
   const selectedIds = new Set((await db.select({ id: message.id }).from(message).where(scope).limit(MAX_IMPORT_MESSAGES)).map((row) => row.id));
   const [totals] = await db.select({ files: count(), bytes: sum(attachment.size).mapWith(Number) }).from(attachment).innerJoin(message, eq(message.id, attachment.messageId)).where(scope);
   if (totals.files > MAX_ARCHIVE_ATTACHMENTS || (totals.bytes ?? 0) > MAX_ARCHIVE_MEDIA_BYTES) throw invalid("Complete archives support at most 4096 files and 256 MiB of attachment bytes. Use an operator backup for larger communities.");
+  const libraryFiles = await db.select({ file: attachment, assetId: communityAsset.id }).from(communityAsset)
+    .innerJoin(attachment, eq(attachment.assetId, communityAsset.id)).where(eq(communityAsset.communityId, communityId));
+  if (libraryFiles.length !== data.assets.length) throw invalid("A library image is missing.");
+  if (totals.files + libraryFiles.length > MAX_ARCHIVE_ATTACHMENTS || (totals.bytes ?? 0) + libraryFiles.reduce((n, row) => n + row.file.size, 0) > MAX_ARCHIVE_MEDIA_BYTES) throw invalid("The archive media limit was exceeded.");
   const storage = configuredAttachmentStorage();
-  if (totals.files && !storage) throw forbidden("Attachment storage must be configured to export files.");
-  const header: Record = { type: "header", format: "opendiscord.community-archive", version: 2, data };
+  if ((totals.files || libraryFiles.length) && !storage) throw forbidden("Attachment storage must be configured to export files.");
+  const header: Record = { type: "header", format: "opendiscord.community-archive", version: 3, data };
   let metadataBytes = Buffer.byteLength(JSON.stringify(header));
   parse(recordSchema, header);
   if (metadataBytes > ARCHIVE_LIMITS.recordBytes) throw invalid("The community structure exceeds the archive record limit.");
 
   async function* records(): AsyncGenerator<Record> {
     let messages = 0; let files = 0; let bytes = 0; let cursor: string | undefined;
-    yield header;
-    while (newest) {
-      signal.throwIfAborted();
-      await owner(actor, communityId);
-      const batch = await db.select({ m: message, author: user.name }).from(message).innerJoin(user, eq(user.id, message.authorId))
-        .where(and(scope, cursor ? gt(message.id, cursor) : undefined)).orderBy(asc(message.id)).limit(BATCH);
-      if (!batch.length) break;
-      const ids = batch.map((row) => row.m.id);
-      const [mentions, attachments] = await Promise.all([
-        db.select({ messageId: mention.messageId, userId: user.id, name: user.name }).from(mention).innerJoin(user, eq(user.id, mention.userId)).where(inArray(mention.messageId, ids)),
-        db.select().from(attachment).where(inArray(attachment.messageId, ids)).orderBy(asc(attachment.id)),
-      ]);
-      for (const { m, author } of batch) {
-        if (++messages > MAX_IMPORT_MESSAGES) throw invalid("The archive message limit was exceeded.");
-        const names = new Map(mentions.filter((item) => item.messageId === m.id).map((item) => [item.userId, item.name]));
-        const linked = attachments.filter((file) => file.messageId === m.id);
-        const row: Record = { type: "message", data: {
-          key: m.id, channelKey: m.channelId, author: m.importedAuthor ?? author,
-          content: m.content.replace(/<@([A-Za-z0-9_-]{1,64})>/g, (_, id: string) => `@${names.get(id) ?? "member"}`),
-          createdAt: m.createdAt.toISOString(), editedAt: m.editedAt?.toISOString() ?? null, pinned: m.pinnedAt !== null,
-          replyToKey: m.replyToId && selectedIds.has(m.replyToId) ? m.replyToId : null,
-          threadKey: m.threadId && selectedIds.has(m.threadId) ? m.threadId : null, attachments: linked.length,
-        } };
-        parse(recordSchema, row);
-        metadataBytes += Buffer.byteLength(JSON.stringify(row));
-        if (metadataBytes > MAX_ARCHIVE_METADATA_BYTES) throw invalid("The archive metadata limit was exceeded.");
-        yield row;
-        for (const file of linked) {
+    async function* emitFile(file: typeof attachment.$inferSelect, target: { messageKey: string } | { assetKey: string }): AsyncGenerator<Record> {
           signal.throwIfAborted();
           await owner(actor, communityId);
           if (!storage || ++files > MAX_ARCHIVE_ATTACHMENTS || bytes + file.size > MAX_ARCHIVE_MEDIA_BYTES) throw invalid("The archive attachment limit was exceeded.");
-          const start: Record = { type: "file", id: file.id, messageKey: m.id, size: file.size, contentType: file.filename ? "application/octet-stream" : "image/webp", filename: file.filename };
+          const start: Record = { type: "file", id: file.id, ...target, size: file.size, contentType: file.filename ? "application/octet-stream" : "image/webp", filename: file.filename };
           parse(recordSchema, start);
           metadataBytes += Buffer.byteLength(JSON.stringify(start));
           if (metadataBytes > MAX_ARCHIVE_METADATA_BYTES) throw invalid("The archive metadata limit was exceeded.");
@@ -128,7 +106,36 @@ export async function exportCommunityArchive(actor: Actor, rawId: unknown, input
           metadataBytes += Buffer.byteLength(JSON.stringify(end));
           if (metadataBytes > MAX_ARCHIVE_METADATA_BYTES) throw invalid("The archive metadata limit was exceeded.");
           yield end;
-        }
+    }
+    yield header;
+    for (const row of libraryFiles) yield* emitFile(row.file, { assetKey: row.assetId });
+    while (newest) {
+      signal.throwIfAborted();
+      await owner(actor, communityId);
+      const batch = await db.select({ m: message, author: user.name }).from(message).innerJoin(user, eq(user.id, message.authorId))
+        .where(and(scope, cursor ? gt(message.id, cursor) : undefined)).orderBy(asc(message.id)).limit(BATCH);
+      if (!batch.length) break;
+      const ids = batch.map((row) => row.m.id);
+      const [mentions, attachments] = await Promise.all([
+        db.select({ messageId: mention.messageId, userId: user.id, name: user.name }).from(mention).innerJoin(user, eq(user.id, mention.userId)).where(inArray(mention.messageId, ids)),
+        db.select().from(attachment).where(inArray(attachment.messageId, ids)).orderBy(asc(attachment.id)),
+      ]);
+      for (const { m, author } of batch) {
+        if (++messages > MAX_IMPORT_MESSAGES) throw invalid("The archive message limit was exceeded.");
+        const names = new Map(mentions.filter((item) => item.messageId === m.id).map((item) => [item.userId, item.name]));
+        const linked = attachments.filter((file) => file.messageId === m.id);
+        const row: Record = { type: "message", data: {
+          key: m.id, channelKey: m.channelId, author: m.importedAuthor ?? author,
+          content: m.content.replace(/<@([A-Za-z0-9_-]{1,64})>/g, (_, id: string) => `@${names.get(id) ?? "member"}`),
+          createdAt: m.createdAt.toISOString(), editedAt: m.editedAt?.toISOString() ?? null, pinned: m.pinnedAt !== null,
+          replyToKey: m.replyToId && selectedIds.has(m.replyToId) ? m.replyToId : null,
+          threadKey: m.threadId && selectedIds.has(m.threadId) ? m.threadId : null, attachments: linked.length,
+        } };
+        parse(recordSchema, row);
+        metadataBytes += Buffer.byteLength(JSON.stringify(row));
+        if (metadataBytes > MAX_ARCHIVE_METADATA_BYTES) throw invalid("The archive metadata limit was exceeded.");
+        yield row;
+        for (const file of linked) yield* emitFile(file, { messageKey: m.id });
       }
       cursor = batch[batch.length - 1].m.id;
     }
@@ -153,6 +160,8 @@ export async function importCommunityArchive(actor: Actor, body: ReadableStream<
     admitted = true;
     await consume(`archive-import:${actor.id}`, 1, 10 * 60_000);
     let header: z.infer<typeof dataSchema> | undefined;
+    let version = 0;
+    const stagedAssets: { id: string; assetKey: string }[] = [];
     const messages: z.infer<typeof messageSchema>[] = [];
     const messageIds = new Set<string>(); const fileIds = new Set<string>();
     const staged: { id: string; messageKey: string }[] = [];
@@ -168,7 +177,8 @@ export async function importCommunityArchive(actor: Actor, body: ReadableStream<
       }
       if (record.type === "header") {
         if (header || messages.length) throw invalid("The archive contains multiple headers.");
-        header = record.data;
+        header = record.data; version = record.version;
+        if (version === 2 && header.assets.length) throw invalid("Legacy archives cannot declare library assets.");
         continue;
       }
       if (!header) throw invalid("The archive header is missing.");
@@ -179,7 +189,7 @@ export async function importCommunityArchive(actor: Actor, body: ReadableStream<
         messages.push(record.data); messageIds.add(record.data.key); messageFiles = 0;
       } else if (record.type === "file") {
         const parent = messages[messages.length - 1];
-        if (current || !parent || parent.key !== record.messageKey || messageFiles >= parent.attachments || fileIds.has(record.id)) throw invalid("Invalid archived attachment references.");
+        if (current || fileIds.has(record.id) || (record.assetKey ? version !== 3 || messages.length > 0 || !header.assets.some((a) => a.id === record.assetKey) || stagedAssets.some((a) => a.assetKey === record.assetKey) || record.contentType !== "image/webp" || record.filename !== null : !parent || parent.key !== record.messageKey || messageFiles >= parent.attachments)) throw invalid("Invalid archived attachment references.");
         if (fileIds.size >= MAX_ARCHIVE_ATTACHMENTS || bytes + record.size > MAX_ARCHIVE_MEDIA_BYTES || (record.contentType === "image/webp" && record.size > MAX_ATTACHMENT_BYTES)) throw invalid("The archive attachment limit was exceeded.");
         await activeActor(actor);
         fileIds.add(record.id);
@@ -193,17 +203,22 @@ export async function importCommunityArchive(actor: Actor, body: ReadableStream<
         current.hash.update(chunk); current.chunks.push(chunk);
       } else if (record.type === "file-end") {
         if (!current || current.size !== current.record.size || current.hash.digest("hex") !== record.sha256) throw invalid("An archived file is incomplete or corrupted.");
-        const file = await stageArchiveAttachment(actor.id, current.record.contentType === "image/webp", current.record.filename, Buffer.concat(current.chunks, current.size), signal);
-        staged.push({ id: file.id, messageKey: current.record.messageKey });
-        bytes += current.size; current = undefined; messageFiles++;
+        const sourceAsset = current.record.assetKey ? header.assets.find((a) => a.id === current!.record.assetKey) : undefined;
+        if (sourceAsset && current.size > assetRawLimit(sourceAsset.kind)) throw invalid("An archived community image exceeds its limit.");
+        const content = Buffer.concat(current.chunks, current.size);
+        const file = sourceAsset ? await stageCommunityAssetAttachment(actor.id, sourceAsset.kind, content, signal, true)
+          : await stageArchiveAttachment(actor.id, current.record.contentType === "image/webp", current.record.filename, content, signal);
+        if (sourceAsset) stagedAssets.push({ id: file.id, assetKey: sourceAsset.id });
+        else { staged.push({ id: file.id, messageKey: current.record.messageKey! }); messageFiles++; }
+        bytes += current.size; current = undefined;
       } else {
-        if (current || (messages.length && messageFiles !== messages[messages.length - 1].attachments) || record.messages !== messages.length || record.attachments !== staged.length || record.bytes !== bytes) throw invalid("The archive end marker does not match its contents.");
+        if (current || (messages.length && messageFiles !== messages[messages.length - 1].attachments) || record.messages !== messages.length || record.attachments !== staged.length + stagedAssets.length || stagedAssets.length !== header.assets.length || record.bytes !== bytes) throw invalid("The archive end marker does not match its contents.");
         complete = true;
       }
     }
     if (!header || !complete) throw invalid("The complete archive end marker is missing.");
     signal.throwIfAborted();
-    return await importCommunity(actor.id, { ...header, messages }, { sessionId: actor.sessionId, attachments: staged });
+    return await importCommunity(actor.id, { ...header, messages }, { sessionId: actor.sessionId, attachments: staged, assets: stagedAssets });
   } catch (error) {
     if (error instanceof AppError) throw error;
     // Database errors can contain imported message parameters; never log that payload.

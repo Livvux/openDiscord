@@ -1,12 +1,15 @@
 "use client";
 
-import { FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
+import { SmilePlusIcon, FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import { shortFilename } from "@/lib/filename";
 import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
+
+import { assetShortcode, encodeAssetShortcodes, type AssetRef } from "@/lib/community-assets";
+import { CommunityAssetPicker } from "../community-asset-picker";
 
 interface ComposerProps {
   channelId: string;
@@ -72,6 +75,8 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
   const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const picked = useRef<Mention[]>([]);
+  const pickedAssets = useRef<AssetRef[]>([]);
+  const [pickingAssets, setPickingAssets] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   // Hidden copies of previous routes stay mounted, so ids must be unique per instance.
@@ -163,7 +168,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
     if (!canSend) return;
     const text = draft.trim();
     const mentions = picked.current.filter((m) => text.includes(`@${m.name}`));
-    const content = encodeMentions(text, mentions);
+    const content = encodeAssetShortcodes(encodeMentions(text, mentions), pickedAssets.current);
     picked.current = [];
     setDraft("");
     setMentionAt(null);
@@ -260,7 +265,14 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           {failed.name}: {failed.error} Remove it to send.
         </p>
       )}
+      {pickingAssets && <CommunityAssetPicker channelId={channelId} onPick={(asset) => {
+        pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
+        setDraft(`${draft}${draft && !draft.endsWith(" ") ? " " : ""}${assetShortcode(asset)} `);
+        setPickingAssets(false);
+        textarea.current?.focus();
+      }} />}
       <div className="flex items-end gap-2 py-1 pr-1 pl-2">
+        <Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose community emoji or sticker" aria-expanded={pickingAssets} onClick={() => setPickingAssets((value) => !value)}><SmilePlusIcon /></Button>
         {mediaEnabled && (
           <>
             <input
