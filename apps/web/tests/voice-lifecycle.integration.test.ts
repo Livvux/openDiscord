@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { abuseReport, channel, dmIdentity, instanceAdmin, instanceSettings, member, role, session, user } from "@/db/schema";
 import { voiceCall, voiceCallMember } from "@/db/voice-schema";
 import { createCommunity, deleteChannel, deleteCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
-import { registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
+import { handleCryptoRequest, registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
 import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
 import { banMember, createRole, deleteRole, kickMember, setMemberRole, updateRole } from "@/server/moderation";
 import { resetDmIdentity } from "@/server/dm-reset";
@@ -31,8 +31,9 @@ async function fixture() {
   await registerDmDevice(userId, sessionId, { id: anchorDeviceId, secret: anchorSecret, name: "Lifecycle anchor" });
   const c = await createCommunity(userId, "Voice lifecycle");
   const [ch] = await db.insert(channel).values({ communityId: c.communityId, name: "lifecycle", kind: "voice" }).returning();
-  const snapshot = await joinVoiceControl({ userId, sessionId, anchorDeviceId, anchorSecret }, { channelId: ch.id, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
-  return { userId, communityId: c.communityId, channelId: ch.id, sessionId, anchorDeviceId, snapshot };
+  const secret = randomBytes(32).toString("hex");
+  const snapshot = await joinVoiceControl({ userId, sessionId, anchorDeviceId, anchorSecret }, { channelId: ch.id, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: secret, consent: true });
+  return { userId, communityId: c.communityId, channelId: ch.id, sessionId, anchorDeviceId, secret, snapshot };
 }
 
 describe("unreleased native Voice lifecycle backstop", () => {
@@ -138,6 +139,7 @@ describe("bounded Voice maintenance progress", () => {
       const result = await sweepVoiceLifecycle({ apply: true, now, batchSize: 1, maxBatches: 1 });
       expect(result.scanned).toBe(1);
       expect(result.closed).toBe(1);
+      expect(result.closedCallIds).toHaveLength(1);
       expect(result.removed).toBe(1);
     }
     expect((await sweepVoiceLifecycle({ apply: true, now, batchSize: 1, maxBatches: 1 })).scanned).toBe(0);
@@ -237,6 +239,13 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
         expect(await mutationOutcome).toBeNull();
         expect(await cryptoOutcome).toMatchObject({ code: "forbidden" });
         expect(await state(p.snapshot.memberId)).toBe("left");
+        const survivorAuth = { userId: f.userId, sessionId: f.sessionId, memberId: f.snapshot.memberId, secret: f.secret };
+        const priorBinding = { callId: f.snapshot.callId, memberId: f.snapshot.memberId, joinNonce: f.snapshot.joinNonce, expectedGeneration: p.snapshot.generation };
+        const requests = [
+          { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: "signed_curve25519" } } } },
+          { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.request", body: { messages: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: { from_device: f.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } },
+        ];
+        for (const request of requests) await expect(handleVoiceCrypto(survivorAuth, { ...priorBinding, request })).rejects.toMatchObject({ code: "conflict" });
       } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }
     });
   }
@@ -396,4 +405,49 @@ describe("native account write granularity and multi-session cascades", () => {
     expect(await state(f.snapshot.memberId)).toBe("waiting");
     expect(await state(other.snapshot.memberId)).toBe("waiting");
   });
+});
+
+describe("actual mixed DM operations versus native user cascade", () => {
+  for (const operation of ["register", "upload", "revoke", "reset"] as const) {
+    it(`${operation} holds DM before Voice while native cascade waits DM, without40P01`, async () => {
+      const f = await fixture(), p = await peer(f), barrier = await db.$client.connect();
+      const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, statement_timeout: 6000, lock_timeout: 5000 });
+      const native = drizzleAdapter(drizzle(pool, { schema }), { provider: "pg", schema })(auth.options);
+      let pending: Promise<unknown> | undefined, deleting: Promise<unknown> | undefined;
+      let resetFingerprint = "";
+      if (operation === "reset") {
+        const { createHash } = await import("node:crypto");
+        const key = "a".repeat(43), pairs = [[`ed25519:${key}`, key]];
+        await db.insert(dmIdentity).values({ userId: p.userId, keys: { master_key: { keys: Object.fromEntries(pairs) } } });
+        resetFingerprint = createHash("sha256").update(JSON.stringify(pairs)).digest("hex");
+      }
+      try {
+        const { rows: [{ pid }] } = await pool.query<{ pid: number }>("select pg_backend_pid() as pid");
+        await barrier.query("begin"); await barrier.query("select pg_advisory_xact_lock(810030)");
+        if (operation === "register") pending = registerDmDevice(p.userId, p.sessionId, { id: randomUUID(), secret: randomBytes(32).toString("hex"), name: "Concurrent native anchor" });
+        else if (operation === "revoke") pending = revokeDmDevice(p.userId, p.anchorDeviceId);
+        else if (operation === "reset") pending = resetDmIdentity(p.userId, p.sessionId, { identity: resetFingerprint, twoFactorEnabled: false });
+        else pending = handleCryptoRequest({ userId: p.userId, sessionId: p.sessionId, deviceId: p.anchorDeviceId, secret: p.anchorSecret }, { kind: "upload", body: { device_keys: { user_id: `@${p.userId}:opendiscord.local`, device_id: p.anchorDeviceId, algorithms: ["m.olm.v1.curve25519-aes-sha2"], keys: { [`curve25519:${p.anchorDeviceId}`]: "a".repeat(43), [`ed25519:${p.anchorDeviceId}`]: "b".repeat(43) } } } });
+        const mixed = pending.then(() => null, (error: unknown) => error);
+        await voiceWaiters(1);
+        deleting = native.delete({ model: "user", where: [{ field: "id", value: p.userId }] });
+        const deletion = deleting.then(() => null, (error: unknown) => error);
+        const deadline = Date.now() + 4000;
+        let waiting = false;
+        while (Date.now() < deadline) {
+          const { rows } = await db.$client.query<{ waiting: boolean }>("select exists(select 1 from pg_locks where pid = $1 and locktype = 'advisory' and classid = 0 and objid = 810025 and not granted) as waiting", [pid]);
+          if (rows[0].waiting) { waiting = true; break; }
+        }
+        expect(waiting).toBe(true);
+        await barrier.query("commit");
+        expect(await mixed).toBeNull(); expect(await deletion).toBeNull();
+        expect(await state(p.snapshot.memberId)).toBeUndefined();
+        const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
+        expect(call.generation).toBe(p.snapshot.generation + 1);
+      } finally {
+        await barrier.query("rollback"); await Promise.all([pending?.catch(() => {}), deleting?.catch(() => {})]);
+        barrier.release(); await pool.end();
+      }
+    }, 12000);
+  }
 });

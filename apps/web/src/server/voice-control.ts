@@ -286,8 +286,9 @@ const voiceRepairEligible = (now: Date) => sql`(
 )`;
 /** Separate DB-only Voice batches; eligibility and keyset prevent healthy-prefix starvation. */
 export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }: { apply: boolean; now: Date; batchSize: number; maxBatches: number }) {
-  if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, limited: false };
+  if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
   let cursor: string | undefined, scanned = 0, closed = 0, removed = 0;
+  const closedCallIds: string[] = [];
   for (let batch = 0; batch < maxBatches; batch++) {
     const result = await db.transaction(async tx => {
       await lockVoice(tx);
@@ -295,19 +296,21 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
         .where(and(eq(voiceCall.status, "active"), voiceRepairEligible(now), cursor ? gt(voiceCall.id, cursor) : undefined)).orderBy(asc(voiceCall.id)).limit(batchSize);
       for (const id of [...new Set(calls.map(c => c.communityId))].sort()) await lockCommunity(tx, id);
       let closed = 0, removed = 0;
+      const closedCallIds: string[] = [];
       for (const row of calls) {
         const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, row.call.id)).for("update");
         if (call.status !== "active") continue;
         removed += (await expireAndRevalidate(tx, call, now)).length;
-        if (call.closedAt !== null) closed++;
+        if (call.closedAt !== null) { closed++; closedCallIds.push(call.id); }
       }
-      return { calls, closed, removed };
+      return { calls, closed, removed, closedCallIds };
     });
     scanned += result.calls.length; closed += result.closed; removed += result.removed;
+    closedCallIds.push(...result.closedCallIds);
     cursor = result.calls.at(-1)?.call.id;
-    if (result.calls.length < batchSize) return { scanned, closed, removed, limited: false };
+    if (result.calls.length < batchSize) return { scanned, closed, removed, closedCallIds, limited: false };
   }
-  return { scanned, closed, removed, limited: true };
+  return { scanned, closed, removed, closedCallIds, limited: true };
 }
 
 const keyRecord = z.record(z.string().regex(/^signed_curve25519:[A-Za-z0-9+/_=-]{1,100}$/), voicePrekeySchema);
