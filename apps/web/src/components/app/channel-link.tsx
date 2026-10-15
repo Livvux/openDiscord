@@ -1,6 +1,6 @@
 "use client";
 
-import { LockIcon } from "lucide-react";
+import { LockIcon, Volume2Icon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useChannelUnread } from "./unread-provider";
@@ -10,9 +10,10 @@ interface ChannelLinkProps {
   href: string;
   name: string;
   isPrivate?: boolean;
+  kind?: "text" | "voice";
 }
 
-export function ChannelLink({ channelId, href, name, isPrivate = false }: ChannelLinkProps) {
+export function ChannelLink({ channelId, href, name, isPrivate = false, kind = "text" }: ChannelLinkProps) {
   const active = usePathname() === href;
   const { unread, mentions } = useChannelUnread(channelId);
   const highlight = !active && (unread || mentions > 0);
@@ -24,8 +25,15 @@ export function ChannelLink({ channelId, href, name, isPrivate = false }: Channe
         active ? "bg-white/10 text-white" : highlight ? "font-medium text-zinc-100 hover:bg-white/5" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
       }`}
     >
-      {isPrivate ? <LockIcon aria-hidden className="size-3.5 text-zinc-500" /> : <span aria-hidden className="text-zinc-500">#</span>}
+      {kind === "voice" ? (
+        <Volume2Icon aria-hidden className="size-3.5 text-zinc-500" />
+      ) : isPrivate ? (
+        <LockIcon aria-hidden className="size-3.5 text-zinc-500" />
+      ) : (
+        <span aria-hidden className="text-zinc-500">#</span>
+      )}
       <span className="truncate">{name}</span>
+      {kind === "voice" && <span className="sr-only">(voice)</span>}
       {isPrivate && <span className="sr-only">(private)</span>}
       {mentions > 0 && !active ? (
         <span className="ml-auto rounded-full bg-red-600 px-1.5 text-[10px] leading-4 font-bold text-white">

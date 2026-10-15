@@ -8,6 +8,7 @@ import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
 import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Permission, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
+import { afterAccessChange, closeVoiceRoom, voiceEnabled } from "./voice";
 import { NOTHING_UNREAD, unreadState } from "./unread";
 import { z } from "zod";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
@@ -21,6 +22,7 @@ export interface ChannelSummary {
   id: string;
   name: string;
   topic: string | null;
+  kind: "text" | "voice";
   /** The viewer's effective permissions in this channel. */
   permissions: number;
   /** Hidden from the default role. */
@@ -72,7 +74,7 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
   const ctx = c ? await loadMember(db, communityId, userId) : null;
   if (!c || !ctx) throw notFound("Community not found.");
   const rows = await db
-    .select({ id: channel.id, name: channel.name, topic: channel.topic })
+    .select({ id: channel.id, name: channel.name, topic: channel.topic, kind: channel.kind })
     .from(channel)
     .where(eq(channel.communityId, communityId))
     .orderBy(asc(channel.position), asc(channel.id));
@@ -103,8 +105,10 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
   const communityId = parse(uuid, rawId);
   const { authority } = await requireMember(db, communityId, userId);
   if (!authority.isOwner) throw forbidden("Only the owner can delete a community.");
+  const voiceRooms = await db.select({ id: channel.id }).from(channel).where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
   await db.delete(community).where(eq(community.id, communityId));
   await publish({ type: "community.deleted", communityId });
+  await Promise.all(voiceRooms.map((r) => closeVoiceRoom(r.id)));
 }
 
 export async function leaveCommunity(userId: string, rawId: unknown) {
@@ -113,13 +117,16 @@ export async function leaveCommunity(userId: string, rawId: unknown) {
   if (authority.isOwner) throw forbidden("Owners can't leave. Delete the community instead.");
   await db.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
   await publish({ type: "member.removed", communityId, userId });
+  afterAccessChange(communityId);
 }
 
 // --- Channels ---------------------------------------------------------------
 
-export async function createChannel(userId: string, rawCommunityId: unknown, rawName: unknown): Promise<string> {
+export async function createChannel(userId: string, rawCommunityId: unknown, rawName: unknown, rawKind: unknown = "text"): Promise<string> {
   const communityId = parse(uuid, rawCommunityId);
   const name = parse(channelName, rawName);
+  const kind = parse(z.enum(["text", "voice"]), rawKind);
+  if (kind === "voice" && !voiceEnabled) throw invalid("Voice isn't set up on this instance.");
   const ch = await db.transaction(async (tx) => {
     await lockCommunity(tx, communityId);
     await requireMember(tx, communityId, userId, Permission.ManageChannels);
@@ -127,7 +134,7 @@ export async function createChannel(userId: string, rawCommunityId: unknown, raw
     const [{ total }] = await tx.select({ total: count() }).from(channel).where(eq(channel.communityId, communityId));
     enforceCap(total, CAPS.channelsPerCommunity, `A community can have at most ${CAPS.channelsPerCommunity} channels.`);
     const [created] = await tx.insert(channel).values({
-      communityId, name,
+      communityId, name, kind,
       position: sql`(select coalesce(max(${channel.position}), 0) + 1 from ${channel} where ${channel.communityId} = ${communityId})`,
     }).returning({ id: channel.id });
     return created;
@@ -158,6 +165,7 @@ export async function deleteChannel(userId: string, rawChannelId: unknown) {
     await tx.insert(auditLog).values({ communityId: ch.communityId, actorId: userId, action: "channel.delete", targetId });
   });
   await publish({ type: "channels.changed", communityId: ch.communityId });
+  if (ch.kind === "voice") await closeVoiceRoom(ch.id);
 }
 
 // --- Channel permission overrides -------------------------------------------
@@ -230,6 +238,7 @@ export async function setChannelOverride(userId: string, rawChannelId: unknown, 
     return ch.communityId;
   });
   await publish({ type: "channels.changed", communityId });
+  afterAccessChange(communityId);
 }
 
 // --- Invites ----------------------------------------------------------------

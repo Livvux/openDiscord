@@ -69,7 +69,7 @@ export function ChannelSettingsDialog({ channel, communityId, canManagePermissio
             <Button type="submit" disabled={pending}>Save</Button>
           </DialogFooter>
         </form>
-        {canManagePermissions && open && <ChannelPermissions channelId={channel.id} />}
+        {canManagePermissions && open && <ChannelPermissions channelId={channel.id} kind={channel.kind} />}
       </DialogContent>
     </Dialog>
   );

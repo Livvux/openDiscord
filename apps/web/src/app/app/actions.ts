@@ -11,6 +11,7 @@ import * as messages from "@/server/messages";
 import * as moderation from "@/server/moderation";
 import * as presence from "@/server/presence";
 import { requireUser } from "@/server/session";
+import * as voice from "@/server/voice";
 import * as unread from "@/server/unread";
 
 async function run<T>(fn: (userId: string) => Promise<T>, refreshUi = true): Promise<ActionResult<T>> {
@@ -28,8 +29,8 @@ export const renameCommunity = async (id: string, name: string) => run((u) => co
 export const deleteCommunity = async (id: string) => run((u) => communities.deleteCommunity(u, id));
 export const leaveCommunity = async (id: string) => run((u) => communities.leaveCommunity(u, id));
 
-export const createChannel = async (communityId: string, name: string) =>
-  run((u) => communities.createChannel(u, communityId, name));
+export const createChannel = async (communityId: string, name: string, kind: "text" | "voice" = "text") =>
+  run((u) => communities.createChannel(u, communityId, name, kind));
 export const updateChannel = async (channelId: string, name: string, topic: string) =>
   run((u) => communities.updateChannel(u, channelId, name, topic));
 export const listChannelOverrides = async (channelId: string) =>
@@ -74,6 +75,9 @@ export const updateAutomod = async (communityId: string, rules: { words: string[
 export const setPresenceVisible = async (visible: boolean) => run((u) => presence.setPresenceVisible(u, visible));
 export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
   run((u) => presence.setNotificationLevel(u, communityId, level));
+
+export const joinVoice = async (channelId: string) => run((u) => voice.createVoiceToken(u, channelId), false);
+export const listVoiceParticipants = async (channelId: string) => run((u) => voice.listVoiceParticipants(u, channelId), false);
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>
   run((u) => moderation.kickMember(u, communityId, userId, reason));

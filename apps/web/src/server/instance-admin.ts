@@ -8,6 +8,7 @@ import { sendMail } from "@/lib/mail";
 import { assertActiveUser, getInstanceSettings, isInstanceAdmin } from "./instance-policy";
 import { requiredReason } from "./reports";
 import { publish } from "./realtime";
+import { afterAccessChange } from "./voice";
 import { parse, uuid } from "./validation";
 
 export interface AdminActor { userId: string; sessionId: string }
@@ -108,6 +109,7 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
 async function disconnectUser(userId: string) {
   const memberships = await db.select({ communityId: member.communityId }).from(member).where(eq(member.userId, userId));
   await Promise.all(memberships.map((m) => publish({ type: "member.removed", communityId: m.communityId, userId })));
+  for (const m of memberships) afterAccessChange(m.communityId);
 }
 export async function revokeUserSessions(actor: AdminActor, rawId: unknown, rawReason: unknown) {
   const targetId = parse(z.string().min(1).max(128), rawId);
@@ -130,7 +132,10 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
     if (!rows.length) throw notFound("Community not found.");
     await audit(tx, actor, enabled ? "community.suspend" : "community.unsuspend", id, reason);
   });
-  if (enabled) await publish({ type: "community.deleted", communityId: id });
+  if (enabled) {
+    await publish({ type: "community.deleted", communityId: id });
+    afterAccessChange(id);
+  }
 }
 export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEmail: unknown, rawReason: unknown) {
   const id = parse(uuid, rawId);
@@ -151,6 +156,8 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
     await audit(tx, actor, "community.transfer", id, `${reason} (new owner: ${target.id})`);
   });
   await publish({ type: "channels.changed", communityId: id });
+  // The previous owner may lose rights they relied on in voice.
+  afterAccessChange(id);
 }
 export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enabled: unknown, rawReason: unknown) {
   const id = parse(z.string().min(1).max(128), rawId);

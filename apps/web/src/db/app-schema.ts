@@ -115,6 +115,8 @@ export const channel = pgTable(
       .references(() => community.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     topic: text("topic"),
+    /** Voice channels have no messages; their room lives in LiveKit. */
+    kind: text("kind", { enum: ["text", "voice"] }).notNull().default("text"),
     position: integer("position").notNull().default(0),
     createdAt: createdAt(),
   },
@@ -137,8 +139,9 @@ export const channelOverride = pgTable(
   (t) => [
     primaryKey({ columns: [t.channelId, t.roleId] }),
     index("channel_override_role_idx").on(t.roleId),
-    // Only channel permission bits (view 1024, send 256, manage messages 16), never both allowed and denied.
-    check("channel_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~1296 = 0`),
+    // Only channel permission bits (view 1024, send 256, manage messages 16, connect 2048, speak 4096),
+    // never both allowed and denied.
+    check("channel_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~7440 = 0`),
   ],
 );
 
