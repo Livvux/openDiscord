@@ -21,8 +21,8 @@ fn main() {
             .min_inner_size(360.0, 600.0)
             .on_navigation(move |target| policy::allowed_origin(&pinned, target))
             .on_new_window(|target, _| {
-                if policy::safe_https(&target) {
-                    let _ = open::that_detached(target.as_str());
+                if policy::safe_https(&target) && open::that_detached(target.as_str()).is_err() {
+                    eprintln!("[desktop] Could not open the link in the system browser.");
                 }
                 tauri::webview::NewWindowResponse::Deny
             })
