@@ -107,6 +107,11 @@ async function requireThreadRoot(channelId: string, rawThreadId: unknown): Promi
 
 async function notifyMentions(userIds: string[], communityId: string, channelId: string, messageId: string) {
   for (const userId of userIds) await publish({ type: "mention.created", userId, communityId, channelId, messageId });
+  if (userIds.length === 0) return;
+  // Web Push for devices without an open tab; loaded lazily (push imports this module).
+  void import("./push")
+    .then(({ pushMention }) => Promise.all(userIds.map((userId) => pushMention(userId, channelId, messageId))))
+    .catch((error: unknown) => console.error("[push] mention push failed", error));
 }
 
 export interface MessagePage {

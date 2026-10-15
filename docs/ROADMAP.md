@@ -179,8 +179,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 ### P2 — important improvements
 
 ~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, ~~bot accounts,
-incoming webhooks and a versioned public API (OpenAPI)~~ ✅, Web Push notifications (VAPID, no third-party
-service), ~~per-community export/import~~ ✅, retention jobs, ban explanations and appeals, published rules and
+incoming webhooks and a versioned public API (OpenAPI)~~ ✅, ~~Web Push notifications (VAPID)~~ ✅, ~~per-community export/import~~ ✅, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).
 
 ### P3 — later

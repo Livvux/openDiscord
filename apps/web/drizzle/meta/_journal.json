@@ -155,6 +155,13 @@
       "when": 1792075216240,
       "tag": "0021_imported_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792075841333,
+      "tag": "0022_push_subscriptions",
+      "breakpoints": true
     }
   ]
 }

@@ -68,6 +68,14 @@ relayed by your server (an SFU) and not recorded; it is encrypted in transit (DT
 end-to-end. Without the LiveKit settings, voice channels can't be created and the UI hides the option.
 Networks that block UDP fall back to TCP 7881; a TURN server is not bundled.
 
+## Push notifications
+
+Optional. Generate VAPID keys once (`npx web-push generate-vapid-keys`) and set `VAPID_PUBLIC_KEY`,
+`VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` (a `mailto:` or `https:` contact). People then switch on push for
+mentions per device in their account settings. Browsers deliver pushes through their vendor's push
+service; the payload (sender, channel, start of the message) is end-to-end encrypted for the device.
+The server only contacts well-known push services.
+
 ## Dokploy
 
 Use `docker-compose.dokploy.yml` (Git source, this repository): the same services without Caddy, since
