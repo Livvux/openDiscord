@@ -2,18 +2,18 @@ const stages = [
   {
     label: "Now",
     title: "Closed alpha",
-    items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API"],
+    items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API", "Encrypted DMs with device verification", "Appeals, rules and retention controls"],
     active: true,
   },
   {
     label: "Next",
     title: "Closer together",
-    items: ["End-to-end encrypted DMs", "Appeals and published rules", "Retention controls", "Self-hosting polish"],
+    items: ["Voice encryption and TURN", "Independent security review", "Physical-device acceptance", "Self-hosting polish"],
   },
   {
     label: "Later",
     title: "Voice and beyond",
-    items: ["Custom emoji and stickers", "Native apps", "Federation research", "Community discovery"],
+    items: ["Custom emoji and stickers", "Native apps", "Opt-in public channels", "Community discovery"],
   },
 ];
 

@@ -26,7 +26,7 @@ const features = [
   },
   {
     title: "Honest about encryption",
-    body: "Version one is not end-to-end encrypted, and we won't pretend it is. Traffic is TLS, and self-hosting keeps data on your hardware.",
+    body: "Direct messages are end-to-end encrypted between verified devices. Community text and voice are not. The integration has not had an independent security audit.",
     span: "md:col-span-2",
   },
 ];
