@@ -87,6 +87,10 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   expect((await anon.request.get(`/public/${id}`, { headers: { RSC: "1" } })).status()).toBe(404);
   expect(await (await anon.request.get("/discover")).text()).not.toContain(publicTitle);
   expect(await (await anon.request.get("/sitemap.xml")).text()).not.toContain(`/public/${id}`);
+  await anon.goto("/privacy");
+  await expect(anon.getByRole("heading", { name: "Public channels", exact: true })).toBeVisible();
+  await expect(anon.getByText(/Later profile renames do not change a stored public name/)).toBeVisible();
+  await expectNoA11yViolations(anon);
   expect(errors).toEqual([]);
   for (const page of [owner, member, anon, reporter]) await page.context().close();
 });
