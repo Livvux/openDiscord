@@ -1,0 +1,94 @@
+name: Desktop bundles
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  push:
+    branches: ['main']
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Install Tauri bundler
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Generate native icons from existing brand
+        run: cargo tauri icon ../apps/web/public/brand/symbol-flat.svg
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Native harness regression tests
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Dependency security and license inventory
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+          cargo metadata --locked --format-version 1 > dependency-metadata.json
+      - name: Build unsigned native bundles
+        run: cargo tauri build --ci
+      - name: Linux native runtime acceptance
+        if: runner.os == 'Linux'
+        run: |
+          cargo install tauri-driver --locked
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/desktop-fixture.key -out /tmp/desktop-fixture.crt -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+          sudo cp /tmp/desktop-fixture.crt /usr/local/share/ca-certificates/desktop-fixture.crt
+          sudo update-ca-certificates
+          OPENDISCORD_INSTANCE_URL=https://localhost:9443 cargo build --locked
+          xvfb-run -a python3 tests/native_smoke.py
+      - name: Checksums
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib
+          root = pathlib.Path('target/release/bundle')
+          lines = []
+          for file in sorted(root.rglob('*')):
+              if file.is_file():
+                  lines.append(hashlib.sha256(file.read_bytes()).hexdigest() + '  ' + str(file.relative_to(root)))
+          if not lines:
+              raise SystemExit('No native bundle files built')
+          pathlib.Path('SHA256SUMS').write_text('\n'.join(lines) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-unsigned-${{ runner.os }}-${{ github.sha }}
+          path: |
+            desktop/target/release/bundle/
+            desktop/SHA256SUMS
+            desktop/dependency-metadata.json
+            desktop/native-evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve Linux runtime diagnostics on failure
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-diagnostics-${{ github.sha }}
+          path: desktop/native-evidence/
+          if-no-files-found: ignore
+          retention-days: 14
