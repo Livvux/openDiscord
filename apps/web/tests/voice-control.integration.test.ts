@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -137,7 +138,7 @@ describe("voice-only scope, immutable public state and replay", () => {
     await upload(a); await upload(b, { "signed_curve25519:one": keyContent("d"), "signed_curve25519:two": keyContent("e") });
     const request = claim(b);
     const results = await Promise.all(Array.from({ length: 5 }, () => crypto(a, request)));
-    expect(results.every((r) => JSON.stringify(r) === JSON.stringify(results[0]))).toBe(true);
+    expect(results.every((r) => isDeepStrictEqual(r, results[0]))).toBe(true);
     expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, b.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(1);
     await expect(crypto(a, { ...request, body: { one_time_keys: { [a.snapshot.voiceUserId]: { [a.snapshot.voiceDeviceId]: "signed_curve25519" } } } })).rejects.toMatchObject({ code: "conflict" });
     await upload(b, { "signed_curve25519:one": keyContent("d"), "signed_curve25519:two": keyContent("e") });
@@ -178,8 +179,9 @@ describe("voice-only scope, immutable public state and replay", () => {
       await upload(b);
       const updated = await crypto(a, request);
       expect(JSON.stringify(updated)).toContain(b.snapshot.voiceDeviceId);
-      await db.insert(voiceSignature).values({ signerMemberId: a.snapshot.memberId, targetMemberId: b.snapshot.memberId, keyId: b.snapshot.voiceDeviceId, signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: "n".repeat(86) } }).onConflictDoUpdate({ target: [voiceSignature.signerMemberId, voiceSignature.targetMemberId, voiceSignature.keyId], set: { signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: "n".repeat(86) } } });
-      expect(JSON.stringify(await crypto(a, request))).toContain("n".repeat(86));
+      const signature = (requestId ? "p" : "n").repeat(86);
+      await db.insert(voiceSignature).values({ signerMemberId: a.snapshot.memberId, targetMemberId: b.snapshot.memberId, keyId: b.snapshot.voiceDeviceId, signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: signature } }).onConflictDoUpdate({ target: [voiceSignature.signerMemberId, voiceSignature.targetMemberId, voiceSignature.keyId], set: { signatures: { [`ed25519:${a.snapshot.voiceDeviceId}`]: signature } } });
+      expect(JSON.stringify(await crypto(a, request))).toContain(signature);
     }
     expect(await db.$count(voiceControlReceipt, eq(voiceControlReceipt.senderMemberId, a.snapshot.memberId))).toBe(1);
   });
@@ -248,7 +250,7 @@ describe("leases, generation and mailbox transaction order", () => {
     await db.insert(userBlock).values({ blockerId: b.userId, blockedId: a.userId });
     await expect(crypto(a, { kind: "sync" })).rejects.toThrow("unavailable");
     await db.delete(userBlock).where(eq(userBlock.blockerId, b.userId));
-    await db.update(role).set({ permissions: sql`${role.permissions} & ~${Permission.Connect}` }).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
+    await db.update(role).set({ permissions: sql`${role.permissions} & ${~Permission.Connect}` }).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
     await expect(refresh(b)).rejects.toThrow("ended");
     await expect(joinVoiceControl(f.accounts[1], { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: b.secret, consent: true })).rejects.toMatchObject({ code: "forbidden" });
   });
@@ -395,7 +397,8 @@ describe("pinned native18.9.0 public request compatibility", () => {
       expect(peer?.isVerified()).toBe(false);
       if (!peer) throw new Error("Missing scoped native peer.");
       await a.out(peer.requestVerification([C.VerificationMethod.SasV1])[1]); await b.sync();
-      const accept = b.verification(a).acceptWithMethods([C.VerificationMethod.SasV1]);
+      const senderVerification = a.verification(b), receiverVerification = b.verification(a);
+      const accept = receiverVerification.acceptWithMethods([C.VerificationMethod.SasV1]);
       if (!accept) throw new Error("Native verification acceptance unavailable.");
       await b.out(accept); await a.sync();
       const started = await a.verification(b).startSas();
@@ -409,7 +412,7 @@ describe("pinned native18.9.0 public request compatibility", () => {
       for (const request of await a.sas(b).confirm()) await a.out(request);
       for (const request of await b.sas(a).confirm()) await b.out(request);
       await a.sync(); await b.sync(); await a.sync(); await b.sync();
-      expect(a.verification(b).isDone() && b.verification(a).isDone()).toBe(true);
+      expect(senderVerification.isDone() && receiverVerification.isDone()).toBe(true);
       await a.query([a, b]); await b.query([a, b]);
       const verifiedPeer = await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId));
       expect(verifiedPeer?.isVerified()).toBe(true);
