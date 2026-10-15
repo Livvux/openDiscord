@@ -61,31 +61,32 @@ async function fixture(count = 2) {
 async function refresh(endpoints: Endpoint[]) {
   for (const e of endpoints) { e.snapshot = await heartbeatVoiceControl(auth(e), binding(e)); await e.owner.transition(e.snapshot); }
 }
-async function state(e: Endpoint) { const [value] = await e.owner.verificationStates(); if (!value) throw new Error("Missing real owner SAS state."); return value; }
+async function state(e: Endpoint, peer?: Endpoint) { const value = (await e.owner.verificationStates()).find(s => !peer || s.peer.memberId === peer.snapshot.memberId); if (!value) throw new Error("Missing real owner SAS state."); return value; }
 async function verify(a: Endpoint, b: Endpoint) {
   const decimals = new Map<string, number[]>();
-  const confirm = C.Sas.prototype.confirm;
-  const confirmation = vi.spyOn(C.Sas.prototype, "confirm").mockImplementation(function(this: C.Sas) {
-    const value = this.decimals();
-    if (!value) throw new Error("Genuine decimal SAS unavailable before confirmation.");
-    decimals.set(this.userId.toString(), Array.from(value));
-    if (decimals.size === 2) expect([...decimals.values()][0]).toEqual([...decimals.values()][1]);
-    return confirm.call(this);
+  const emojiIndex = C.Sas.prototype.emojiIndex;
+  const observation = vi.spyOn(C.Sas.prototype, "emojiIndex").mockImplementation(function(this: C.Sas) {
+    const decimal = this.decimals();
+    if (decimal) decimals.set(this.userId.toString(), Array.from(decimal));
+    return emojiIndex.call(this);
   });
   const handle = await a.owner.requestVerification(b.snapshot.memberId);
-  await b.owner.receive(); const remote = await state(b);
+  await b.owner.receive(); const remote = await state(b, a);
   await b.owner.verificationStep(remote.handle, "accept"); await a.owner.receive();
   await a.owner.verificationStep(handle, "start"); await b.owner.receive();
   await b.owner.verificationStep(remote.handle, "accept-sas"); await a.owner.receive(); await b.owner.receive(); await a.owner.receive();
   // Compare both actual public owner SAS values before the test acts as the human confirmer.
-  const first = await state(a), second = await state(b);
+  const first = await state(a, b), second = await state(b, a);
   expect(first.emojiIndices).toHaveLength(7); expect(first.emojiIndices).toEqual(second.emojiIndices);
   expect(first.confirmed).toBe(false); expect(second.confirmed).toBe(false);
+  expect(decimals.size).toBe(2);
+  expect([...decimals.values()][0]).toHaveLength(3);
+  expect([...decimals.values()][0]).toEqual([...decimals.values()][1]);
+  observation.mockRestore();
   await a.owner.verificationStep(handle, "confirm"); await b.owner.verificationStep(remote.handle, "confirm");
   for (let round = 0; round < 3; round++) { await a.owner.receive(); await b.owner.receive(); }
   await a.owner.query([a.snapshot.memberId, b.snapshot.memberId]); await b.owner.query([a.snapshot.memberId, b.snapshot.memberId]);
-  expect((await state(a)).done).toBe(true); expect((await state(b)).done).toBe(true);
-  expect(decimals.size).toBe(2); confirmation.mockRestore();
+  expect((await state(a, b)).done).toBe(true); expect((await state(b, a)).done).toBe(true);
   await a.owner.admit(b.snapshot.memberId); await b.owner.admit(a.snapshot.memberId);
 }
 async function context(a: Endpoint, b: Endpoint) {
@@ -110,6 +111,31 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     const reverse = material(b, a, epoch); await b.owner.sendControl(reverse); expect(await a.owner.receive()).toEqual([reverse]);
     expect(await dmBaseline()).toEqual(baseline);
     expect(a.calls.some(c => c.request.kind === "claim")).toBe(true);
+  }, 30_000);
+
+  for (const change of ["generation", "epoch", "audience"] as const) it(`fences a genuinely decrypted control across an ack-delivery ${change} change`, async () => {
+    const endpoints = await fixture(3), [a, b, c] = endpoints;
+    await verify(a, b);
+    if (change === "audience") { await verify(a, c); await verify(b, c); }
+    const epoch = await context(a, b);
+    const positive = material(a, b, epoch); await a.owner.sendControl(positive);
+    expect(await b.owner.receive()).toEqual([positive]);
+    const entered = deferred(), release = deferred();
+    b.after = async input => { if (input.request.kind === "ack") { entered.resolve(); await release.promise; } };
+    const control = material(a, b, epoch); await a.owner.sendControl(control);
+    const receive = b.owner.receive();
+    const outcome = receive.then(value => ({ value }), error => ({ error: error as unknown }));
+    await entered.promise;
+    if (change === "generation") {
+      await leaveVoiceControl(auth(c), binding(c));
+      b.snapshot = await heartbeatVoiceControl(auth(b), binding(b));
+      await b.owner.transition(b.snapshot);
+    } else await b.owner.setControlContext(change === "epoch" ? randomUUID() : epoch, change === "audience" ? endpoints.map(e => e.snapshot.memberId) : [a.snapshot.memberId, b.snapshot.memberId]);
+    release.resolve();
+    expect(await outcome).toMatchObject({ error: expect.any(VoiceGenerationInterrupted) });
+    b.after = undefined;
+    // A revision fence keeps the owner alive and cannot itself grant new admission.
+    expect(await b.owner.receive()).toEqual([]);
   }, 30_000);
 
   it.each(["session", "anchor", "lease"] as const)("fences actual %s authority denial without enqueue or lease renewal", async loss => {
