@@ -8,6 +8,8 @@ import { channel, user } from "@/db/schema";
 import { loadChannelAuthority, requireChannel } from "./access";
 import { AppError } from "./errors";
 import { has, Permission } from "./permissions";
+import { grantBoundVoiceMedia } from "./voice-control";
+import type { VoiceMediaSource } from "@/lib/voice/contracts";
 import { parse, uuid } from "./validation";
 
 const url = process.env.LIVEKIT_URL;
@@ -69,6 +71,23 @@ export async function createVoiceToken(userId: string, rawChannelId: unknown): P
     canSpeak: sources.includes(TrackSource.MICROPHONE),
     canVideo: sources.includes(TrackSource.CAMERA),
   };
+}
+
+/** Unreachable product preparation. Signing happens only after the locked grant commits.
+ * A later revoke can race signing/delivery; generation-room/key lifecycle is required at activation. */
+export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) {
+  if (!voiceEnabled) throw new AppError("not_found", "Voice isn't set up on this instance.");
+  const grant = await grantBoundVoiceMedia(rawAuth, binding);
+  const expiresAt = Date.parse(grant.expiresAt);
+  const ttl = Math.min(TOKEN_TTL_SECONDS, Math.floor(expiresAt / 1000) - Math.ceil(Date.now() / 1000));
+  if (ttl < 1) throw new AppError("forbidden", "This voice enrollment has ended.");
+  const sourceTypes: Record<VoiceMediaSource, TrackSource> = { microphone: TrackSource.MICROPHONE, camera: TrackSource.CAMERA, screen_share: TrackSource.SCREEN_SHARE, screen_share_audio: TrackSource.SCREEN_SHARE_AUDIO };
+  const token = new AccessToken(apiKey, apiSecret, { identity: grant.participantIdentity, ttl });
+  token.addGrant({ room: grant.roomName, roomJoin: true, canSubscribe: true, canPublish: grant.sources.length > 0, canPublishSources: grant.sources.map(source => sourceTypes[source]), canPublishData: false, canUpdateOwnMetadata: false });
+  const signingDeadline = Math.min(expiresAt, (Math.floor(Date.now() / 1000) + ttl) * 1000);
+  const jwt = await token.toJwt();
+  if (Date.now() >= signingDeadline) throw new AppError("forbidden", "This voice enrollment has ended.");
+  return { url: url!, token: jwt, ...grant };
 }
 
 export interface VoiceParticipant {
@@ -135,10 +154,4 @@ export function afterAccessChange(communityId: string): void {
   const run = () => void reconcileVoice(communityId).catch((error: unknown) => console.error("[voice] reconcile failed", error));
   run();
   setTimeout(run, RECHECK_AFTER_MS).unref?.();
-}
-
-// Temporary unreachable TDD stub; removed by the implementation commit.
-export async function createBoundVoiceToken(_auth: unknown, _binding: unknown): Promise<{ token: string }> {
-  void _auth; void _binding;
-  throw new Error("Bound media authorization is not implemented.");
 }

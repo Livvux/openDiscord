@@ -2,6 +2,7 @@
 
 import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
+import { dmMetadataSchema as metadataSchema } from "./enrollment";
 import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
 
@@ -10,7 +11,6 @@ type Outgoing = Matrix.KeysUploadRequest | Matrix.KeysQueryRequest | Matrix.Keys
 type Metadata = { id: string; secret: string; storeKey: string };
 export type TrustedDevice = { userId: string; id: string; verified: boolean; fingerprint: string };
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
-const metadataSchema = z.object({ id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/), storeKey: z.string().min(32) });
 const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(2), origin: z.url(), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
 const receiptSchema = z.object({ id: z.uuid(), recipient: z.uuid() }).strict();
 const transferSchema = recoverySnapshotSchema.extend({ recipient: z.uuid(), transferId: z.uuid() }).strict();

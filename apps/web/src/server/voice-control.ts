@@ -5,7 +5,8 @@ import { z } from "zod";
 import { db } from "@/db";
 import { channel, dmDevice, session, user, userBlock } from "@/db/schema";
 import { voiceCall, voiceCallMember, voiceControlMailbox, voiceControlReceipt, voiceIdentity, voicePrekey, voiceSignature } from "@/db/voice-schema";
-import { VOICE_DOMAIN, VOICE_LIMITS as L, voiceBindingSchema, voiceCryptoInputSchema, voiceDeviceKeysSchema, voiceEventSchema, voiceJoinAuthSchema, voiceJoinSchema, voiceMemberAuthSchema, voicePrekeySchema, voiceSignedObjectSchema, type VoiceBinding, type VoiceJoinAuth, type VoiceMemberAuth, type VoiceRemoval, type VoiceSnapshot } from "@/lib/voice/contracts";
+import { VOICE_DOMAIN, VOICE_LIMITS as L, voiceBindingSchema, voiceCryptoInputSchema, voiceDeviceKeysSchema, voiceEventSchema, voiceJoinAuthSchema, voiceJoinSchema, voiceMemberAuthSchema, voicePrekeySchema, voiceSignedObjectSchema, type VoiceBinding, type VoiceJoinAuth, type VoiceMemberAuth, type VoiceRemoval, type VoiceSnapshot, type VoiceMediaGrant, type VoiceMediaSource } from "@/lib/voice/contracts";
+import { voiceRoomName } from "@/lib/voice/room";
 import { loadChannelAuthority, lockCommunity, requireChannel } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { assertActiveUser } from "./instance-policy";
@@ -172,6 +173,29 @@ async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding,
   try { await noBlockedPairs(tx, await liveMembers(tx, call.id)); } catch (error) { if (error instanceof AppError) return error; throw error; }
   return { call, own: current, now, removals };
 }
+/** Internal only: capture authorization and roster under the same lifecycle/community/call locks.
+ * No heartbeat extension, SDK call or network effect occurs in this transaction. */
+export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Promise<VoiceMediaGrant> {
+  const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
+  await consume(`voice-control:${auth.userId}`, 240, 60_000);
+  const result = await db.transaction(async (tx): Promise<VoiceMediaGrant | AppError> => {
+    const access = await boundAccess(tx, auth, binding);
+    if (access instanceof AppError) return access;
+    const { call, own, now, removals } = access;
+    if (binding.expectedGeneration !== call.generation) return conflict("Voice membership changed. Refresh the current roster.");
+    const { authority } = await requireChannel(tx, call.channelId, auth.userId, Permission.Connect);
+    const [currentSession] = await tx.select({ expiresAt: session.expiresAt }).from(session).where(eq(session.id, auth.sessionId));
+    const sources: VoiceMediaSource[] = [
+      ...(has(authority, Permission.Speak) ? ["microphone" as const] : []),
+      ...(has(authority, Permission.Video) ? ["camera" as const, "screen_share" as const, "screen_share_audio" as const] : []),
+    ];
+    return { snapshot: await snapshot(tx, call, own, now, removals), roomName: voiceRoomName({ channelId: call.channelId, callId: call.id, generation: call.generation }), participantIdentity: participant(own.id), sources, canPublishData: false,
+      expiresAt: new Date(Math.min(own.leaseExpiresAt.getTime(), currentSession.expiresAt.getTime(), now.getTime() + 60_000)).toISOString() };
+  });
+  if (result instanceof AppError) throw result;
+  return result;
+}
+
 export async function heartbeatVoiceControl(rawAuth: unknown, input: unknown): Promise<VoiceSnapshot> {
   const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
@@ -536,10 +560,4 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
   });
   if (result instanceof AppError) throw result;
   return result;
-}
-
-// Temporary unreachable TDD stub; removed by the implementation commit.
-export async function grantBoundVoiceMedia(_auth: unknown, _binding: unknown): Promise<{ snapshot: VoiceSnapshot; roomName: string; participantIdentity: string; sources: string[]; canPublishData: false; expiresAt: string }> {
-  void _auth; void _binding;
-  throw new Error("Bound media authorization is not implemented.");
 }

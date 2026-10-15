@@ -53,3 +53,7 @@ export function voiceEventSchema(type: string): z.ZodType | undefined {
   if (type === "m.room.encrypted") return encryptedEvent;
   return type.startsWith("m.key.verification.") ? sasSchemas[type.slice("m.key.verification.".length)] : undefined;
 }
+
+/** Inert locked authorization snapshot; never proof of native SAS or media admission. */
+export type VoiceMediaSource = "microphone" | "camera" | "screen_share" | "screen_share_audio";
+export type VoiceMediaGrant = { snapshot: VoiceSnapshot; roomName: string; participantIdentity: string; sources: VoiceMediaSource[]; canPublishData: false; expiresAt: string };
