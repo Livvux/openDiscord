@@ -2,19 +2,15 @@
 // connections are capped in lifetime so access is re-checked regularly.
 import { db } from "@/db";
 import { loadAuthority, loadChannelAuthority } from "@/server/access";
-import { AppError, notFound } from "@/server/errors";
+import { notFound } from "@/server/errors";
 import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
 import { getMessageForBroadcast } from "@/server/messages";
 import { hub, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
 import { parse, uuid } from "@/server/validation";
+import { acquireStreamLease, MAX_STREAM_LIFETIME_MS } from "@/server/stream-leases";
 
 const HEARTBEAT_MS = 25_000;
-const MAX_LIFETIME_MS = 10 * 60_000;
-/** Several tabs are fine; hundreds of streams from one account are abuse. Per process. */
-const MAX_STREAMS_PER_USER = 8;
-
-const openStreams = new Map<string, number>();
 
 // The hub hands the same event object to every stream in this process, so each message is
 // loaded once per event (not once per subscriber) and never served stale after a later edit.
@@ -45,19 +41,17 @@ export async function HEAD(request: Request, ctx: RouteContext<"/api/communities
 
 export async function GET(request: Request, ctx: RouteContext<"/api/communities/[communityId]/events">) {
   let userId: string;
+  let release: () => Promise<void>;
   let communityId: string;
   try {
     ({ userId, communityId } = await authorize(request, ctx));
-    if ((openStreams.get(userId) ?? 0) >= MAX_STREAMS_PER_USER) {
-      throw new AppError("rate_limited", "Too many open connections. Close some tabs.");
-    }
+    release = await acquireStreamLease(userId, "community");
   } catch (error) {
     return errorResponse(error);
   }
 
-  openStreams.set(userId, (openStreams.get(userId) ?? 0) + 1);
   const encoder = new TextEncoder();
-  let cleanup = () => {};
+  let cleanup: () => Promise<void> = release;
   let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -68,7 +62,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
       const close = () => {
         if (closed) return;
         closed = true;
-        cleanup();
+        void cleanup().catch((error: unknown) => console.error("[realtime] stream lease release failed", error));
         try {
           controller.close();
         } catch {
@@ -119,34 +113,39 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
         }
       };
 
-      const unsubscribe = hub.subscribe(communityId, (e) =>
-        onEvent(e).catch((error: unknown) => {
-          console.error("[realtime] failed to forward event", error);
-          close();
-        }),
-      );
-      // A named event (not a comment) so the client can detect dead connections.
-      const heartbeat = setInterval(() => { void checkAccess().then((allowed) => { if (allowed) send("ping", {}); }); }, HEARTBEAT_MS);
-      const lifetime = setTimeout(close, MAX_LIFETIME_MS);
-      let released = false;
+      let unsubscribe = () => {};
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let lifetime: ReturnType<typeof setTimeout> | undefined;
       cleanup = () => {
+        request.signal.removeEventListener("abort", close);
         unsubscribe();
         clearInterval(heartbeat);
         clearTimeout(lifetime);
-        if (released) return;
-        released = true;
-        const remaining = (openStreams.get(userId) ?? 1) - 1;
-        if (remaining > 0) openStreams.set(userId, remaining);
-        else openStreams.delete(userId);
+        return release();
       };
-      request.signal.addEventListener("abort", close);
-      // Retry quickly after the planned lifetime close.
+      request.signal.addEventListener("abort", close, { once: true });
+      // Abort may have happened while authentication or the database acquisition was pending.
+      if (request.signal.aborted) { close(); return; }
+      try {
+        unsubscribe = hub.subscribe(communityId, (e) =>
+          onEvent(e).catch((error: unknown) => {
+            console.error("[realtime] failed to forward event", error);
+            close();
+          }),
+        );
+        // A named event (not a comment) so the client can detect dead connections.
+        heartbeat = setInterval(() => { void checkAccess().then((allowed) => { if (allowed) send("ping", {}); }); }, HEARTBEAT_MS);
+        lifetime = setTimeout(close, MAX_STREAM_LIFETIME_MS);
+      } catch (error) {
+        close();
+        throw error;
+      }
       controller.enqueue(encoder.encode("retry: 2000\n\n"));
       send("ready", {});
     },
     cancel() {
       closed = true;
-      cleanup();
+      return cleanup();
     },
   });
 

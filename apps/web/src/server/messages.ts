@@ -254,7 +254,7 @@ export async function deleteMessage(userId: string, rawMessageId: unknown) {
 export async function toggleReaction(userId: string, rawMessageId: unknown, rawEmoji: unknown): Promise<void> {
   const value = parse(emoji, rawEmoji);
   // Every toggle re-sends the message to all viewers, so it gets its own burst limit.
-  consume(`reaction:${userId}`, 10, 10_000);
+  await consume(`reaction:${userId}`, 10, 10_000);
   const row = await loadOwnedMessage(rawMessageId);
   await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
   await db.transaction(async (tx) => {

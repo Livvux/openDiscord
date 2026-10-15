@@ -19,7 +19,7 @@ import * as unread from "@/server/unread";
 async function run<T>(fn: (userId: string) => Promise<T>, refreshUi = true): Promise<ActionResult<T>> {
   return toResult(async () => {
     const user = await requireUser();
-    consume(`mutation:${user.id}`, MUTATION_LIMIT.max, MUTATION_LIMIT.windowMs);
+    await consume(`mutation:${user.id}`, MUTATION_LIMIT.max, MUTATION_LIMIT.windowMs);
     const data = await fn(user.id);
     if (refreshUi) refresh();
     return data;
@@ -72,7 +72,7 @@ export const deleteMessage = async (messageId: string) => run((u) => messages.de
 export const markChannelRead = async (channelId: string, messageId: string) =>
   toResult(async () => {
     const user = await requireUser();
-    consume(`read:${user.id}`, 60, 60_000);
+    await consume(`read:${user.id}`, 60, 60_000);
     await unread.markChannelRead(user.id, channelId, messageId);
   });
 

@@ -4,20 +4,16 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { community } from "@/db/schema";
 import { loadChannelAuthority } from "@/server/access";
-import { AppError } from "@/server/errors";
 import { errorResponse } from "@/server/http";
 import { getMessageForBroadcast, type MessageView } from "@/server/messages";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
 import { mutedCommunities, touchPresence } from "@/server/presence";
 import { excerptOf } from "@/lib/mentions";
+import { acquireStreamLease, MAX_STREAM_LIFETIME_MS } from "@/server/stream-leases";
 
 const HEARTBEAT_MS = 25_000;
-const MAX_LIFETIME_MS = 10 * 60_000;
-const MAX_STREAMS_PER_USER = 8;
 const EXCERPT_LENGTH = 140;
-
-const openStreams = new Map<string, number>();
 
 export interface MentionNotice {
   communityId: string;
@@ -55,18 +51,16 @@ async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "m
 
 export async function GET(request: Request) {
   let userId: string;
+  let release: () => Promise<void>;
   try {
     userId = (await requireUser(request.headers)).id;
-    if ((openStreams.get(userId) ?? 0) >= MAX_STREAMS_PER_USER) {
-      throw new AppError("rate_limited", "Too many open connections. Close some tabs.");
-    }
+    release = await acquireStreamLease(userId, "personal");
   } catch (error) {
     return errorResponse(error);
   }
 
-  openStreams.set(userId, (openStreams.get(userId) ?? 0) + 1);
   const encoder = new TextEncoder();
-  let cleanup = () => {};
+  let cleanup: () => Promise<void> = release;
   let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -77,7 +71,7 @@ export async function GET(request: Request) {
       const close = () => {
         if (closed) return;
         closed = true;
-        cleanup();
+        void cleanup().catch((error: unknown) => console.error("[realtime] stream lease release failed", error));
         try {
           controller.close();
         } catch {
@@ -93,39 +87,45 @@ export async function GET(request: Request) {
         const notice = await mentionNotice(userId, event);
         if (notice) send("mention", notice);
       };
-      const unsubscribe = hub.subscribe(userTopic(userId), (e) =>
-        onEvent(e).catch((error: unknown) => {
-          console.error("[realtime] failed to forward personal event", error);
-          close();
-        }),
-      );
-      // The heartbeat doubles as presence: an open tab means "online" (shown only if the person opted in).
-      const beat = () => void sessionValid().then(async (ok) => {
-        if (!ok) return;
-        send("ping", {});
-        await touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
-      });
-      void touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
-      const heartbeat = setInterval(beat, HEARTBEAT_MS);
-      const lifetime = setTimeout(close, MAX_LIFETIME_MS);
-      let released = false;
+      let unsubscribe = () => {};
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let lifetime: ReturnType<typeof setTimeout> | undefined;
       cleanup = () => {
+        request.signal.removeEventListener("abort", close);
         unsubscribe();
         clearInterval(heartbeat);
         clearTimeout(lifetime);
-        if (released) return;
-        released = true;
-        const remaining = (openStreams.get(userId) ?? 1) - 1;
-        if (remaining > 0) openStreams.set(userId, remaining);
-        else openStreams.delete(userId);
+        return release();
       };
-      request.signal.addEventListener("abort", close);
+      request.signal.addEventListener("abort", close, { once: true });
+      // Abort may have happened while authentication or the database acquisition was pending.
+      if (request.signal.aborted) { close(); return; }
+      try {
+        unsubscribe = hub.subscribe(userTopic(userId), (e) =>
+          onEvent(e).catch((error: unknown) => {
+            console.error("[realtime] failed to forward personal event", error);
+            close();
+          }),
+        );
+        // The heartbeat doubles as presence: an open tab means "online" (shown only if the person opted in).
+        const beat = () => void sessionValid().then(async (ok) => {
+          if (!ok) return;
+          send("ping", {});
+          await touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
+        });
+        void touchPresence(userId).catch((error: unknown) => console.error("[presence] touch failed", error));
+        heartbeat = setInterval(beat, HEARTBEAT_MS);
+        lifetime = setTimeout(close, MAX_STREAM_LIFETIME_MS);
+      } catch (error) {
+        close();
+        throw error;
+      }
       controller.enqueue(encoder.encode("retry: 2000\n\n"));
       send("ready", {});
     },
     cancel() {
       closed = true;
-      cleanup();
+      return cleanup();
     },
   });
 

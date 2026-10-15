@@ -33,6 +33,24 @@ export const authRateLimit = pgTable("auth_rate_limit", {
   windowStart: bigint("window_start", { mode: "number" }).notNull(),
 }, (t) => [index("auth_rate_limit_window_idx").on(t.windowStart)]);
 
+/** Shared application sliding windows. Keys are HMACs; hits contain timestamps only. */
+export const applicationRateLimit = pgTable("application_rate_limit", {
+  key: text("key").primaryKey(),
+  hits: bigint("hits", { mode: "number" }).array().notNull(),
+  windowStart: bigint("window_start", { mode: "number" }).notNull(),
+}, (t) => [index("application_rate_limit_window_idx").on(t.windowStart)]);
+
+/** A crashed worker's connection slots expire without needing that worker to release them. */
+export const streamLease = pgTable("stream_lease", {
+  id: uuid("id").primaryKey().default(sql`uuidv7()`),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  scope: text("scope", { enum: ["personal", "community"] }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [
+  index("stream_lease_user_scope_idx").on(t.userId, t.scope),
+  index("stream_lease_expiry_idx").on(t.expiresAt),
+]);
+
 // Targets deliberately aren't cascading FKs: moderation evidence survives content/account deletion.
 // Message bodies are never copied into reports or the audit log.
 export const abuseReport = pgTable("abuse_report", {

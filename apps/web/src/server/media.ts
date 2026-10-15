@@ -152,7 +152,7 @@ export async function uploadAttachment(
 ): Promise<AttachmentView> {
   requireStorage();
   const channelId = parse(uuid, rawChannelId);
-  consume(`upload:${userId}`, UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs);
+  await consume(`upload:${userId}`, UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs);
   const type = (contentType ?? "").split(";")[0].trim().toLowerCase();
   const image = isImageType(type);
   const limit = image ? MAX_ATTACHMENT_BYTES : MAX_FILE_BYTES;
