@@ -177,6 +177,8 @@ export const message = pgTable(
     editedAt: timestamp("edited_at", { withTimezone: true }),
     /** The message this one replies to (same channel); unlinked when that message is deleted. */
     replyToId: uuid("reply_to_id").references((): AnyPgColumn => message.id, { onDelete: "set null" }),
+    /** Thread messages point at their root (a top-level message in the same channel); deleting the root deletes the thread. */
+    threadId: uuid("thread_id").references((): AnyPgColumn => message.id, { onDelete: "cascade" }),
     pinnedAt: timestamp("pinned_at", { withTimezone: true }),
     /** Full-text index; the "simple" configuration works for every language (no stemming). */
     search: tsvector("search").generatedAlwaysAs((): SQL => sql`to_tsvector('simple', ${message.content})`),
@@ -187,6 +189,7 @@ export const message = pgTable(
     index("message_pinned_idx").on(t.channelId, t.pinnedAt).where(sql`${t.pinnedAt} is not null`),
     // Deleting a message unlinks its replies; this keeps that FK action cheap.
     index("message_reply_idx").on(t.replyToId).where(sql`${t.replyToId} is not null`),
+    index("message_thread_idx").on(t.threadId, t.id).where(sql`${t.threadId} is not null`),
     index("message_search_idx").using("gin", t.search),
   ],
 );

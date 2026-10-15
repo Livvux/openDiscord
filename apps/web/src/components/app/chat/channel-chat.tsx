@@ -10,6 +10,7 @@ import { useRealtime } from "../realtime-provider";
 import { useClearUnread } from "../unread-provider";
 import { Composer } from "./composer";
 import { MessageItem, PendingItem } from "./message-item";
+import { ThreadPanel } from "./thread-panel";
 import { useChannelMessages } from "./use-channel-messages";
 
 interface ChannelChatProps {
@@ -24,6 +25,8 @@ interface ChannelChatProps {
   lastReadId: string | null;
   /** Authors whose messages are collapsed for this person. */
   blockedIds: string[];
+  /** Set when this instance shows a thread (in the side panel) instead of the channel. */
+  threadRoot?: MessageView;
 }
 
 interface Pending {
@@ -36,9 +39,15 @@ interface Pending {
 const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 120;
 
-export function ChannelChat({ channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds }: ChannelChatProps) {
+export function ChannelChat(props: ChannelChatProps) {
+  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot } = props;
   const { state } = useRealtime();
-  const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage);
+  const threadId = threadRoot?.id ?? null;
+  const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  // The live root from the list: edits show up, and a deleted root closes its thread.
+  const openThread = openThreadId ? (messages.find((m) => m.id === openThreadId) ?? null) : null;
+  const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -51,9 +60,9 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
   const clearUnread = useClearUnread();
   const newest = messages.at(-1)?.id;
 
-  // Reading the newest message while the tab is visible marks the channel read.
+  // Reading the newest message while the tab is visible marks the channel read (threads don't move the marker).
   useEffect(() => {
-    if (!newest) return;
+    if (!newest || threadId) return;
     const mark = () => {
       if (document.visibilityState !== "visible") return;
       clearUnread?.(channel.id);
@@ -65,7 +74,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", mark);
     };
-  }, [newest, channel.id, clearUnread]);
+  }, [newest, threadId, channel.id, clearUnread]);
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
@@ -96,7 +105,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
     const replyToId = replyTo?.id ?? null;
     setReplyTo(null);
-    const result = await sendMessage(channel.id, content, attachmentIds, replyToId);
+    const result = await sendMessage(channel.id, content, attachmentIds, replyToId, threadId);
     setPending((p) => p.filter((x) => x.tempId !== tempId));
     if (result.ok) {
       upsert(result.data);
@@ -108,14 +117,14 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
     return false;
   }
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {state === "reconnecting" && (
+  const column = (
+    <div className={`flex min-h-0 flex-1 flex-col ${openThread ? "max-lg:hidden" : ""}`}>
+      {!threadId && state === "reconnecting" && (
         <p role="status" className="bg-amber-500/15 px-4 py-1.5 text-center text-sm text-amber-200">
           Connection lost. Reconnecting…
         </p>
       )}
-      {state === "closed" && (
+      {!threadId && state === "closed" && (
         <p role="status" className="bg-destructive/15 px-4 py-1.5 text-center text-sm">
           Live updates stopped. <button className="underline" onClick={() => window.location.reload()}>Reload</button>
         </p>
@@ -136,13 +145,29 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
               </Button>
               {loadError && <p role="alert" className="text-sm text-destructive">{loadError}</p>}
             </div>
+          ) : threadRoot ? (
+            <ol aria-label="Thread start" className="border-b border-white/5 pb-2">
+              <MessageItem
+                message={threadRoot}
+                currentUserId={currentUserId}
+                blocked={blockedIds.includes(threadRoot.authorId)}
+                grouped={false}
+                canEdit={false}
+                canDelete={false}
+                canReact={false}
+                canPin={false}
+                replyBlocked={false}
+                onDeleted={() => {}}
+                onReply={() => {}}
+              />
+            </ol>
           ) : (
             <div className="px-5 pb-2">
               <h2 className="text-xl font-semibold text-zinc-100">Welcome to #{channel.name}</h2>
               <p className="text-sm text-zinc-400">This is the start of the channel.</p>
             </div>
           )}
-          <div role="log" aria-label={`Messages in #${channel.name}`} aria-live="polite" aria-relevant="additions">
+          <div role="log" aria-label={threadRoot ? "Thread replies" : `Messages in #${channel.name}`} aria-live="polite" aria-relevant="additions">
           <ol>
             {messages.map((m, i) => {
               const prev = messages[i - 1];
@@ -170,6 +195,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
                   replyBlocked={!!m.replyTo && blockedIds.includes(m.replyTo.authorId)}
                   onDeleted={remove}
                   onReply={setReplyTo}
+                  onOpenThread={threadId ? undefined : setOpenThread}
                 />
                 </Fragment>
               );
@@ -190,6 +216,7 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
         <Composer
           channelId={channel.id}
           channelName={channel.name}
+          placeholder={threadRoot ? "Reply in thread" : undefined}
           draft={draft}
           setDraft={setDraft}
           onSend={onSend}
@@ -200,6 +227,15 @@ export function ChannelChat({ channel, initialPage, currentUserId, canSend, canM
         />
       ) : (
         <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>
+      )}
+    </div>
+  );
+  if (threadId) return column;
+  return (
+    <div className="flex min-h-0 flex-1">
+      {column}
+      {openThread && (
+        <ThreadPanel key={openThread.id} {...props} root={openThread} onClose={() => setOpenThreadId(null)} />
       )}
     </div>
   );

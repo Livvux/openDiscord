@@ -11,6 +11,8 @@ import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 interface ComposerProps {
   channelId: string;
   channelName: string;
+  /** Overrides "Message #channel" (e.g. in threads). */
+  placeholder?: string;
   draft: string;
   setDraft: (draft: string) => void;
   /** Resolves true when the message was sent; attachments are kept otherwise. Content has `<@id>` tokens. */
@@ -66,7 +68,7 @@ function useMentionSuggestions(communityId: string, query: string | null) {
   return query !== null && results?.query === query ? results.members : [];
 }
 
-export function Composer({ channelId, channelName, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply }: ComposerProps) {
+export function Composer({ channelId, channelName, placeholder, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply }: ComposerProps) {
   const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const picked = useRef<Mention[]>([]);
@@ -286,7 +288,7 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
           </>
         )}
         <label htmlFor={id} className="sr-only">
-          Message #{channelName}
+          {placeholder ?? `Message #${channelName}`}
         </label>
         <textarea
           id={id}
@@ -340,7 +342,7 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
           }}
           rows={1}
           maxLength={MESSAGE_MAX_LENGTH}
-          placeholder={`Message #${channelName}`}
+          placeholder={placeholder ?? `Message #${channelName}`}
           aria-describedby={remaining < 200 ? `${id}-remaining` : undefined}
           className={`field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400 ${mediaEnabled ? "" : "pl-2"}`}
         />

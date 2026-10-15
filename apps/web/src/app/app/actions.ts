@@ -51,8 +51,13 @@ export const revokeInvite = async (code: string) => run((u) => communities.revok
 export const acceptInvite = async (code: string) => run((u) => communities.acceptInvite(u, code), false);
 
 // Messages update the UI through the realtime stream, so they skip the router refresh.
-export const sendMessage = async (channelId: string, content: string, attachmentIds: string[] = [], replyToId: string | null = null) =>
-  run((u) => messages.sendMessage(u, channelId, content, attachmentIds, replyToId), false);
+export const sendMessage = async (
+  channelId: string,
+  content: string,
+  attachmentIds: string[] = [],
+  replyToId: string | null = null,
+  threadId: string | null = null,
+) => run((u) => messages.sendMessage(u, channelId, content, attachmentIds, replyToId, threadId), false);
 export const toggleReaction = async (messageId: string, emoji: string) => run((u) => messages.toggleReaction(u, messageId, emoji), false);
 export const setPinned = async (messageId: string, pinned: boolean) => run((u) => messages.setPinned(u, messageId, pinned), false);
 export const searchMessages = async (communityId: string, query: string, before?: string) =>

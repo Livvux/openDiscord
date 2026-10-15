@@ -72,7 +72,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Direct messages | ❌ | **P1** (with E2EE) |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
-| Threads | ❌ | P2 |
+| Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
 | Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local volume and optional ClamAV scanning remain open (P2) |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
@@ -178,7 +178,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P2 — important improvements
 
-~~Screen sharing and video calls~~ ✅, threads, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, bot accounts,
+~~Screen sharing and video calls~~ ✅, ~~threads~~ ✅, ~~channel categories~~ ✅, ~~non-image file attachments~~ ✅, bot accounts,
 incoming webhooks and a versioned public API (OpenAPI), Web Push notifications (VAPID, no third-party
 service), per-community export/import, retention jobs, ban explanations and appeals, published rules and
 minimum-age attestation (needs legal review), funding page (needs real operator cost data).

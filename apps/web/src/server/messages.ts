@@ -1,4 +1,4 @@
-import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, lt, notExists, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, message, reaction, user, userBlock } from "@/db/schema";
@@ -30,6 +30,10 @@ export interface MessageView {
   replyTo: ReplyPreview | null;
   reactions: ReactionView[];
   pinned: boolean;
+  /** The thread root this message belongs to; null for channel messages. */
+  threadId: string | null;
+  /** Thread summary for roots with replies. */
+  thread: { count: number; lastAt: string } | null;
 }
 
 const viewColumns = {
@@ -42,9 +46,10 @@ const viewColumns = {
   editedAt: message.editedAt,
   replyToId: message.replyToId,
   pinnedAt: message.pinnedAt,
+  threadId: message.threadId,
 };
 
-interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "content"> {
+interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "content" | "threadId"> {
   createdAt: Date;
   editedAt: Date | null;
   replyToId: string | null;
@@ -53,11 +58,13 @@ interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" |
 async function toViews(rows: MessageRow[]): Promise<MessageView[]> {
   const ids = rows.map((r) => r.id);
   const parents = [...new Set(rows.map((r) => r.replyToId).filter((id): id is string => id !== null))];
-  const [attachments, mentions, reactions, replies] = await Promise.all([
+  const roots = rows.filter((r) => r.threadId === null).map((r) => r.id);
+  const [attachments, mentions, reactions, replies, threads] = await Promise.all([
     attachmentsFor(ids),
     mentionsFor(ids),
     reactionsFor(ids),
     replyPreviews(parents),
+    threadSummaries(roots),
   ]);
   return rows.map(({ replyToId, pinnedAt, ...r }) => ({
     ...r,
@@ -68,7 +75,27 @@ async function toViews(rows: MessageRow[]): Promise<MessageView[]> {
     replyTo: replyToId ? (replies.get(replyToId) ?? null) : null,
     reactions: reactions.get(r.id) ?? [],
     pinned: pinnedAt !== null,
+    thread: threads.get(r.id) ?? null,
   }));
+}
+
+async function threadSummaries(rootIds: string[]): Promise<Map<string, { count: number; lastAt: string }>> {
+  if (rootIds.length === 0) return new Map();
+  const rows = await db
+    .select({ threadId: message.threadId, count: count(), lastAt: max(message.createdAt) })
+    .from(message)
+    .where(inArray(message.threadId, rootIds))
+    .groupBy(message.threadId);
+  return new Map(rows.map((r) => [r.threadId!, { count: r.count, lastAt: r.lastAt!.toISOString() }]));
+}
+
+/** A thread root: a top-level message of this channel. */
+async function requireThreadRoot(channelId: string, rawThreadId: unknown): Promise<string> {
+  const threadId = parse(uuid, rawThreadId);
+  const [root] = await db.select({ id: message.id }).from(message)
+    .where(and(eq(message.id, threadId), eq(message.channelId, channelId), isNull(message.threadId)));
+  if (!root) throw notFound("Thread not found.");
+  return threadId;
 }
 
 async function notifyMentions(userIds: string[], communityId: string, channelId: string, messageId: string) {
@@ -82,16 +109,22 @@ export interface MessagePage {
 }
 
 /** Newest page, or the page before `before` (a message id; UUIDv7 sorts by time). */
-export async function listMessages(userId: string, rawChannelId: unknown, rawBefore?: unknown): Promise<MessagePage> {
+/** A page of the channel (top-level messages) or, with `rawThreadId`, of one thread. */
+export async function listMessages(userId: string, rawChannelId: unknown, rawBefore?: unknown, rawThreadId?: unknown): Promise<MessagePage> {
   const channelId = parse(uuid, rawChannelId);
   const before = rawBefore ? parse(uuid, rawBefore) : undefined;
   const { channel: ch } = await requireChannel(db, channelId, userId);
   if (ch.kind === "voice") return { messages: [], hasMore: false };
+  const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
   const rows = await db
     .select(viewColumns)
     .from(message)
     .innerJoin(user, eq(user.id, message.authorId))
-    .where(before ? and(eq(message.channelId, channelId), lt(message.id, before)) : eq(message.channelId, channelId))
+    .where(and(
+      eq(message.channelId, channelId),
+      threadId ? eq(message.threadId, threadId) : isNull(message.threadId),
+      before ? lt(message.id, before) : undefined,
+    ))
     .orderBy(desc(message.id))
     .limit(PAGE_SIZE + 1);
   return { messages: await toViews(rows.slice(0, PAGE_SIZE).reverse()), hasMore: rows.length > PAGE_SIZE };
@@ -119,6 +152,7 @@ export async function sendMessage(
   rawContent: unknown,
   rawAttachments: unknown = [],
   rawReplyToId: unknown = null,
+  rawThreadId: unknown = null,
 ): Promise<MessageView> {
   const channelId = parse(uuid, rawChannelId);
   const replyToId = rawReplyToId ? parse(uuid, rawReplyToId) : null;
@@ -141,8 +175,9 @@ export async function sendMessage(
     const [parent] = await db.select({ id: message.id }).from(message).where(and(eq(message.id, replyToId), eq(message.channelId, channelId)));
     if (!parent) throw notFound("The message you replied to was deleted.");
   }
+  const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
   const { row, mentioned } = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId }).returning();
+    const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
     await linkAttachments(tx, userId, channelId, created.id, ids);
     return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
   });
