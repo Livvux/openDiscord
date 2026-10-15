@@ -24,7 +24,7 @@ describe("replies", () => {
   it("links a reply to a message in the same channel with a preview", async () => {
     const parent = await sendMessage(owner, generalId, `question for <@${member}>?`);
     const reply = await sendMessage(member, generalId, "answer", [], parent.id);
-    expect(reply.replyTo).toEqual({ id: parent.id, authorId: owner, authorName: "Owner", excerpt: "question for @Member?" });
+    expect(reply.replyTo).toEqual({ id: parent.id, authorId: owner, authorName: "Owner", authorImported: false, excerpt: "question for @Member?" });
   });
 
   it("refuses replies across channels and to unknown messages", async () => {
