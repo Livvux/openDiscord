@@ -11,12 +11,13 @@ const ids: string[] = [];
 const origin = new URL(process.env.BETTER_AUTH_URL!).origin;
 const device = randomUUID(), secret = "a".repeat(64);
 afterAll(async () => { if (ids.length) await db.delete(user).where(inArray(user.id, ids)); });
-const request = (headers: HeadersInit = {}) => new Request(`${origin}/not-a-route`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers } });
+const request = (headers: Record<string, string> = {}) => new Request(`${origin}/not-a-route`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers } });
 describe("unreachable Voice HTTP trust boundary", () => {
   it("requires configured exact origin and JSON media type", () => {
     expect(() => assertVoiceOrigin(request())).not.toThrow();
     expect(VOICE_RESPONSE_HEADERS).toEqual({ "Cache-Control": "private, no-store" });
-    for (const headers of [{ origin: "https://foreign.test" }, { origin: "" }, { "sec-fetch-site": "cross-site" }, { "content-type": "application/jsonp" }, { "content-type": "text/plain" }]) expect(() => assertVoiceOrigin(request(headers))).toThrow();
+    const rejected: Record<string, string>[] = [{ origin: "https://foreign.test" }, { origin: "" }, { "sec-fetch-site": "cross-site" }, { "content-type": "application/jsonp" }, { "content-type": "text/plain" }];
+    for (const headers of rejected) expect(() => assertVoiceOrigin(request(headers))).toThrow();
   });
   it("rejects header account/session spoofing without an authentic cookie", async () => {
     await expect(requireVoiceJoin(request({ "x-user-id": randomUUID(), "x-session-id": randomUUID(), "x-dm-device": device, "x-dm-device-secret": secret }))).rejects.toMatchObject({ code: "unauthorized" });
