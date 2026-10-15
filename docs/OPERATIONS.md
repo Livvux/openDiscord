@@ -161,7 +161,7 @@ cannot overwrite a newer claim. Requests use the public SDK timeout **0.5 second
 failover disabled, and run sequentially. Interactive consumption allows at most four rooms/four
 requests and a 2.5-second RPC budget; maintenance allows at most sixteen rooms/32 requests and
 20 seconds shared across lifecycle batches. Budgets include retries; failures are deferred durably,
-not retried by timers. Fair ordering uses next-attempt time then exact name. Logs contain only
+not retried by generation-ledger timers. Fair ordering uses next-attempt time then exact name. Logs contain only
 bounded aggregate counts/outcome categories. A missing room is successful cleanup only for the
 SDK's actual `not_found` error. No list-all or prefix room discovery is performed.
 
@@ -179,7 +179,10 @@ cadence must be monitored separately; an hourly job cannot promise five-minute c
 count of due/leased/retired rows and oldest overdue time without exporting identities. SDK failure
 or unavailable configuration must never undo a committed suspension, block, role loss or revoke.
 The retained legacy channel-UUID room path remains separate, exact-name, best effort and is not
-retroactively covered by generation ownership evidence.
+retroactively covered by generation ownership evidence. Its existing single 65-second delayed
+reconciliation is preserved until coherent activation; this retry does not prove that refreshed
+legacy tokens have expired. Legacy deletion/reconciliation visits all exact owned channel names
+sequentially, with bounded individual RPCs, rather than dropping channels after the new ledger budget.
 
 The registry has a hard application admission cap of **100000 rows**. Only a new-room reservation
 counts under the shared Voice lock; existing active reservations do not scan/count the table.

@@ -128,8 +128,7 @@ export async function deleteCommunity(userId: string, rawId: unknown) {
     if (botUsers.length) await tx.delete(user).where(inArray(user.id, botUsers.map(b => b.id)));
     return rooms;
   });
-  for (const room of voiceRooms.slice(0, 4)) await closeVoiceRoom(room.id);
-  if (voiceRooms.length > 4) console.warn("[voice] legacy deletion limited");
+  for (const room of voiceRooms) await closeVoiceRoom(room.id);
   await publish({ type: "community.deleted", communityId });
 }
 

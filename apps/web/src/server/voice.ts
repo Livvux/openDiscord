@@ -25,6 +25,7 @@ export const voiceEnabled = Boolean(url && apiKey && apiSecret);
  * generation ownership remains durable and retired rooms require recurring exact cleanup.
  */
 const TOKEN_TTL_SECONDS = 60;
+const LEGACY_RECHECK_AFTER_MS = (TOKEN_TTL_SECONDS + 5) * 1000;
 
 /** The server API can live on a private address (compose: http://livekit:7880); defaults to the public URL. */
 const apiUrl = process.env.LIVEKIT_API_URL || url?.replace(/^ws/, "http");
@@ -124,34 +125,33 @@ export async function listVoiceParticipants(userId: string, rawChannelId: unknow
  */
 export async function reconcileVoice(communityId: string): Promise<void> {
   await consumeVoiceRooms();
+  await reconcileLegacyVoice(communityId);
+}
+
+async function reconcileLegacyVoice(communityId: string): Promise<void> {
   if (!voiceEnabled) return;
   const voiceChannels = await db
     .select({ id: channel.id })
     .from(channel)
     .where(and(eq(channel.communityId, communityId), eq(channel.kind, "voice")));
   const client = rooms();
-  const deadline = performance.now() + 2500;
-  let requests = 0;
+  // Preserve existing legacy coverage until the coherent product activation removes its issuer.
+  // Sequential SDK requests retain a per-request bound without dropping later channels/participants.
   for (const ch of voiceChannels) {
-    if (requests >= 4 || performance.now() + 500 > deadline) break;
-    requests++;
     const participants = await client.listParticipants(ch.id).catch((error: unknown) => {
       void error;
       console.warn("[voice] legacy room unavailable");
       return [];
     });
     for (const p of participants) {
-      if (requests >= 4 || performance.now() + 500 > deadline) break;
       const access = await loadChannelAuthority(db, ch.id, p.identity).catch(() => null);
       if (!access || !has(access.authority, Permission.Connect)) {
-        requests++;
         await client.removeParticipant(ch.id, p.identity).catch(() => {});
       } else {
         // Narrow what they may publish when Speak or Video was taken away; LiveKit unpublishes the rest.
         const allowed = publishSources(access.authority);
         const current = p.permission?.canPublishSources ?? [];
         if (current.some((source) => !allowed.includes(source)) || (allowed.length === 0 && p.permission?.canPublish)) {
-          requests++;
           await client
             .updateParticipant(ch.id, p.identity, {
               permission: { canSubscribe: true, canPublish: allowed.length > 0, canPublishSources: allowed, canPublishData: false },
@@ -171,4 +171,9 @@ export async function closeVoiceRoom(channelId: string): Promise<void> {
 /** Awaited legacy exact-channel reconciliation; retired generation cleanup remains durable. */
 export async function afterAccessChange(communityId: string): Promise<void> {
   await reconcileVoice(communityId).catch(() => console.warn("[voice] reconciliation deferred"));
+  if (voiceEnabled) {
+    // Compatibility only: refreshed SFU tokens mean this is not a finite revocation guarantee.
+    const recheck = () => reconcileLegacyVoice(communityId).catch(() => console.warn("[voice] legacy reconciliation deferred"));
+    setTimeout(recheck, LEGACY_RECHECK_AFTER_MS).unref?.();
+  }
 }

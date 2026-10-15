@@ -6,10 +6,10 @@ import { db } from "@/db";
 import { channel, session, member } from "@/db/schema";
 import { voiceCall, voiceSfuRoom, voiceCallMember, voiceIdentity } from "@/db/voice-schema";
 import { consumeVoiceRooms, retireOwnedVoiceRoom, voiceTransaction } from "@/server/voice-sfu";
-import { createCommunity, deleteChannel } from "@/server/communities";
+import { createCommunity, deleteChannel, deleteCommunity } from "@/server/communities";
 import { registerDmDevice } from "@/server/direct-messages";
 import { joinVoiceControl, grantBoundVoiceMedia, handleVoiceCrypto, heartbeatVoiceControl, leaveVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
-import { createBoundVoiceToken } from "@/server/voice";
+import { createBoundVoiceToken, afterAccessChange } from "@/server/voice";
 import { testUsers } from "./helpers";
 
 beforeEach(() => {
@@ -239,4 +239,30 @@ it("shares one maintenance room/RPC budget across multiple fast lifecycle batche
     expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenCalledTimes(16);
     expect(await db.$count(voiceSfuRoom, and(eq(voiceSfuRoom.channelId, channelId), eq(voiceSfuRoom.lastOutcome, "pending")))).toBeGreaterThanOrEqual(24);
   } finally { await db.delete(voiceSfuRoom).where(eq(voiceSfuRoom.channelId, channelId)); }
+});
+
+
+describe("legacy compatibility before coherent activation", () => {
+  it("deletes every exact owned legacy channel even when there are more than four", async () => {
+    const f = await fixture();
+    const channels = await db.insert(channel).values(Array.from({ length: 6 }, (_, n) => ({ communityId: f.communityId, name: `legacy-${n}`, kind: "voice" as const }))).returning();
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockClear();
+    await deleteCommunity(f.userId, f.communityId);
+    for (const ch of channels) expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenCalledWith(ch.id);
+    expect(RoomServiceClient.prototype.deleteRoom).toHaveBeenCalledWith(f.snapshot.channelId);
+  });
+
+  it("keeps one delayed exact-channel legacy recheck without scheduling ledger retries", async () => {
+    const f = await fixture();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    await afterAccessChange(f.communityId);
+    const index = timer.mock.calls.findIndex(([, delay]) => delay === 65000);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(timer.mock.calls.filter(([, delay]) => delay === 65000)).toHaveLength(1);
+    vi.mocked(RoomServiceClient.prototype.listParticipants).mockClear();
+    await timer.mock.calls[index][0]();
+    expect(RoomServiceClient.prototype.listParticipants).toHaveBeenCalledWith(f.snapshot.channelId);
+    const result = timer.mock.results[index];
+    if (result.type === "return") clearTimeout(result.value);
+  });
 });
