@@ -233,7 +233,7 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
       let storedBytes = 0;
       for (const source of library) {
         const file = staging.assets.find((f) => f.assetKey === source.id)!;
-        const fresh = { id: uuidv7(), name: source.name, kind: source.kind };
+        const fresh = { id: uuidv7(Date.now()), name: source.name, kind: source.kind };
         await tx.insert(communityAsset).values({ ...fresh, communityId: c.id });
         const linked = await tx.execute<{ size: number }>(sql`
           update attachment set asset_id = ${fresh.id}::uuid, linked_at = now()

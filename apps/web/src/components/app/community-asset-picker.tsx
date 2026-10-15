@@ -12,13 +12,17 @@ export function CommunityAssetPicker({ channelId, emojiOnly = false, onPick }: {
   const { subscribe } = useRealtime();
   useEffect(() => {
     const controller = new AbortController();
+    let generation = 0;
     async function load() {
+      const requestGeneration = ++generation;
       try {
         const response = await fetch(`/api/channels/${channelId}/assets`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("Community images could not be loaded.");
-        setAssets(await response.json() as AssetView[]);
+        const assets = await response.json() as AssetView[];
+        if (requestGeneration !== generation) return;
+        setAssets(assets);
         setError(null);
-      } catch (error) { if (!controller.signal.aborted) { setAssets([]); setError(error instanceof Error ? error.message : "Community images could not be loaded."); } }
+      } catch (error) { if (!controller.signal.aborted && requestGeneration === generation) { setAssets([]); setError(error instanceof Error ? error.message : "Community images could not be loaded."); } }
     }
     void load();
     const unsubscribe = subscribe((event) => { if (event.type === "assets.changed" || event.type === "resync") void load(); });

@@ -266,7 +266,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
         </p>
       )}
       {pickingAssets && <CommunityAssetPicker channelId={channelId} onPick={(asset) => {
-        pickedAssets.current = [...pickedAssets.current.filter((item) => item.id !== asset.id), asset];
+        pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
         setDraft(`${draft}${draft && !draft.endsWith(" ") ? " " : ""}${assetShortcode(asset)} `);
         setPickingAssets(false);
         textarea.current?.focus();

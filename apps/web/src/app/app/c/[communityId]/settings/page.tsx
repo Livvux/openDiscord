@@ -111,7 +111,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
     has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? listIntegrations(user.id, view.id) : null,
   ]);
-  const [rules, appeals, assets] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
+  const [assets, rules, appeals] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
   return (

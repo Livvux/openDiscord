@@ -2,12 +2,13 @@ import { and, eq } from "drizzle-orm";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attachment, communityAsset } from "@/db/schema";
+import { attachment, community, communityAsset, user } from "@/db/schema";
 import { assetToken } from "@/lib/community-assets";
 import { createCommunityAsset, deleteCommunityAsset, listCommunityAssets, readCommunityAsset } from "@/server/community-assets";
 import { acceptInvite, createCommunity, createInvite, leaveCommunity } from "@/server/communities";
 import { mediaEnabled, processImage, sweepAttachments } from "@/server/media";
 import { editMessage, listMessages, sendMessage, toggleReaction } from "@/server/messages";
+import { createRole, setMemberRole } from "@/server/moderation";
 import { testUsers } from "./helpers";
 
 describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
@@ -51,6 +52,38 @@ describe.skipIf(!mediaEnabled)("private community emoji and stickers", () => {
     expect(historical.assets).toEqual([]); expect(historical.reactions).toEqual([]);
     await expect(sweepAttachments()).resolves.toBeGreaterThanOrEqual(1);
     expect(await db.select().from(attachment).where(and(eq(attachment.assetId, asset.id)))).toEqual([]);
+  });
+  it("serializes concurrent capacity checks at the emoji cap", async () => {
+    const previous = await db.select().from(communityAsset).where(eq(communityAsset.communityId, communityId));
+    const filler = await db.insert(communityAsset).values(Array.from({ length: 127 - previous.length }, (_, index) => ({ communityId, name: `cap_${index}`, kind: "emoji" as const }))).returning();
+    try {
+      const result = await Promise.allSettled([upload("cap_last_a"), upload("cap_last_b")]);
+      expect(result.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+      expect(await db.select().from(communityAsset).where(eq(communityAsset.communityId, communityId))).toHaveLength(128);
+    } finally {
+      for (const asset of filler) await db.delete(communityAsset).where(eq(communityAsset.id, asset.id));
+    }
+  });
+  it("retains community ownership after uploader deletion, then cleans up a deleted community", async () => {
+    const uploader = await users.create("Library contributor");
+    await acceptInvite(uploader, await createInvite(manager, communityId, { maxUses: null, expiresInHours: null }));
+    const role = await createRole(manager, communityId, "Image manager", ["ManageCommunity"]);
+    await setMemberRole(manager, role.id, uploader, true);
+    const asset = await upload("owned_library", "emoji", uploader);
+    await db.delete(user).where(eq(user.id, uploader));
+    const [row] = await db.select().from(attachment).where(eq(attachment.assetId, asset.id));
+    expect(row.uploaderId).toBeNull();
+    expect((await readCommunityAsset(manager, asset.id)).status).toBe(200);
+    const destination = await createCommunity(manager, "Disposable library");
+    const moved = await db.insert(communityAsset).values({ communityId: destination.communityId, name: "owned_image", kind: "emoji" }).returning();
+    await db.transaction(async (tx) => {
+      await tx.delete(communityAsset).where(eq(communityAsset.id, asset.id));
+      await tx.update(attachment).set({ assetId: moved[0].id }).where(eq(attachment.id, row.id));
+    });
+    await db.delete(community).where(eq(community.id, destination.communityId));
+    await expect(readCommunityAsset(manager, moved[0].id)).rejects.toThrow();
+    await sweepAttachments();
+    expect(await db.select().from(attachment).where(eq(attachment.id, row.id))).toEqual([]);
   });
   it("denies future private delivery after membership loss", async () => {
     const asset = await upload("revoked_image");
