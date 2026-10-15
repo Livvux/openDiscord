@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { blockUser, unblockUser } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
+import { IdentityReset } from "./identity-reset";
 import { DM_MAX_TEXT, type DeviceView, type DirectConversation, type DirectEnvelope } from "@/lib/dm/contracts";
 import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
 import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, type TrustedDevice, type VerificationView } from "@/lib/dm/client";
@@ -128,6 +129,7 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
             setRecoveryDownload(URL.createObjectURL(new Blob([JSON.stringify(recovery, null, 2)], { type: "application/json" })));
             await backups();
           })}>Create encrypted recovery backup</Button>{recoveryDownload && <a className="font-medium underline" href={recoveryDownload} download="opendiscord-private-recovery.json">Download your private recovery file</a>}</div>
+          <IdentityReset userId={userId} />
           <label className="grid max-w-lg gap-1 text-sm">Open encrypted recovery archive<input className={field} type="file" accept="application/json,.json" disabled={busy || !client} onChange={(e) => { const file = e.target.files?.[0]; if (file) void run(async () => { if (file.size > 8192) throw new Error("Choose a private recovery file, not a data export."); await client!.restoreBackup(JSON.parse(await file.text())); setStatus("Recovery archive opened. Restore your identity separately if needed."); }); e.currentTarget.value = ""; }} /></label>
           {pendingIdentity && <Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Restore your current encryption identity from this trusted recovery source? The public master key must match your current identity. This does not mark archived messages as newly verified.")) void run(() => client!.restorePendingIdentity()); }}>Restore current encryption identity</Button>}
           {backupList.length > 0 && <ul aria-label="Encrypted backups" className="grid gap-2">{backupList.map((b) => <li key={b.id} className="flex flex-wrap items-center gap-2 text-xs"><time>{new Date(b.createdAt).toLocaleString()}</time><span>{b.id.slice(0, 8)}</span><Button variant="destructive" size="sm" disabled={busy} onClick={() => void run(async () => { await dmFetch("/api/dm/backups", { id: b.id }, undefined, "DELETE"); await backups(); })}>Delete encrypted backup</Button></li>)}</ul>}

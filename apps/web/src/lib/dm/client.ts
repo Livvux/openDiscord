@@ -45,6 +45,16 @@ export function privateMessaging(userId: string): Promise<PrivateMessaging> {
   return client;
 }
 
+/** Called after the server has revoked all devices and removed the previous identity. */
+export function forgetDmDevice(userId: string): void {
+  const client = clients.get(userId);
+  clients.delete(userId);
+  localStorage.removeItem(`opendiscord.dm.device:${userId}`);
+  // All server sessions are revoked already; a pending initialization cannot
+  // re-enroll, and must not delay navigation back to account authentication.
+  if (client) void client.then((value) => value.close(), () => undefined);
+}
+
 /** Explicit local re-enrollment: old keys are retained in IndexedDB but never silently reused. */
 export async function enrollNewDmDevice(userId: string): Promise<void> {
   const existing = clients.get(userId);

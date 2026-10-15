@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizz
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, instanceAuditLog, member, user, userBlock } from "@/db/schema";
+import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
 import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
@@ -56,7 +56,13 @@ async function conversationFor(tx: Tx | typeof db, actor: string, id: string, se
   }
   return { ...row, peer };
 }
+async function activeSession(tx: Tx, actor: string, sessionId: string): Promise<void> {
+  await assertActiveUser(actor, tx);
+  const [current] = await tx.select({ expiresAt: session.expiresAt }).from(session).where(and(eq(session.id, sessionId), eq(session.userId, actor)));
+  if (!current || current.expiresAt.getTime() <= Date.now()) throw forbidden("This account session is unavailable. Sign in again.");
+}
 async function deviceFor(tx: Tx, auth: DmDeviceAuth) {
+  await activeSession(tx, auth.userId, auth.sessionId);
   const id = parse(deviceIdSchema, auth.deviceId), secret = parse(deviceSecretSchema, auth.secret);
   const [device] = await tx.select().from(dmDevice).where(and(eq(dmDevice.id, id), eq(dmDevice.userId, auth.userId), isNull(dmDevice.revokedAt))).for("share");
   if (!device || !timingSafeEqual(Buffer.from(device.secretHash, "hex"), Buffer.from(digest(secret), "hex"))) throw forbidden("This encryption device is unavailable. Restore or enroll a new device.");
@@ -108,7 +114,7 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
   const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema }).strict(), input);
   await consume(`dm-send:${auth.userId}`, 5, 5000);
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${auth.deviceId}, 32))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     const device = await deviceFor(tx, auth);
     await conversationFor(tx, auth.userId, id, true);
     if (data.content.device_id !== device.id || record(device.keys?.keys)[`curve25519:${device.id}`] !== data.content.sender_key) throw invalid("The encrypted sender does not match this device.");
@@ -121,14 +127,15 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
     return created;
   });
 }
-export async function registerDmDevice(actor: string, input: unknown): Promise<void> {
+export async function registerDmDevice(actor: string, sessionId: string, input: unknown): Promise<void> {
   const data = parse(z.object({ id: deviceIdSchema, secret: deviceSecretSchema, name: z.string().trim().min(1).max(60) }).strict(), input);
   const [known] = await db.select({ id: dmDevice.id }).from(dmDevice).where(eq(dmDevice.id, data.id));
   if (!known) await consume(`dm-device:${actor}`, 12, 3_600_000);
   await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor}, 33))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    await activeSession(tx, actor, sessionId);
     const [existing] = await tx.select().from(dmDevice).where(eq(dmDevice.id, data.id));
-    if (existing) { await deviceFor(tx, { userId: actor, deviceId: data.id, secret: data.secret }); return; }
+    if (existing) { await deviceFor(tx, { userId: actor, sessionId, deviceId: data.id, secret: data.secret }); return; }
     if (await tx.$count(dmDevice, and(eq(dmDevice.userId, actor), isNull(dmDevice.revokedAt))) >= 10) throw invalid("Revoke an old device before adding another (maximum 10).");
     await tx.insert(dmDevice).values({ id: data.id, userId: actor, name: data.name, secretHash: digest(data.secret) });
   });
@@ -357,8 +364,8 @@ export async function saveDmBackup(auth: DmDeviceAuth, input: unknown): Promise<
   const data = parse(z.object({ id: uuid, ciphertext: base64Schema.max(Math.ceil(DM_MAX_BACKUP_BYTES * 4 / 3)) }).strict(), input);
   await consume(`dm-backup:${auth.userId}`, 10, 3_600_000);
   await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     await deviceFor(tx, auth);
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${auth.userId}, 34))`);
     if (await tx.$count(dmBackup, eq(dmBackup.userId, auth.userId)) >= 10) throw invalid("Delete an old encrypted backup before creating another (maximum 10).");
     await tx.insert(dmBackup).values({ id: data.id, userId: auth.userId, ciphertext: data.ciphertext });
   });

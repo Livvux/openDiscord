@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { community, dmDevice, dmMessage, dmSignature, user } from "@/db/schema";
+import { community, dmDevice, dmMessage, dmSignature, session, user } from "@/db/schema";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { blockUser } from "@/server/blocks";
 import { createDirectConversation, respondToDirectRequest, listDirectConversations, listDirectMessages, appendDirectMessage, registerDmDevice, handleCryptoRequest, revokeDmDevice, saveDmBackup, getDmBackup, reportDirectMessage, exportDirectData } from "@/server/direct-messages";
@@ -11,15 +11,16 @@ import { testUsers } from "./helpers";
 
 const users = testUsers();
 let alice: string, bob: string, outsider: string, conversation: string;
-const aDevice = randomUUID(), bDevice = randomUUID();
+const aDevice = randomUUID(), bDevice = randomUUID(), aSession = randomUUID(), bSession = randomUUID();
 const aSecret = randomBytes(32).toString("hex"), bSecret = randomBytes(32).toString("hex");
 const matrix = (id: string) => `@${id}:opendiscord.local`;
-const authA = () => ({ userId: alice, deviceId: aDevice, secret: aSecret });
-const authB = () => ({ userId: bob, deviceId: bDevice, secret: bSecret });
+const authA = () => ({ userId: alice, sessionId: aSession, deviceId: aDevice, secret: aSecret });
+const authB = () => ({ userId: bob, sessionId: bSession, deviceId: bDevice, secret: bSecret });
 const publicKeys = (id: string, device: string) => ({ user_id: matrix(id), device_id: device, algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"], keys: { [`curve25519:${device}`]: "a".repeat(43), [`ed25519:${device}`]: "b".repeat(43) }, signatures: { [matrix(id)]: { [`ed25519:${device}`]: "c".repeat(86) } } });
 const envelope = { algorithm: "m.megolm.v1.aes-sha2", sender_key: "a".repeat(43), device_id: aDevice, session_id: "b".repeat(43), ciphertext: "c".repeat(96) };
 beforeAll(async () => {
   [alice, bob, outsider] = await Promise.all(["DM Alice", "DM Bob", "DM outsider"].map(users.create));
+  await db.insert(session).values([[alice, aSession], [bob, bSession]].map(([userId, id]) => ({ userId, id, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) })));
   const { communityId } = await createCommunity(alice, "DM community");
   const invite = await createInvite(alice, communityId, { expiresInHours: 24, maxUses: null });
   await acceptInvite(bob, invite);
@@ -37,9 +38,9 @@ describe("private encrypted conversations", () => {
     await respondToDirectRequest(bob, conversation, "accepted");
   });
   it("binds immutable device keys to account and possession, and rejects IDOR", async () => {
-    await registerDmDevice(alice, { id: aDevice, secret: aSecret, name: "Browser A" });
-    await registerDmDevice(bob, { id: bDevice, secret: bSecret, name: "Browser B" });
-    await expect(registerDmDevice(bob, { id: aDevice, secret: bSecret, name: "Spoof" })).rejects.toThrow();
+    await registerDmDevice(alice, aSession, { id: aDevice, secret: aSecret, name: "Browser A" });
+    await registerDmDevice(bob, bSession, { id: bDevice, secret: bSecret, name: "Browser B" });
+    await expect(registerDmDevice(bob, bSession, { id: aDevice, secret: bSecret, name: "Spoof" })).rejects.toThrow();
     await expect(handleCryptoRequest({ ...authA(), secret: bSecret }, { kind: "sync" })).rejects.toThrow();
     await expect(handleCryptoRequest(authA(), { kind: "upload", body: { device_keys: publicKeys(bob, aDevice) } })).rejects.toThrow();
     await handleCryptoRequest(authA(), { kind: "upload", body: { device_keys: publicKeys(alice, aDevice) } });
@@ -147,9 +148,10 @@ describe("private encrypted conversations", () => {
     await acceptInvite(recipient, await createInvite(sender, communityId, { expiresInHours: 24, maxUses: null }));
     const ids = await Promise.all(Array.from({ length: 10 }, () => createDirectConversation(sender, recipient)));
     expect(new Set(ids).size).toBe(1);
-    const deviceId = randomUUID(), secret = randomBytes(32).toString("hex");
-    await registerDmDevice(sender, { id: deviceId, secret, name: "Consent sender" });
-    const auth = { userId: sender, deviceId, secret };
+    const deviceId = randomUUID(), secret = randomBytes(32).toString("hex"), sessionId = randomUUID();
+    await db.insert(session).values({ id: sessionId, userId: sender, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) });
+    await registerDmDevice(sender, sessionId, { id: deviceId, secret, name: "Consent sender" });
+    const auth = { userId: sender, sessionId, deviceId, secret };
     const request = { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.done", body: { messages: { [matrix(recipient)]: { "*": { transaction_id: randomUUID() } } } } };
     await expect(handleCryptoRequest(auth, request)).rejects.toThrow("not found");
     await respondToDirectRequest(recipient, ids[0], "rejected");
@@ -161,7 +163,7 @@ describe("private encrypted conversations", () => {
     await expect(appendDirectMessage(authA(), conversation, { transactionId: randomUUID(), content: envelope })).rejects.toThrow();
     await revokeDmDevice(alice, aDevice);
     await expect(handleCryptoRequest(authA(), { kind: "sync" })).rejects.toThrow();
-    await expect(registerDmDevice(alice, { id: aDevice, secret: aSecret, name: "Resurrection" })).rejects.toThrow();
+    await expect(registerDmDevice(alice, aSession, { id: aDevice, secret: aSecret, name: "Resurrection" })).rejects.toThrow();
     await db.delete(community).where(eq(community.ownerId, alice));
     await db.delete(user).where(eq(user.id, alice));
     expect(await db.select().from(dmDevice).where(eq(dmDevice.userId, alice))).toEqual([]);

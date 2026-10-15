@@ -93,7 +93,9 @@ The server stores ciphertext, public keys and delivery metadata. Encrypted backu
 secrets and explicitly labelled, source-authenticated read-only history copies; the private recovery file containing the encryption key remains with
 the user. Matrix attachment encryption is reused rather than inventing an encryption format. Community
 channels remain server-readable for moderation, search and history. Voice encryption is a separate
-integration and is not implied by encrypted DMs.
+integration and is not implied by encrypted DMs. A destructive identity reset requires recent account
+authentication, password confirmation and TOTP when enabled, revokes all previous devices and server
+recovery material, and requires contacts to verify the new identity. It never recovers lost history.
 
 ## D11. Cloudflare is optional
 

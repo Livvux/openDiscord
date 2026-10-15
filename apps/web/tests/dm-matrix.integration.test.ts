@@ -2,6 +2,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { afterAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { instanceAuditLog, session } from "@/db/schema";
+import { dmResetState, resetDmIdentity } from "@/server/dm-reset";
 import { matrixRoom, matrixUser, type DmDeviceAuth } from "@/lib/dm/contracts";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { appendDirectMessage, createDirectConversation, handleCryptoRequest, listDirectMessages, registerDmDevice, respondToDirectRequest } from "@/server/direct-messages";
@@ -17,8 +21,9 @@ afterAll(() => users.cleanup());
 class Endpoint {
   private constructor(readonly auth: DmDeviceAuth, readonly machine: C.OlmMachine) {}
   static async open(userId: string) {
-    const auth = { userId, deviceId: randomUUID(), secret: randomBytes(32).toString("hex") };
-    await registerDmDevice(userId, { id: auth.deviceId, secret: auth.secret, name: "Matrix integration" });
+    const auth = { userId, sessionId: randomUUID(), deviceId: randomUUID(), secret: randomBytes(32).toString("hex") };
+    await db.insert(session).values({ id: auth.sessionId, userId, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) });
+    await registerDmDevice(userId, auth.sessionId, { id: auth.deviceId, secret: auth.secret, name: "Matrix integration" });
     const endpoint = new Endpoint(auth, await C.OlmMachine.initialize(new C.UserId(matrixUser(userId)), new C.DeviceId(auth.deviceId), undefined, undefined, logger));
     await endpoint.flush();
     const bootstrap = await endpoint.machine.bootstrapCrossSigning(false);
@@ -106,6 +111,18 @@ describe("Matrix and PostgreSQL integration", () => {
       expect(decrypted.shieldState(true).color).toBe(C.ShieldColor.None);
       expect(JSON.parse(decrypted.event).content.body).toBe(text);
       await expect(b.machine.decryptRoomEvent(JSON.stringify({ ...event, sender: matrixUser(bob), event_id: `$${randomUUID()}` }), room, new C.DecryptionSettings(C.TrustRequirement.CrossSigned))).rejects.toThrow();
+      const resetSession = randomUUID();
+      await db.insert(session).values({ id: resetSession, token: randomUUID(), userId: bob, createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 60_000) });
+      const reset = await dmResetState(bob, resetSession);
+      await resetDmIdentity(bob, resetSession, { identity: reset.identity!, twoFactorEnabled: false });
+      await expect(handleCryptoRequest(b.auth, { kind: "sync" })).rejects.toThrow();
+      const replacement = await Endpoint.open(bob);
+      try {
+        await a.query([alice, bob]);
+        expect((await a.machine.getIdentity(new C.UserId(matrixUser(bob))))?.isVerified()).toBe(false);
+        expect((await a.machine.getDevice(new C.UserId(matrixUser(bob)), new C.DeviceId(replacement.auth.deviceId)))?.isVerified()).toBe(false);
+      } finally { replacement.machine.close(); await db.delete(instanceAuditLog).where(eq(instanceAuditLog.targetId, bob)); }
+
     } finally { a.machine.close(); b.machine.close(); }
   }, 20_000);
 });

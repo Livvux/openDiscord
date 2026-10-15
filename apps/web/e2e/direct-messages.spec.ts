@@ -197,3 +197,45 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   expect(errors).toEqual([]);
   await Promise.all([alice.context().close(), bobContext.close(), restored.context().close()]);
 });
+
+
+test("explicit identity reset revokes devices and backups after password confirmation", async ({ browser }) => {
+  const page = await newUserPage(browser);
+  page.context().setDefaultTimeout(15_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    const email = await signUp(page, "Reset identity");
+    await page.goto("/app/messages");
+    await expect(page.getByText("Encrypted messaging ready.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+    await page.getByRole("button", { name: "Create encrypted recovery backup", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Download your private recovery file", exact: true })).toBeVisible();
+    const before = await page.request.get("/api/dm").then((response) => response.json());
+    const oldDevice = before.devices.find((device: { id: string; revoked: boolean }) => !device.revoked).id as string;
+    await page.getByRole("button", { name: "Reset lost encryption identity", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Permanently reset encryption identity", exact: true })).toBeDisabled();
+    await page.getByLabel("Current password", { exact: true }).fill(PASSWORD);
+    await page.getByRole("checkbox", { name: /I understand that this destroys/ }).check();
+    await page.getByRole("button", { name: "Reset lost encryption identity", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Permanently reset encryption identity", exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Current password", { exact: true })).toHaveValue("");
+    await page.getByLabel("Current password", { exact: true }).fill(PASSWORD);
+    await page.getByRole("checkbox", { name: /I understand that this destroys/ }).check();
+    await page.getByRole("button", { name: "Permanently reset encryption identity", exact: true }).click();
+    await expect(page).toHaveURL(/\/sign-in\?next=/);
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page).toHaveURL(/\/app\/messages$/);
+    await expect(page.getByText("Encrypted messaging ready.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => {
+      const current = await page.request.get("/api/dm").then((response) => response.json());
+      return current.devices.filter((device: { id: string; revoked: boolean }) => !device.revoked && device.id !== oldDevice).length;
+    }).toBe(1);
+    const after = await page.request.get("/api/dm").then((response) => response.json());
+    expect(after.devices.find((device: { id: string }) => device.id === oldDevice).revoked).toBe(true);
+    expect((await page.request.get("/api/dm/backups").then((response) => response.json())).backups).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await page.context().close(); }
+});

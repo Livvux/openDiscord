@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const body = parse(dmActionSchema, await readJsonBody(request, 32_000));
     let result: unknown = {};
     switch (body.action) {
-      case "register": await registerDmDevice(user.id, body.input); break;
+      case "register": await registerDmDevice(user.id, user.sessionId, body.input); break;
       case "request": result = { id: await createDirectConversation(user.id, body.target) }; break;
       case "respond": await respondToDirectRequest(user.id, parse(uuid, body.id), body.status); break;
       case "send": result = await appendDirectMessage(await requireDmDevice(request), parse(uuid, body.id), body.input); break;

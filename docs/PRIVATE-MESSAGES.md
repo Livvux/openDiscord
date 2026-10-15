@@ -90,6 +90,18 @@ file loses the corresponding history. An unavailable browser store can be explic
 this revokes the previous device and requires trust enrollment again. Clearing browser storage also
 removes the local replay ledger and recovered archives.
 
+**Reset lost encryption identity** is an explicit destructive recovery option when no trusted device
+or recovery file remains. It requires a session created within the past five minutes, confirmation
+of the current account password and a current authenticator code when two-factor authentication is
+enabled. The server checks that the confirmed identity and two-factor setting have not changed, then
+atomically revokes all encryption devices, removes public identity/signatures, prekeys, pending
+mailboxes and encrypted server backups, and signs out every account session, including the resetting
+browser. Session ownership is checked again inside the crypto transaction lock, so queued requests
+from revoked sessions cannot register devices or upload a replacement identity. Existing ciphertext
+messages remain ciphertext. Sign in again to enroll a fresh identity; contacts must verify it
+again. This cannot recover the old history or erase copies already held elsewhere. Old local stores
+are not reused by the new identity; reset does not claim secure erasure of browser storage.
+
 ## Server visibility and reporting
 
 The server sees participants, device public keys, conversation state, envelope sizes and timestamps.
@@ -133,6 +145,6 @@ Dependency evidence and audit boundaries:
 - [Matrix client/server encryption and SAS specification](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption)
 
 Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-matrix.integration.test.ts`,
-`tests/direct-messages.integration.test.ts` and
+`tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts` and
 `e2e/direct-messages.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.

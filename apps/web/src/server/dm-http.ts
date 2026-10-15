@@ -11,6 +11,6 @@ export function assertDmOrigin(request: Request): void {
 }
 export async function requireDmDevice(request: Request): Promise<DmDeviceAuth> {
   const user = await requireUser(request.headers);
-  return { userId: user.id, deviceId: parse(deviceIdSchema, request.headers.get("x-dm-device")), secret: parse(deviceSecretSchema, request.headers.get("x-dm-device-secret")) };
+  return { userId: user.id, sessionId: user.sessionId, deviceId: parse(deviceIdSchema, request.headers.get("x-dm-device")), secret: parse(deviceSecretSchema, request.headers.get("x-dm-device-secret")) };
 }
 export const dmActionSchema = z.object({ action: z.string().max(40) }).passthrough();
