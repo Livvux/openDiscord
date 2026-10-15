@@ -23,6 +23,7 @@ in the MVP. Each choice is explained in [DECISIONS.md](DECISIONS.md).
 | `app/app/actions.ts` | Server Actions: authenticate, call a service, refresh the router |
 | `app/api/**` | Route handlers: SSE stream, message pages, data export, Better Auth |
 | `components/app/**` | Chat UI (client components where interaction needs it) |
+| `lib/markdown.tsx` | Chat Markdown subset → React elements (never raw HTML; only http(s) links) |
 | `lib/auth.ts` | Better Auth configuration (password, reset, 2FA, passkeys, deletion, privacy hooks) |
 
 Rules that keep this safe and small:
@@ -38,7 +39,7 @@ pagination cursors. User ids come from Better Auth.
 
 - `community` (owner restricts user deletion) → `role` (bit-set permissions, position, one default role)
 - `member` (community, user) → `member_role`; removing a member removes its role assignments
-- `channel` → `message` (author cascade: deleting an account deletes its messages), `channel_override` (role allow/deny bits)
+- `channel` → `message` (author cascade: deleting an account deletes its messages; optional `reply_to_id` in the same channel, `pinned_at`), `reaction` (message × person × emoji), `channel_override` (role allow/deny bits)
 - `invite` (random 96-bit code, optional expiry and use limit), `ban`, `audit_log` (no message content)
 
 ## Permissions

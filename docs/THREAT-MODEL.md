@@ -52,7 +52,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T10 | Info disclosure: emails exposed to members | Member lists and messages carry display names only | ✅ |
 | T11 | Info disclosure: private content indexed | `robots.txt` + `noindex` for `/app`, `/invite`, `/api` | ✅ |
 | T12 | Info disclosure: secrets in data export | Export excludes password hash, tokens, TOTP secrets and passkey keys | ✅ tested |
-| T13 | XSS through messages or names | React escapes all text; no `dangerouslySetInnerHTML` with user data; CSP restricts sources to self | ✅ tested (CSP allows inline scripts, see D-notes) |
+| T13 | XSS through messages or names | React escapes all text; no `dangerouslySetInnerHTML` with user data; Markdown is a small subset parsed into React elements, links only for http(s) with `noopener noreferrer nofollow`; CSP restricts sources to self | ✅ tested (CSP allows inline scripts, see D-notes) |
 | T14 | Clickjacking | `frame-ancestors 'none'` | ✅ |
 | T15 | DoS: message spam | 5 messages / 5 s per user (Postgres-counted), 4000-character limit | ✅ |
 | T16 | DoS: resource creation loops | Burst limit of 30 mutations per 10 s per user; caps on owned communities, channels, roles, active invites | ✅ (burst limit per process) |

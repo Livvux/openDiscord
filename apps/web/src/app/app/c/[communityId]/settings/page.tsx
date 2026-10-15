@@ -18,6 +18,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "member.ban": "banned",
   "member.unban": "unbanned",
   "message.delete": "deleted a message by",
+  "message.pin": "pinned a message by",
+  "message.unpin": "unpinned a message by",
   "role.create": "created a role",
   "role.update": "updated a role",
   "role.delete": "deleted role",

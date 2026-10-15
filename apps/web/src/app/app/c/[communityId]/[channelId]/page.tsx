@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { ChannelSettingsDialog } from "@/components/app/channel-settings-dialog";
 import { ChannelChat } from "@/components/app/chat/channel-chat";
+import { PinnedDialog } from "@/components/app/chat/pinned-dialog";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
 import { blockedIds } from "@/server/blocks";
@@ -38,7 +39,8 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         {channel.topic && (
           <p className="hidden truncate border-l border-white/10 pl-3 text-sm text-zinc-400 sm:block">{channel.topic}</p>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center">
+          <PinnedDialog channelId={channel.id} channelName={channel.name} />
           {has(view.authority, Permission.ManageChannels) && (
             <ChannelSettingsDialog
               channel={channel}

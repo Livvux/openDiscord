@@ -17,6 +17,9 @@ interface ComposerProps {
   /** Object storage is configured on this instance. */
   mediaEnabled: boolean;
   communityId: string;
+  /** The message being replied to, shown above the input. */
+  replyTo: { id: string; authorName: string } | null;
+  onCancelReply: () => void;
 }
 
 interface Upload {
@@ -55,7 +58,7 @@ function useMentionSuggestions(communityId: string, query: string | null) {
   return query !== null && results?.query === query ? results.members : [];
 }
 
-export function Composer({ channelId, channelName, draft, setDraft, onSend, mediaEnabled, communityId }: ComposerProps) {
+export function Composer({ channelId, channelName, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply }: ComposerProps) {
   const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
   const [activeOption, setActiveOption] = useState(0);
   const picked = useRef<Mention[]>([]);
@@ -131,6 +134,10 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
     pendingCaret.current = before.length + inserted.length;
   }
 
+  useEffect(() => {
+    if (replyTo) textarea.current?.focus();
+  }, [replyTo]);
+
   // Place the caret after an inserted mention once React has rendered the new value.
   useLayoutEffect(() => {
     if (pendingCaret.current === null) return;
@@ -168,6 +175,14 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
       }}
       className="relative mx-4 mb-4 rounded-lg bg-white/5 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
     >
+      {replyTo && (
+        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1.5 text-xs text-zinc-300">
+          <span className="min-w-0 flex-1 truncate">Replying to <span className="font-medium text-zinc-100">{replyTo.authorName}</span></span>
+          <Button type="button" variant="ghost" size="icon-xs" aria-label="Cancel reply" onClick={onCancelReply}>
+            <XIcon />
+          </Button>
+        </div>
+      )}
       <p role="status" className="sr-only">
         {listOpen ? `${suggestions.length} ${suggestions.length === 1 ? "member" : "members"} found. Use arrow keys and Enter to pick.` : ""}
       </p>
@@ -293,6 +308,11 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
                 setMentionAt(null);
                 return;
               }
+            }
+            if (e.key === "Escape" && replyTo) {
+              e.preventDefault();
+              onCancelReply();
+              return;
             }
             // Enter sends, Shift+Enter adds a line; don't interrupt IME composition.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

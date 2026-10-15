@@ -1,10 +1,11 @@
-import { and, count, desc, eq, gt, lt } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, gt, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLog, channel, message, user } from "@/db/schema";
+import { auditLog, channel, message, reaction, user } from "@/db/schema";
 import { requireChannel } from "./access";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
+import { emoji, MAX_EMOJIS_PER_MESSAGE, reactionsFor, replyPreviews, type ReactionView, type ReplyPreview } from "./message-extras";
 import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
 import { messageContent, parse, uuid } from "./validation";
@@ -23,6 +24,9 @@ export interface MessageView {
   editedAt: string | null;
   attachments: AttachmentView[];
   mentions: MentionView[];
+  replyTo: ReplyPreview | null;
+  reactions: ReactionView[];
+  pinned: boolean;
 }
 
 const viewColumns = {
@@ -33,18 +37,34 @@ const viewColumns = {
   content: message.content,
   createdAt: message.createdAt,
   editedAt: message.editedAt,
+  replyToId: message.replyToId,
+  pinnedAt: message.pinnedAt,
 };
 
-type MessageRow = { createdAt: Date; editedAt: Date | null } & Omit<MessageView, "createdAt" | "editedAt" | "attachments" | "mentions">;
+interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "content"> {
+  createdAt: Date;
+  editedAt: Date | null;
+  replyToId: string | null;
+  pinnedAt: Date | null;
+}
 async function toViews(rows: MessageRow[]): Promise<MessageView[]> {
   const ids = rows.map((r) => r.id);
-  const [attachments, mentions] = await Promise.all([attachmentsFor(ids), mentionsFor(ids)]);
-  return rows.map((r) => ({
+  const parents = [...new Set(rows.map((r) => r.replyToId).filter((id): id is string => id !== null))];
+  const [attachments, mentions, reactions, replies] = await Promise.all([
+    attachmentsFor(ids),
+    mentionsFor(ids),
+    reactionsFor(ids),
+    replyPreviews(parents),
+  ]);
+  return rows.map(({ replyToId, pinnedAt, ...r }) => ({
     ...r,
     createdAt: r.createdAt.toISOString(),
     editedAt: r.editedAt?.toISOString() ?? null,
     attachments: attachments.get(r.id) ?? [],
     mentions: mentions.get(r.id) ?? [],
+    replyTo: replyToId ? (replies.get(replyToId) ?? null) : null,
+    reactions: reactions.get(r.id) ?? [],
+    pinned: pinnedAt !== null,
   }));
 }
 
@@ -89,8 +109,15 @@ export async function getMessageForBroadcast(messageId: string): Promise<{ commu
   return { communityId, message: (await toViews([view]))[0] };
 }
 
-export async function sendMessage(userId: string, rawChannelId: unknown, rawContent: unknown, rawAttachments: unknown = []): Promise<MessageView> {
+export async function sendMessage(
+  userId: string,
+  rawChannelId: unknown,
+  rawContent: unknown,
+  rawAttachments: unknown = [],
+  rawReplyToId: unknown = null,
+): Promise<MessageView> {
   const channelId = parse(uuid, rawChannelId);
+  const replyToId = rawReplyToId ? parse(uuid, rawReplyToId) : null;
   const ids = parse(attachmentIds, rawAttachments);
   // A message with images may have no text.
   const content = ids.length > 0 && typeof rawContent === "string" && !rawContent.trim() ? "" : parse(messageContent, rawContent);
@@ -103,8 +130,13 @@ export async function sendMessage(userId: string, rawChannelId: unknown, rawCont
     .where(and(eq(message.authorId, userId), gt(message.createdAt, since)));
   if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "You're sending messages too quickly. Wait a moment.");
 
+  if (replyToId) {
+    // Replies stay inside one channel, so a preview can never come from a channel the reader can't see.
+    const [parent] = await db.select({ id: message.id }).from(message).where(and(eq(message.id, replyToId), eq(message.channelId, channelId)));
+    if (!parent) throw notFound("The message you replied to was deleted.");
+  }
   const { row, mentioned } = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(message).values({ channelId, authorId: userId, content }).returning();
+    const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId }).returning();
     await linkAttachments(tx, userId, channelId, created.id, ids);
     return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
   });
@@ -159,4 +191,58 @@ export async function deleteMessage(userId: string, rawMessageId: unknown) {
   await publish({ type: "message.deleted", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
   // Free its images now; other deletions (channel, community, account) are caught by the periodic sweep.
   void sweepAttachments().catch((error: unknown) => console.error("[media] sweep failed", error));
+}
+
+// --- Reactions and pins -----------------------------------------------------
+
+/** Adds or removes the caller's reaction. Reacting needs the same permission as writing. */
+export async function toggleReaction(userId: string, rawMessageId: unknown, rawEmoji: unknown): Promise<void> {
+  const value = parse(emoji, rawEmoji);
+  const row = await loadOwnedMessage(rawMessageId);
+  await requireChannel(db, row.message.channelId, userId, Permission.SendMessages);
+  await db.transaction(async (tx) => {
+    // Serialise per message so the distinct-emoji cap can't be raced.
+    await tx.execute(sql`select 1 from ${message} where ${message.id} = ${row.message.id} for update`);
+    const removed = await tx.delete(reaction)
+      .where(and(eq(reaction.messageId, row.message.id), eq(reaction.userId, userId), eq(reaction.emoji, value)))
+      .returning({ emoji: reaction.emoji });
+    if (removed.length > 0) return;
+    const [{ emojis }] = await tx.select({ emojis: countDistinct(reaction.emoji) }).from(reaction).where(eq(reaction.messageId, row.message.id));
+    const [{ existing }] = await tx.select({ existing: count() }).from(reaction)
+      .where(and(eq(reaction.messageId, row.message.id), eq(reaction.emoji, value)));
+    if (existing === 0 && emojis >= MAX_EMOJIS_PER_MESSAGE) throw new AppError("conflict", `A message can have at most ${MAX_EMOJIS_PER_MESSAGE} different reactions.`);
+    await tx.insert(reaction).values({ messageId: row.message.id, userId, emoji: value });
+  });
+  await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
+}
+
+export const MAX_PINS_PER_CHANNEL = 50;
+
+export async function setPinned(userId: string, rawMessageId: unknown, pinned: boolean): Promise<void> {
+  const row = await loadOwnedMessage(rawMessageId);
+  await requireChannel(db, row.message.channelId, userId, Permission.ManageMessages);
+  if (pinned && !row.message.pinnedAt) {
+    const [{ pins }] = await db.select({ pins: count() }).from(message)
+      .where(and(eq(message.channelId, row.message.channelId), isNotNull(message.pinnedAt)));
+    if (pins >= MAX_PINS_PER_CHANNEL) throw new AppError("conflict", `A channel can have at most ${MAX_PINS_PER_CHANNEL} pinned messages.`);
+  }
+  await db.transaction(async (tx) => {
+    await tx.update(message).set({ pinnedAt: pinned ? (row.message.pinnedAt ?? new Date()) : null }).where(eq(message.id, row.message.id));
+    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: pinned ? "message.pin" : "message.unpin", targetId: row.message.authorId });
+  });
+  await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });
+}
+
+/** Pinned messages of a channel, newest pin first. */
+export async function listPinned(userId: string, rawChannelId: unknown): Promise<MessageView[]> {
+  const channelId = parse(uuid, rawChannelId);
+  await requireChannel(db, channelId, userId);
+  const rows = await db
+    .select(viewColumns)
+    .from(message)
+    .innerJoin(user, eq(user.id, message.authorId))
+    .where(and(eq(message.channelId, channelId), isNotNull(message.pinnedAt)))
+    .orderBy(desc(message.pinnedAt))
+    .limit(MAX_PINS_PER_CHANNEL);
+  return toViews(rows);
 }
