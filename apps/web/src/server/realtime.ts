@@ -15,11 +15,17 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channels.changed"), communityId: z.string() }),
   z.object({ type: z.literal("member.removed"), communityId: z.string(), userId: z.string() }),
   z.object({ type: z.literal("community.deleted"), communityId: z.string() }),
+  // Personal events go to the person's own stream (`userTopic`), not to the community.
+  z.object({ type: z.literal("mention.created"), userId: z.string(), communityId: z.string(), channelId: z.string(), messageId: z.string() }),
 ]);
 
 export type RealtimeEvent = z.infer<typeof eventSchema>;
 /** Delivered to subscribers; `resync` means events may have been missed. */
 export type HubEvent = RealtimeEvent | { type: "resync"; communityId: string };
+
+/** Topic of a person's own stream; community streams use the community id. */
+export const userTopic = (userId: string) => `user:${userId}`;
+const topicOf = (event: RealtimeEvent) => (event.type === "mention.created" ? userTopic(event.userId) : event.communityId);
 type Listener = (event: HubEvent) => void;
 
 export async function publish(event: RealtimeEvent): Promise<void> {
@@ -32,19 +38,19 @@ class Hub {
   private connecting: Promise<void> | null = null;
   private retryMs = 500;
 
-  subscribe(communityId: string, listener: Listener): () => void {
-    const set = this.listeners.get(communityId) ?? new Set();
+  subscribe(topic: string, listener: Listener): () => void {
+    const set = this.listeners.get(topic) ?? new Set();
     set.add(listener);
-    this.listeners.set(communityId, set);
+    this.listeners.set(topic, set);
     void this.ensureConnected();
     return () => {
       set.delete(listener);
-      if (set.size === 0) this.listeners.delete(communityId);
+      if (set.size === 0) this.listeners.delete(topic);
     };
   }
 
-  private dispatch(event: HubEvent) {
-    for (const listener of this.listeners.get(event.communityId) ?? []) listener(event);
+  private dispatch(topic: string, event: HubEvent) {
+    for (const listener of this.listeners.get(topic) ?? []) listener(event);
   }
 
   private ensureConnected(): Promise<void> {
@@ -63,14 +69,14 @@ class Hub {
         return;
       }
       const parsed = eventSchema.safeParse(payload);
-      if (parsed.success) this.dispatch(parsed.data);
+      if (parsed.success) this.dispatch(topicOf(parsed.data), parsed.data);
     });
     client.on("error", (error) => {
       console.error("[realtime] listen connection lost", error.message);
       this.client = null;
       void client.end().catch(() => {});
       // Anything published while disconnected is lost: tell clients to refetch.
-      for (const communityId of this.listeners.keys()) this.dispatch({ type: "resync", communityId });
+      for (const topic of this.listeners.keys()) this.dispatch(topic, { type: "resync", communityId: topic });
       setTimeout(() => void this.ensureConnected(), this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 15_000);
     });

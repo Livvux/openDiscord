@@ -8,6 +8,7 @@ import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as messages from "@/server/messages";
 import * as moderation from "@/server/moderation";
 import { requireUser } from "@/server/session";
+import * as unread from "@/server/unread";
 
 async function run<T>(fn: (userId: string) => Promise<T>, refreshUi = true): Promise<ActionResult<T>> {
   return toResult(async () => {
@@ -45,6 +46,14 @@ export const sendMessage = async (channelId: string, content: string, attachment
 export const editMessage = async (messageId: string, content: string) =>
   run((u) => messages.editMessage(u, messageId, content), false);
 export const deleteMessage = async (messageId: string) => run((u) => messages.deleteMessage(u, messageId), false);
+
+// Fires often while reading, so it neither refreshes the router nor counts toward the mutation burst limit.
+export const markChannelRead = async (channelId: string, messageId: string) =>
+  toResult(async () => {
+    const user = await requireUser();
+    consume(`read:${user.id}`, 60, 60_000);
+    await unread.markChannelRead(user.id, channelId, messageId);
+  });
 
 export const kickMember = async (communityId: string, userId: string, reason: string) =>
   run((u) => moderation.kickMember(u, communityId, userId, reason));

@@ -2,19 +2,21 @@
 
 import { ImagePlusIcon, LoaderCircleIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ACCEPTED_IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
 interface ComposerProps {
   channelId: string;
   channelName: string;
   draft: string;
   setDraft: (draft: string) => void;
-  /** Resolves true when the message was sent; attachments are kept otherwise. */
-  onSend: (content: string, attachmentIds: string[]) => Promise<boolean>;
+  /** Resolves true when the message was sent; attachments are kept otherwise. Content has `<@id>` tokens. */
+  onSend: (content: string, attachmentIds: string[], mentions: Mention[]) => Promise<boolean>;
   /** Object storage is configured on this instance. */
   mediaEnabled: boolean;
+  communityId: string;
 }
 
 interface Upload {
@@ -34,7 +36,36 @@ async function uploadFile(channelId: string, file: File): Promise<string> {
   return body.id;
 }
 
-export function Composer({ channelId, channelName, draft, setDraft, onSend, mediaEnabled }: ComposerProps) {
+/** Member suggestions for the `@query` before the caret. */
+function useMentionSuggestions(communityId: string, query: string | null) {
+  const [results, setResults] = useState<{ query: string; members: Mention[] } | null>(null);
+  useEffect(() => {
+    if (query === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch(`/api/communities/${communityId}/members?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then((r) => (r.ok ? (r.json() as Promise<Mention[]>) : []))
+        .then((members) => setResults({ query, members }), () => {});
+    }, 120);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [communityId, query]);
+  return query !== null && results?.query === query ? results.members : [];
+}
+
+export function Composer({ channelId, channelName, draft, setDraft, onSend, mediaEnabled, communityId }: ComposerProps) {
+  const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
+  const [activeOption, setActiveOption] = useState(0);
+  const picked = useRef<Mention[]>([]);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const pendingCaret = useRef<number | null>(null);
+  // Hidden copies of previous routes stay mounted, so ids must be unique per instance.
+  const id = useId();
+  const optionsId = `${id}-mentions`;
+  const suggestions = useMentionSuggestions(communityId, mentionAt?.query ?? null);
+  const listOpen = mentionAt !== null && suggestions.length > 0;
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -83,16 +114,44 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
   const failed = uploads.find((u) => u.error);
   const canSend = !sending && !uploading && !failed && (draft.trim().length > 0 || ready.length > 0);
 
+  function trackMention(el: HTMLTextAreaElement) {
+    const next = mentionQuery(el.value, el.selectionStart);
+    setMentionAt(next);
+    if (next?.query !== mentionAt?.query) setActiveOption(0);
+  }
+
+  function pick(m: Mention) {
+    if (!mentionAt) return;
+    const before = draft.slice(0, mentionAt.start);
+    const after = draft.slice(mentionAt.start + 1 + mentionAt.query.length);
+    const inserted = `@${m.name} `;
+    picked.current = [...picked.current.filter((p) => p.id !== m.id), m];
+    setDraft(before + inserted + after);
+    setMentionAt(null);
+    pendingCaret.current = before.length + inserted.length;
+  }
+
+  // Place the caret after an inserted mention once React has rendered the new value.
+  useLayoutEffect(() => {
+    if (pendingCaret.current === null) return;
+    textarea.current?.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    pendingCaret.current = null;
+  }, [draft]);
+
   async function submit() {
     if (!canSend) return;
-    const content = draft.trim();
+    const text = draft.trim();
+    const mentions = picked.current.filter((m) => text.includes(`@${m.name}`));
+    const content = encodeMentions(text, mentions);
+    picked.current = [];
     setDraft("");
+    setMentionAt(null);
     if (ready.length === 0) {
-      void onSend(content, []);
+      void onSend(content, [], mentions);
       return;
     }
     setSending(true);
-    const sent = await onSend(content, ready);
+    const sent = await onSend(content, ready, mentions);
     setSending(false);
     if (sent) {
       uploads.forEach((u) => URL.revokeObjectURL(u.preview));
@@ -107,8 +166,35 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
         e.preventDefault();
         void submit();
       }}
-      className="mx-4 mb-4 rounded-lg bg-white/5 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
+      className="relative mx-4 mb-4 rounded-lg bg-white/5 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
     >
+      <p role="status" className="sr-only">
+        {listOpen ? `${suggestions.length} ${suggestions.length === 1 ? "member" : "members"} found. Use arrow keys and Enter to pick.` : ""}
+      </p>
+      {listOpen && (
+        <ul
+          id={optionsId}
+          role="listbox"
+          aria-label="Mention a member"
+          className="absolute right-0 bottom-full left-0 mb-2 max-h-64 overflow-y-auto rounded-lg border bg-popover p-1 shadow-lg"
+        >
+          {suggestions.map((m, i) => (
+            <li
+              key={m.id}
+              id={`${optionsId}-${m.id}`}
+              role="option"
+              aria-selected={i === activeOption}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pick(m);
+              }}
+              className={`cursor-pointer rounded-md px-2 py-1.5 text-sm ${i === activeOption ? "bg-white/10 text-white" : "text-zinc-300"}`}
+            >
+              @{m.name}
+            </li>
+          ))}
+        </ul>
+      )}
       {uploads.length > 0 && (
         <ul aria-label="Attached images" className="flex flex-wrap gap-2 px-3 pt-3">
           {uploads.map((u) => (
@@ -166,13 +252,22 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
             </Button>
           </>
         )}
-        <label htmlFor="composer" className="sr-only">
+        <label htmlFor={id} className="sr-only">
           Message #{channelName}
         </label>
         <textarea
-          id="composer"
+          id={id}
+          ref={textarea}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          aria-autocomplete="list"
+          aria-controls={listOpen ? optionsId : undefined}
+          aria-activedescendant={listOpen ? `${optionsId}-${suggestions[activeOption]?.id}` : undefined}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            trackMention(e.target);
+          }}
+          onSelect={(e) => trackMention(e.currentTarget)}
+          onBlur={() => setMentionAt(null)}
           onPaste={(e) => {
             const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
             if (mediaEnabled && files.length > 0) {
@@ -181,6 +276,24 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
             }
           }}
           onKeyDown={(e) => {
+            if (listOpen) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setActiveOption((i) => (i + step + suggestions.length) % suggestions.length);
+                return;
+              }
+              if ((e.key === "Enter" || e.key === "Tab") && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                pick(suggestions[activeOption] ?? suggestions[0]);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setMentionAt(null);
+                return;
+              }
+            }
             // Enter sends, Shift+Enter adds a line; don't interrupt IME composition.
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -190,11 +303,11 @@ export function Composer({ channelId, channelName, draft, setDraft, onSend, medi
           rows={1}
           maxLength={MESSAGE_MAX_LENGTH}
           placeholder={`Message #${channelName}`}
-          aria-describedby={remaining < 200 ? "composer-remaining" : undefined}
+          aria-describedby={remaining < 200 ? `${id}-remaining` : undefined}
           className={`field-sizing-content max-h-48 min-h-10 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400 ${mediaEnabled ? "" : "pl-2"}`}
         />
         {remaining < 200 && (
-          <span id="composer-remaining" className="pb-2.5 text-[11px] text-zinc-400">
+          <span id={`${id}-remaining`} className="pb-2.5 text-[11px] text-zinc-400">
             {remaining}
           </span>
         )}

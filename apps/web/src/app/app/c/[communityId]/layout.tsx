@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { ChannelSidebar } from "@/components/app/channel-sidebar";
 import { MobilePanel } from "@/components/app/mobile-nav";
 import { RealtimeProvider } from "@/components/app/realtime-provider";
+import { UnreadProvider } from "@/components/app/unread-provider";
 import { loadCommunityView } from "@/server/pages";
 import { requirePageUser } from "@/server/session";
 
@@ -19,10 +20,16 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
   const view = await loadCommunityView(user.id, communityId);
   return (
     <RealtimeProvider communityId={view.id}>
+      <UnreadProvider
+        communityId={view.id}
+        currentUserId={user.id}
+        initial={Object.fromEntries(view.channels.map((c) => [c.id, { unread: c.unread, mentions: c.mentions }]))}
+      >
       <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">
         <ChannelSidebar view={view} />
       </MobilePanel>
       <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      </UnreadProvider>
     </RealtimeProvider>
   );
 }

@@ -29,6 +29,8 @@ never claim otherwise. E2EE direct messages are planned with an audited protocol
 | Communities, memberships, roles | Running the community | Members | Until the community is deleted or you leave |
 | Messages | Conversation | Members of the community | Until deleted by author, moderator, community deletion or account deletion |
 | Images in messages | Conversation | Members of the community (served through the app, never public) | Re-encoded without EXIF/GPS on upload. Unreachable as soon as the message, channel, community or account is deleted; removed from storage within about an hour |
+| Read markers (last read message per channel) and mentions | Unread markers, mention badges and notifications | The person only | Until the message, channel or account is deleted |
+| Desktop-notification preference | Opt-in desktop notifications for mentions | Stored in the person's browser only (`localStorage`) | Until changed or browser data is cleared. Notifications show sender, channel and the start of the message on the device |
 | Account approval status (Closed Alpha) | Access control | The person (on sign-in) and instance administrators | Until account deletion |
 | Bans | Moderation | Moderators with ban permission | Until unbanned, community deleted or the banned account deleted |
 | Audit log | Moderation accountability | Members with "view audit log" | Until community deletion; 180-day retention job P1. Never contains message content |

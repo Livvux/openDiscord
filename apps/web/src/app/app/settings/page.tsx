@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { DeleteAccount } from "@/components/app/settings/delete-account";
+import { NotificationSettings } from "@/components/app/settings/notification-settings";
 import { ProfileForm } from "@/components/app/settings/profile-form";
 import { PasskeySettings } from "@/components/app/settings/passkey-settings";
 import { Sessions } from "@/components/app/settings/sessions";
@@ -45,6 +46,9 @@ async function Settings() {
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
         <ProfileForm name={user.name} email={user.email} />
+      </Section>
+      <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
+        <NotificationSettings />
       </Section>
       <Section title="Authenticator app" description="Optional two-factor authentication with a time-based code (TOTP).">
         <TwoFactorSettings enabled={has2fa} />

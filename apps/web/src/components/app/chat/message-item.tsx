@@ -6,6 +6,7 @@ import { useId, useState, useTransition } from "react";
 import { deleteMessage, editMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
+import { decodeMentions, encodeMentions, splitMentions, type Mention } from "@/lib/mentions";
 import type { MessageView } from "@/server/messages";
 import { ReportDialog } from "../report-dialog";
 import { Avatar, nameColor } from "../avatar";
@@ -13,19 +14,38 @@ import { Avatar, nameColor } from "../avatar";
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+/** Renders stored content with `<@id>` tokens as readable, highlighted names. */
+function MessageContent({ content, mentions, currentUserId }: { content: string; mentions: readonly Mention[]; currentUserId?: string }) {
+  const names = new Map(mentions.map((m) => [m.id, m.name]));
+  return splitMentions(content).map((part, i) =>
+    part.type === "text" ? (
+      part.text
+    ) : (
+      <span
+        key={i}
+        className={`rounded px-0.5 font-medium ${part.id === currentUserId ? "bg-amber-400/25 text-amber-100" : "bg-primary/20 text-indigo-200"}`}
+      >
+        @{names.get(part.id) ?? "unknown member"}
+      </span>
+    ),
+  );
+}
+
 interface MessageItemProps {
   message: MessageView;
+  currentUserId: string;
   grouped: boolean;
   canEdit: boolean;
   canDelete: boolean;
   onDeleted: (id: string) => void;
 }
 
-export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }: MessageItemProps) {
+export function MessageItem({ message, currentUserId, grouped, canEdit, canDelete, onDeleted }: MessageItemProps) {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const created = new Date(message.createdAt);
+  const mentionsMe = message.mentions.some((m) => m.id === currentUserId);
 
   function onDelete() {
     if (!window.confirm("Delete this message? This can't be undone.")) return;
@@ -38,7 +58,7 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
 
   function onSaveEdit(content: string) {
     startTransition(async () => {
-      const result = await editMessage(message.id, content);
+      const result = await editMessage(message.id, encodeMentions(content, message.mentions));
       if (result.ok) {
         setEditing(false);
         setError(null);
@@ -48,7 +68,7 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
 
   return (
     <li
-      className={`group relative flex gap-3 px-5 hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"}`}
+      className={`group relative flex gap-3 px-5 hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"} ${mentionsMe ? "border-l-2 border-amber-400 bg-amber-400/[0.07]" : ""}`}
       aria-busy={pending || undefined}
     >
       <div className="w-8 shrink-0">
@@ -65,11 +85,11 @@ export function MessageItem({ message, grouped, canEdit, canDelete, onDeleted }:
         )}
         {grouped && <span className="sr-only" suppressHydrationWarning>{message.authorName}, {timeFormat.format(created)}: </span>}
         {editing ? (
-          <EditForm initial={message.content} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
+          <EditForm initial={decodeMentions(message.content, message.mentions)} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
           (message.content || message.editedAt) && (
             <p className="break-words whitespace-pre-wrap text-zinc-300">
-              {message.content}
+              <MessageContent content={message.content} mentions={message.mentions} currentUserId={currentUserId} />
               {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
             </p>
           )
@@ -155,12 +175,12 @@ function EditForm({ initial, pending, onSave, onCancel }: { initial: string; pen
   );
 }
 
-export function PendingItem({ content, images }: { content: string; images: number }) {
+export function PendingItem({ content, mentions, images }: { content: string; mentions: Mention[]; images: number }) {
   return (
     <li className="flex gap-3 px-5 py-0.5 opacity-60" aria-label="Sending">
       <div className="w-8 shrink-0" />
       <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
-        {content}
+        <MessageContent content={content} mentions={mentions} />
         {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 image" : `${images} images`}…</span>}
       </p>
     </li>

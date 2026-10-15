@@ -71,6 +71,13 @@ the same escalation rule as editing the role itself.
    the newest page: the page is authoritative for its range (offline deletions disappear), and if more
    than a page was missed, older local history is dropped rather than leaving a hidden gap.
 
+Personal events (mentions) go to a second stream per tab, `GET /api/me/events`, on the topic
+`user:<id>`. It re-checks that the person can still read the channel before delivering a mention and
+carries only what a notification needs (sender, channel, a 140-character excerpt). Unread state is a
+`channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward);
+mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
+only over channels the person can view.
+
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every
 listener. Delivery is at-most-once; the resync on reconnect is the recovery path.
 

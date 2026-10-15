@@ -8,6 +8,7 @@ import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
 import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Permission, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
+import { NOTHING_UNREAD, unreadState } from "./unread";
 import { z } from "zod";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
 
@@ -24,6 +25,9 @@ export interface ChannelSummary {
   permissions: number;
   /** Hidden from the default role. */
   isPrivate: boolean;
+  unread: boolean;
+  mentions: number;
+  lastReadId: string | null;
 }
 
 export interface CommunityView {
@@ -75,9 +79,11 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
     .select({ channelId: channelOverride.channelId })
     .from(channelOverride)
     .where(and(eq(channelOverride.roleId, ctx.defaultRoleId), sql`${channelOverride.deny} & ${Permission.ViewChannels} <> 0`));
-  const channels = rows
+  const visible = rows
     .map((r) => ({ ...r, permissions: perms.get(r.id)!.permissions, isPrivate: hidden.some((h) => h.channelId === r.id) }))
     .filter((r) => (r.permissions & Permission.ViewChannels) !== 0);
+  const unread = await unreadState(userId, visible.map((r) => r.id));
+  const channels = visible.map((r) => ({ ...r, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
   return { id: c.id, name: c.name, isOwner: ctx.authority.isOwner, authority: ctx.authority, channels };
 }
 

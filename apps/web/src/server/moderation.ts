@@ -1,7 +1,7 @@
 import { getInstanceSettings } from "./instance-policy";
 // Members, roles, bans and the audit log. Every mutation re-checks authority inside a
 // transaction that locks the community row, so concurrent role changes can't race a kick.
-import { and, asc, count, desc, eq, gte, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, max, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLog, ban, member, memberRole, role, user } from "@/db/schema";
 import { loadAuthority, lockCommunity, requireMember, type Db } from "./access";
@@ -47,6 +47,21 @@ export async function listMembers(userId: string, rawCommunityId: unknown): Prom
     isOwner: r.userId === community.ownerId,
     roleIds: assignments.filter((a) => a.userId === r.userId).map((a) => a.roleId),
   }));
+}
+
+/** Up to 8 members whose display name starts with `q` (mention autocomplete). Names only. */
+export async function searchMembers(userId: string, rawCommunityId: unknown, rawQuery: unknown): Promise<{ id: string; name: string }[]> {
+  const communityId = parse(uuid, rawCommunityId);
+  const q = parse(z.string().trim().max(64), rawQuery ?? "");
+  await requireMember(db, communityId, userId);
+  const pattern = `${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  return db
+    .select({ id: user.id, name: user.name })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(and(eq(member.communityId, communityId), ilike(user.name, pattern)))
+    .orderBy(asc(user.name))
+    .limit(8);
 }
 
 export async function listRoles(userId: string, rawCommunityId: unknown): Promise<RoleSummary[]> {
