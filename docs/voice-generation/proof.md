@@ -52,6 +52,13 @@ stored for that branch. Native response acceptance, queue behavior and unchanged
 pre-response trust are distinct assertions; valid prior local SAS can already
 have established trust before remote signature storage fails.
 
+At checkpoint `108ec9c`, genuine SAS signature output contained one user and no
+own-user entry. It therefore proved refused peer-signature handling, not native
+mixed own/peer signature fanout. The native mixed query/claim test passed with
+two queried users, two claimed users, one current prekey consumed, zero departed
+prekeys and zero retry consumption. These are test-fixture observations, not
+authorization to activate a product transport.
+
 ToDevice send and retirement support exactly one user/device target. Multi-target
 and wildcard output is rejected before any queue/receipt/native completion;
 the owner suspends rather than splitting or rewriting it. The contract-only

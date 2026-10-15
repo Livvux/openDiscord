@@ -17,6 +17,10 @@ const generationControl = z.object({
   audience: z.array(z.uuid()).length(2), transaction: z.uuid(), action: z.literal("prepared"),
 }).strict();
 const GENERATION_CONTROL = "app.opendiscord.voice.generation-proof";
+function sameCallUser(user: string, call: string): boolean {
+  const match = new RegExp(`^@voice_${call}_(${uuid}):opendiscord\\.invalid$`).exec(user);
+  return !!match && z.uuid().safeParse(match[1]).success;
+}
 
 /** No splitting or partial processing of unsupported native ToDevice fanout. */
 export function validateGenerationToDevice(body: unknown, call: string): void {
@@ -24,9 +28,9 @@ export function validateGenerationToDevice(body: unknown, call: string): void {
   const targets = Object.entries(messages);
   if (targets.length !== 1) throw new Error("Only single-target native ToDevice is supported.");
   const [user, devices] = targets[0];
-  if (!new RegExp(`^@voice_${call}_${uuid}:opendiscord\\.invalid$`).test(user)) throw new Error("Same-call target required.");
+  if (!sameCallUser(user, call)) throw new Error("Same-call target required.");
   const ids = Object.keys(devices);
-  if (ids.length !== 1 || !new RegExp(`^${uuid}$`).test(ids[0])) throw new Error("Only an exact single device is supported.");
+  if (ids.length !== 1 || !new RegExp(`^${uuid}$`).test(ids[0]) || !z.uuid().safeParse(ids[0]).success) throw new Error("Only an exact single device is supported.");
 }
 
 /** Normal native encryption of a benign purpose-bound control, no media keys. */
@@ -66,12 +70,13 @@ export class GenerationServer extends VoiceTransport {
   private readonly owners = new Set<EphemeralVoice>();
   private readonly publicDirectory = new Map<string, PublicDirectory>();
   readonly retired: Receipt[] = [];
+  readonly signatureWrites = new Map<string, number>();
   private readonly generationReceipts = new Map<string, Receipt>();
   override enroll(owner: EphemeralVoice): void {
     super.enroll(owner); this.enrolledUsers.add(owner.binding.user); this.activeUsers.add(owner.binding.user); this.owners.add(owner);
     this.publicDirectory.set(owner.binding.user, { signing: {}, prekeys: new Map(), claimed: new Set(), deviceId: owner.binding.device, fallback: false });
   }
-  override remove(owner: EphemeralVoice): void { super.remove(owner); this.activeUsers.delete(owner.binding.user); }
+  override remove(owner: EphemeralVoice): void { super.remove(owner); this.activeUsers.delete(owner.binding.user); this.publicDirectory.delete(owner.binding.user); }
   override signing(owner: EphemeralVoice, request: C.UploadSigningKeysRequest): void {
     super.signing(owner, request);
     const record = this.publicDirectory.get(owner.binding.user);
@@ -130,8 +135,7 @@ export class GenerationServer extends VoiceTransport {
       const body = jsonObject.parse(JSON.parse(request.body));
       const map = request instanceof C.KeysQueryRequest ? jsonObject.parse(body.device_keys) : request instanceof C.KeysClaimRequest ? jsonObject.parse(body.one_time_keys) : body;
       const users = Object.keys(map);
-      const scoped = new RegExp(`^@voice_${this.call}_${uuid}:opendiscord\\.invalid$`);
-      if (!users.length || users.length > 8 || users.some((user) => !scoped.test(user))) throw new Error("Bounded same-call users required.");
+      if (!users.length || users.length > 8 || users.some((user) => !sameCallUser(user, this.call))) throw new Error("Bounded same-call users required.");
       const absent = users.filter((user) => !this.activeUsers.has(user));
       if (request instanceof C.KeysQueryRequest) {
         const device_keys: Record<string, unknown> = {}, master_keys: Record<string, unknown> = {}, self_signing_keys: Record<string, unknown> = {}, user_signing_keys: Record<string, unknown> = {};
@@ -169,7 +173,7 @@ export class GenerationServer extends VoiceTransport {
         // Official /keys/signatures/upload: failures[user][key] is a standard Error.
         // Refused storage is M_FORBIDDEN, never the cryptographic M_INVALID_SIGNATURE.
         const failures: Record<string, Record<string, unknown>> = {};
-        const writes: { target: Record<string, unknown>; signatures: Record<string, unknown> }[] = [];
+        const writes: { user: string; target: Record<string, unknown>; signatures: Record<string, unknown> }[] = [];
         for (const user of users) for (const [id, value] of Object.entries(jsonObject.parse(body[user]))) {
           const signed = jsonObject.parse(value);
           if (signed.user_id !== user) throw new Error("Signature user mismatch.");
@@ -178,9 +182,12 @@ export class GenerationServer extends VoiceTransport {
           const target = id === record.deviceId ? record.device : Object.values(record.signing).find((key) => Object.values(jsonObject.parse(key.keys)).includes(id));
           if (!target) throw new Error("Unknown current signature target.");
           const ownSignature = jsonObject.parse(jsonObject.parse(signed.signatures)[owner.binding.user]);
-          writes.push({ target, signatures: ownSignature });
+          writes.push({ user, target, signatures: ownSignature });
         }
-        for (const write of writes) write.target.signatures = { ...jsonObject.parse(write.target.signatures ?? {}), [owner.binding.user]: { ...jsonObject.parse(jsonObject.parse(write.target.signatures ?? {})[owner.binding.user] ?? {}), ...write.signatures } };
+        for (const write of writes) {
+          write.target.signatures = { ...jsonObject.parse(write.target.signatures ?? {}), [owner.binding.user]: { ...jsonObject.parse(jsonObject.parse(write.target.signatures ?? {})[owner.binding.user] ?? {}), ...write.signatures } };
+          this.signatureWrites.set(write.user, (this.signatureWrites.get(write.user) ?? 0) + 1);
+        }
         nativeResponse = { failures }; if (absent.length) disposition = "processed-refused";
       }
       if (!absent.length) this.submitted.push({ kind: C.RequestType[request.type], sender: owner.binding.member, recipients: users.length });
@@ -250,6 +257,9 @@ export class GenerationDispatcher {
   }
   async acceptResponse(request: NativeRequest, receipt: Receipt): Promise<void> {
     if (receipt.generation !== this.server.generation) throw new Error("Stale response fenced.");
+    const operation = receipt.disposition === "processed-retired" ? "retire" : "send";
+    const digest = createHash("sha256").update(JSON.stringify([this.owner.binding, receipt.generation, operation, request.id, request.type, request.body])).digest("hex");
+    if (digest !== receipt.digest) throw new Error("Response does not bind original native request.");
     if (!request.id) return;
     if (this.completions.has(request.id)) return;
     await this.owner.machine.markRequestAsSent(request.id, request.type, JSON.stringify(receipt.nativeResponse));

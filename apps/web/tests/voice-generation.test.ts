@@ -183,16 +183,17 @@ describe("isolated native generation retirement candidate", () => {
       const flow = verifyPair(a, b).then(() => "completed", () => "interrupted");
       const pending = await paused;
       expect(pending.request).toBeInstanceOf(C.SignatureUploadRequest);
+      expect(typeof pending.request.id).toBe("string");
       console.info("voice-generation-signature-public-api", JSON.stringify({ users: Object.keys(JSON.parse(pending.request.body)).length, includesOwn: Object.hasOwn(JSON.parse(pending.request.body), a.binding.user) }));
       const trustBeforeResponse = (await a.device(b)).isVerified();
       server.remove(b); server.advance();
-      const writesBefore = server.submitted.filter((entry) => entry.kind === "SignatureUpload").length;
+      const writesBefore = server.signatureWrites.get(b.binding.user) ?? 0;
       const receipt = await dispatcher.respondPending();
       expect(receipt.disposition).toBe("processed-refused");
       const failures = receipt.nativeResponse.failures as Record<string, Record<string, { errcode: string }>>;
       expect(Object.keys(failures)).toEqual([b.binding.user]);
       expect(Object.values(failures[b.binding.user]).every((failure) => failure.errcode === "M_FORBIDDEN")).toBe(true);
-      expect(server.submitted.filter((entry) => entry.kind === "SignatureUpload")).toHaveLength(writesBefore);
+      expect(server.signatureWrites.get(b.binding.user) ?? 0).toBe(writesBefore);
       expect(await flow).toBe("interrupted");
       const stored = await a.machine.getDevice(new C.UserId(b.binding.user), new C.DeviceId(b.binding.device));
       expect(stored?.isVerified()).toBe(trustBeforeResponse);
@@ -212,7 +213,16 @@ describe("isolated native generation retirement candidate", () => {
     const decryptHistory = async () => JSON.parse((await dm.decryptRoomEvent(JSON.stringify(event), room, new C.DecryptionSettings(C.TrustRequirement.Untrusted))).event).content;
     expect(await decryptHistory()).toEqual(history);
     const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)])) : value;
-    const digest = async () => createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), counts: await dm.roomKeyCounts(), requests: (await dm.outgoingRequests()).map((r) => ({ type: r.type, body: createHash("sha256").update(JSON.stringify(canonical(JSON.parse(r.body)))).digest("hex") })).sort((left, right) => left.type - right.type || left.body.localeCompare(right.body)) })).digest("hex");
+    const digest = async () => {
+      const counts = await dm.roomKeyCounts();
+      const requests = (await dm.outgoingRequests()).map((r) => ({
+        type: r.type,
+        // Accepted baseline proves only upload/query request IDs are volatile.
+        id: r.type === C.RequestType.KeysUpload || r.type === C.RequestType.KeysQuery ? null : r.id,
+        body: createHash("sha256").update(JSON.stringify(canonical(JSON.parse(r.body)))).digest("hex"),
+      })).sort((left, right) => left.type - right.type || left.body.localeCompare(right.body) || (left.id ?? "").localeCompare(right.id ?? ""));
+      return createHash("sha256").update(JSON.stringify({ curve: dm.identityKeys.curve25519.toBase64(), ed: dm.identityKeys.ed25519.toBase64(), total: counts.total, backedUp: counts.backedUp, verified: (await dm.getIdentity(dm.userId))?.isVerified() ?? false, flows: dm.getVerificationRequests(dm.userId).map((flow) => flow.flowId), requests })).digest("hex");
+    };
     const before = await digest();
     expect(await digest()).toBe(before);
     const server = new GenerationServer();
@@ -231,6 +241,7 @@ describe("isolated native generation retirement candidate", () => {
         const before = identity(a);
         try {
           await verifyPair(a, d);
+          const retainedPeerIdentity = identity(d);
           const [left] = dispatchers;
           const paused = left.pauseAt(phase);
           const oldFlow = (phase === "ready" ? verifyPair(b, a) : verifyPair(a, b)).then(() => "completed", () => "interrupted");
@@ -251,6 +262,10 @@ describe("isolated native generation retirement candidate", () => {
           expect(server.retired.every((receipt) => receipt.enqueued === 0 && receipt.disposition === "processed-retired")).toBe(true);
           expect(identity(a)).toEqual(before);
           expect((await a.device(d)).isVerified()).toBe(true);
+          expect((await d.device(a)).isVerified()).toBe(true);
+          expect(identity(d)).toBe(retainedPeerIdentity);
+          expect(server.enrolledUsers.size).toBe(4);
+          expect(server.generation).toBe(2);
           for (const owner of [a, c]) expect((await owner.machine.outgoingRequests()).filter((r) => r.type === C.RequestType.ToDevice)).toHaveLength(0);
           await verifyPair(a, removed ? c : b);
           const peer = removed ? c : b;
