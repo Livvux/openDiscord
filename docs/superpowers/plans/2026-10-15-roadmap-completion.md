@@ -65,7 +65,7 @@
 ### Task 6: DMs and authenticated E2EE
 
 - [x] Produce an evidence-backed crypto integration decision and executable feasibility test.
-- [ ] Implement requests, membership, blocking/reporting and encrypted multi-device transport, verification and recovery.
+- [x] Implement requests, membership, blocking/reporting and encrypted multi-device transport, verification and recovery.
 - [ ] Verify server ciphertext-only behavior, revocation, replay boundaries and recovery; obtain independent audit before an audited claim.
 - [ ] Implement and verify voice E2EE participant key distribution separately.
 
@@ -90,7 +90,7 @@
 - Public health/readiness return 200. Maintenance is scheduled hourly; its first apply minimized one legacy session's metadata and deleted no active records. Health and backup failure/staleness monitors run on separate hosts; SMTP accepted test notifications to the existing operator address. Inbox delivery is not proven by SMTP acceptance alone.
 - Cloudflare configuration now disables injected RUM only for opendiscord.app. API readback and live browser DOM/network checks on funding and sign-in found no Cloudflare Analytics script/request after propagation; CSP was not relaxed.
 - [PR #34](https://github.com/Livvux/openDiscord/pull/34): operator-approved public policies and 16-year signup self-attestation. Exact-head CI 38778505661 passed at 77ffba8; merged and deployed as 90920fe. Public browser verified approved operator details and the required age checkbox; ready200 and environment mode0600. No date of birth or identity document is collected. External legal review remains open.
-- [PR #30](https://github.com/Livvux/openDiscord/pull/30): encrypted DMs with Matrix crypto WASM18.9.0 are still in implementation and runtime verification. No plaintext fallback or completed/audited E2EE claim is made. Voice E2EE has not shipped.
+- [PR #30](https://github.com/Livvux/openDiscord/pull/30): Matrix crypto WASM18.9.0 encrypted DMs merged as9afba57 after exact-head CI38785473940 passed lint/types, 268 tests (5 existing skips), production/Docker builds and43 browser checks (22 existing conditional skips). Desktop/mobile genuine SAS, offline delivery, bounded recovery, transfer retry after aborted storage, replay/tamper and explicit identity reset passed; independent internal security/TypeScript reviews approved. Production container restarted18:39:13UTC with28 migrations; public readiness200, protected messages route redirects to sign-in, mobile sign-in has no overflow or injected analytics, environment0600. This is deployment/readiness evidence, not a real-user production conversation or external cryptographic audit. Voice E2EE has not shipped.
 - SMTP-disabled settings behavior is browser-covered; SMTP-enabled real-inbox delivery, TURN, physical-device voice and push delivery remain separate acceptance checks.
 
 ### Auth key rotation evidence (2026-10-15)

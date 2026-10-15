@@ -1,3 +1,4 @@
+import { exportCommunityArchive } from "@/server/community-archive";
 import { exportCommunity } from "@/server/community-export";
 import { errorResponse } from "@/server/http";
 import { consume } from "@/server/limits";
@@ -9,6 +10,15 @@ export async function GET(request: Request, ctx: RouteContext<"/api/communities/
     const user = await requireUser(request.headers);
     await consume(`export:${user.id}`, 5, 60 * 60_000);
     const { communityId } = await ctx.params;
+    if (new URL(request.url).searchParams.get("attachments") === "1") {
+      const body = await exportCommunityArchive(user, communityId, request.signal);
+      return new Response(body, { headers: {
+        "Content-Type": "application/gzip",
+        "Content-Disposition": `attachment; filename="opendiscord-community-${communityId}.odc.gz"`,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      } });
+    }
     const data = await exportCommunity(user.id, communityId);
     return new Response(JSON.stringify(data), {
       headers: {

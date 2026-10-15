@@ -1,10 +1,11 @@
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
+import { MAX_ARCHIVE_COMPRESSED_BYTES } from "@/lib/limits";
 import { AppError } from "./errors";
 
 export const ARCHIVE_LIMITS = {
-  compressedBytes: 384 * 1024 * 1024,
+  compressedBytes: MAX_ARCHIVE_COMPRESSED_BYTES,
   decodedBytes: 400 * 1024 * 1024,
   recordBytes: 4 * 1024 * 1024,
 };

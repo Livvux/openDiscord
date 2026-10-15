@@ -2,10 +2,10 @@
 // authors become plain names, mentions become text. Only the owner can export (it contains every
 // member's messages) and the export is audited. Importing creates a new community owned by the
 // importer; imported messages keep their original author name and time, marked as imported.
-import { asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, auditLog, category, channel, channelOverride, community, member, mention, message, role, user } from "@/db/schema";
+import { attachment, auditLog, category, channel, channelOverride, community, member, mention, message, role, session, user } from "@/db/schema";
 import { requireMember } from "./access";
 import { uuidv7 } from "./uuidv7";
 import { AppError, forbidden } from "./errors";
@@ -19,7 +19,7 @@ export const EXPORT_VERSION = 1;
 export const MAX_IMPORT_MESSAGES = 100_000;
 
 const key = z.string().min(1).max(64);
-const exportSchema = z.object({
+export const communityExportSchema = z.object({
   format: z.literal(EXPORT_FORMAT),
   version: z.literal(EXPORT_VERSION),
   community: z.object({ name: communityName, rules: z.string().trim().max(4000).default(""), rulesRequired: z.boolean().default(false) })
@@ -49,14 +49,14 @@ const exportSchema = z.object({
   })).max(MAX_IMPORT_MESSAGES),
 });
 
-export type CommunityExport = z.infer<typeof exportSchema> & {
+export type CommunityExport = z.infer<typeof communityExportSchema> & {
   exportedAt: string;
   /** More than MAX_IMPORT_MESSAGES messages existed; only the newest are included. */
   truncated: boolean;
 };
 
 /** Everything needed to rebuild the community elsewhere. Owner only; audited. */
-export async function exportCommunity(userId: string, rawCommunityId: unknown): Promise<CommunityExport> {
+export async function exportCommunity(userId: string, rawCommunityId: unknown, includeMessages = true): Promise<CommunityExport> {
   const communityId = parse(uuid, rawCommunityId);
   const { community: c, authority } = await requireMember(db, communityId, userId);
   if (!authority.isOwner) throw forbidden("Only the owner can export a community.");
@@ -69,13 +69,13 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
   const [overrides, messages] = channelIds.length
     ? await Promise.all([
         db.select().from(channelOverride).where(inArray(channelOverride.channelId, channelIds)),
-        db
+        includeMessages ? db
           .select({ m: message, authorName: user.name })
           .from(message)
           .innerJoin(user, eq(user.id, message.authorId))
           .where(inArray(message.channelId, channelIds))
           .orderBy(desc(message.id))
-          .limit(MAX_IMPORT_MESSAGES + 1),
+          .limit(MAX_IMPORT_MESSAGES + 1) : Promise.resolve([]),
       ])
     : [[], []];
   // Over the cap: keep the newest messages and say so.
@@ -114,6 +114,12 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown): 
   };
 }
 
+export interface ArchiveStaging {
+  sessionId: string;
+  /** Created and collected by this server-side import, never read as DB IDs from the archive. */
+  attachments: readonly { id: string; messageKey: string }[];
+}
+
 const CHUNK = 1000;
 /** Imported times are clamped: ids derive from them, and far-future ids would sort after every live message. */
 const EARLIEST = Date.parse("2015-01-01T00:00:00Z");
@@ -122,23 +128,45 @@ const clampTime = (iso: string) => Math.min(Math.max(Date.parse(iso), EARLIEST),
 let importing = false;
 
 /** Rebuilds an exported community as a new community owned by the importer. */
-export async function importCommunity(userId: string, rawExport: unknown): Promise<string> {
-  const data = parse(exportSchema, rawExport);
+export async function importCommunity(userId: string, rawExport: unknown, staging?: ArchiveStaging): Promise<string> {
+  const data = parse(communityExportSchema, rawExport);
   await assertActiveUser(userId);
   if (new Set(data.messages.map((m) => m.key)).size !== data.messages.length) throw new AppError("invalid", "The export contains duplicate messages.");
   if (importing) throw new AppError("rate_limited", "Another import is running. Try again in a minute.");
   importing = true;
   try {
-    return await runImport(userId, data);
+    return await runImport(userId, data, staging);
   } finally {
     importing = false;
   }
 }
 
-async function runImport(userId: string, data: z.infer<typeof exportSchema>): Promise<string> {
+async function runImport(userId: string, data: z.infer<typeof communityExportSchema>, staging?: ArchiveStaging): Promise<string> {
   const channelKeys = new Set(data.channels.map((ch) => ch.key));
   if (data.messages.some((m) => !channelKeys.has(m.channelKey))) throw new AppError("invalid", "The export refers to a channel it doesn't contain.");
+  if (staging) {
+    const counts = new Map<string, number>();
+    const ids = new Set<string>();
+    const keys = new Set(data.messages.map((m) => m.key));
+    for (const file of staging.attachments) {
+      if (ids.has(file.id) || !keys.has(file.messageKey)) throw new AppError("invalid", "Invalid staged attachment references.");
+      ids.add(file.id);
+      counts.set(file.messageKey, (counts.get(file.messageKey) ?? 0) + 1);
+    }
+    if (data.messages.some((m) => m.attachments !== (counts.get(m.key) ?? 0))) throw new AppError("invalid", "The archive has missing or extra attachments.");
+  }
   return db.transaction(async (tx) => {
+    await tx.execute(sql`set local transaction_timeout = '30s'`);
+    await tx.execute(sql`set local statement_timeout = '15s'`);
+    await tx.execute(sql`set local lock_timeout = '2s'`);
+    const [actor] = await tx.select({ id: user.id }).from(user).where(eq(user.id, userId)).for("update");
+    if (!actor) throw forbidden("The importing account no longer exists.");
+    if (staging) {
+      const [activeSession] = await tx.select({ id: session.id }).from(session)
+        .where(and(eq(session.id, staging.sessionId), eq(session.userId, userId), gt(session.expiresAt, new Date()))).for("update");
+      if (!activeSession) throw new AppError("unauthorized", "Sign in again before importing.");
+    }
+    await assertActiveUser(userId, tx);
     const CAPS = await getInstanceSettings(tx);
     const [{ owned }] = await tx.select({ owned: count() }).from(community).where(eq(community.ownerId, userId));
     enforceCap(owned, CAPS.ownedCommunities, `You can own at most ${CAPS.ownedCommunities} communities.`);
@@ -192,7 +220,7 @@ async function runImport(userId: string, data: z.infer<typeof exportSchema>): Pr
     const sorted = [...data.messages].sort((a, b) => clampTime(a.createdAt) - clampTime(b.createdAt));
     const messageIds = new Map(sorted.map((m) => [m.key, uuidv7(clampTime(m.createdAt))]));
     const rows = sorted.map((m) => {
-      const note = m.attachments > 0 ? `\n_(${m.attachments} attachment${m.attachments === 1 ? "" : "s"} not imported)_` : "";
+      const note = !staging && m.attachments > 0 ? `\n_(${m.attachments} attachment${m.attachments === 1 ? "" : "s"} not imported)_` : "";
       const ref = (k: string | null) => (k ? (messageIds.get(k) ?? null) : null);
       return {
         id: messageIds.get(m.key)!,
@@ -216,6 +244,27 @@ async function runImport(userId: string, data: z.infer<typeof exportSchema>): Pr
       if (r.replyToId && (!parent || parent.channelId !== r.channelId)) r.replyToId = null;
     }
     for (let i = 0; i < rows.length; i += CHUNK) await tx.insert(message).values(rows.slice(i, i + CHUNK));
+    if (staging) {
+      const sourceMessages = new Map(data.messages.map((m) => [m.key, m]));
+      for (let i = 0; i < staging.attachments.length; i += CHUNK) {
+        const files = staging.attachments.slice(i, i + CHUNK);
+        const links = files.map((file) => {
+          const source = sourceMessages.get(file.messageKey);
+          const targetMessage = messageIds.get(file.messageKey);
+          const targetChannel = source && channelIds.get(source.channelKey);
+          if (!targetMessage || !targetChannel) throw new AppError("invalid", "Invalid staged attachment references.");
+          return sql`(${file.id}::uuid, ${targetMessage}::uuid, ${targetChannel}::uuid)`;
+        });
+        const linked = await tx.execute<{ id: string }>(sql`
+          update attachment a set message_id = v.message_id, channel_id = v.channel_id, linked_at = now()
+          from (values ${sql.join(links, sql`, `)}) as v(id, message_id, channel_id)
+          where a.id = v.id and a.uploader_id = ${userId}
+            and a.message_id is null and a.linked_at is null and a.channel_id is null
+          returning a.id
+        `);
+        if (linked.rows.length !== files.length) throw new AppError("conflict", "Staged files are no longer available. Import the archive again.");
+      }
+    }
     await tx.insert(auditLog).values({ communityId: c.id, actorId: userId, action: "community.import", reason: `${sorted.length} messages` });
     return c.id;
   });

@@ -8,3 +8,9 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 
 /** Other files are stored unchanged and only ever served as downloads. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+/** Complete community archives fail explicitly instead of silently omitting files over these caps. */
+export const MAX_ARCHIVE_ATTACHMENTS = 4096;
+export const MAX_ARCHIVE_MEDIA_BYTES = 256 * 1024 * 1024;
+export const MAX_ARCHIVE_METADATA_BYTES = 32 * 1024 * 1024;
+export const MAX_ARCHIVE_COMPRESSED_BYTES = 384 * 1024 * 1024;

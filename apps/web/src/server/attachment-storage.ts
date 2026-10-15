@@ -6,8 +6,8 @@ import { Readable } from "node:stream";
 import { AwsClient } from "aws4fetch";
 
 export interface AttachmentStorage {
-  put(key: string, data: Uint8Array<ArrayBuffer>, contentType: string): Promise<void>;
-  read(key: string): Promise<Response>;
+  put(key: string, data: Uint8Array<ArrayBuffer>, contentType: string, signal?: AbortSignal): Promise<void>;
+  read(key: string, signal?: AbortSignal): Promise<Response>;
   remove(key: string): Promise<boolean>;
 }
 
@@ -21,24 +21,24 @@ export function localAttachmentStorage(directory: string): AttachmentStorage {
   if (!isAbsolute(directory)) throw new Error("ATTACHMENT_DIR must be an absolute private path");
   const path = (key: string) => join(directory, validKey(key));
   return {
-    async put(key, data) {
+    async put(key, data, _contentType, signal) {
       const target = path(key);
       await mkdir(join(directory, "attachments"), { recursive: true, mode: 0o700 });
       const temporary = `${target}.${randomUUID()}.tmp`;
       try {
-        await writeFile(temporary, data, { flag: "wx", mode: 0o600 });
+        await writeFile(temporary, data, { flag: "wx", mode: 0o600, signal });
         await rename(temporary, target);
       } finally {
         await unlink(temporary).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
       }
     },
-    async read(key) {
+    async read(key, signal) {
       try {
         const handle = await open(path(key), constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const info = await handle.stat();
           if (!info.isFile()) { await handle.close(); return new Response(null, { status: 404 }); }
-          return new Response(Readable.toWeb(handle.createReadStream()) as ReadableStream<Uint8Array>, {
+          return new Response(Readable.toWeb(handle.createReadStream({ signal })) as ReadableStream<Uint8Array>, {
             headers: { "Content-Length": String(info.size) },
           });
         } catch (error) { await handle.close(); throw error; }
@@ -64,11 +64,12 @@ export function configuredAttachmentStorage(): AttachmentStorage | null {
   const client = new AwsClient({ accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY, service: "s3", region: "auto" });
   const url = (key: string) => `${R2_ENDPOINT.replace(/\/$/, "")}/${R2_BUCKET}/${validKey(key)}`;
   return {
-    async put(key, data, contentType) {
-      const result = await client.fetch(url(key), { method: "PUT", body: data, headers: { "Content-Type": contentType, "Content-Length": String(data.byteLength) } });
+    async put(key, data, contentType, signal) {
+      const init = { method: "PUT", body: data, signal, headers: { "Content-Type": contentType, "Content-Length": String(data.byteLength) } };
+      const result = signal ? await fetch(await client.sign(url(key), init)) : await client.fetch(url(key), init);
       if (!result.ok) throw new Error("Attachment object write failed");
     },
-    read: (key) => client.fetch(url(key)),
+    read: (key, signal) => signal ? client.sign(url(key), { signal }).then((request) => fetch(request)) : client.fetch(url(key)),
     async remove(key) {
       const result = await client.fetch(url(key), { method: "DELETE" });
       return result.ok || result.status === 404;

@@ -1,16 +1,25 @@
 "use client";
 
 import { PlusIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useId, useState, useTransition } from "react";
 import { createCommunity } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MAX_ARCHIVE_COMPRESSED_BYTES } from "@/lib/limits";
 
-export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" | "button" }) {
+type CreateCommunityDialogProps = { trigger?: "icon" | "button" };
+
+export function CreateCommunityDialog(props: CreateCommunityDialogProps) {
+  const pathname = usePathname();
+  return <CommunityCreationForm key={pathname} {...props} />;
+}
+
+function CommunityCreationForm({ trigger = "icon" }: CreateCommunityDialogProps) {
   const router = useRouter();
+  const id = useId();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -50,8 +59,8 @@ export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" |
             <DialogDescription>You&apos;ll be the owner. You can invite people right after.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
-            <Label htmlFor="community-name">Name</Label>
-            <Input id="community-name" name="name" required maxLength={64} autoFocus autoComplete="off" />
+            <Label htmlFor={`${id}-name`}>Name</Label>
+            <Input id={`${id}-name`} name="name" required maxLength={64} autoFocus autoComplete="off" />
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
@@ -59,13 +68,13 @@ export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" |
           </DialogFooter>
         </form>
         <div className="grid gap-1.5 border-t pt-4">
-          <Label htmlFor="community-import">Or import an export file</Label>
+          <Label htmlFor={`${id}-import`}>Or import an export file</Label>
           <input
-            id="community-import"
+            id={`${id}-import`}
             type="file"
-            accept="application/json,.json"
+            accept="application/json,application/gzip,.json,.gz"
             disabled={pending}
-            aria-describedby="community-import-help"
+            aria-describedby={`${id}-import-help`}
             className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:text-zinc-100"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -73,17 +82,23 @@ export function CreateCommunityDialog({ trigger = "icon" }: { trigger?: "icon" |
               if (!file) return;
               startTransition(async () => {
                 setError(null);
-                const res = await fetch("/api/communities/import", { method: "POST", body: file, headers: { "Content-Type": "application/json" } });
-                const body = (await res.json().catch(() => null)) as { communityId?: string; error?: string } | null;
-                if (!res.ok || !body?.communityId) return setError(body?.error ?? "The import failed.");
-                setOpen(false);
-                router.push(`/app/c/${body.communityId}`);
-                router.refresh();
+                const archive = file.name.toLowerCase().endsWith(".gz") || /^(application\/(x-)?gzip)$/.test(file.type);
+                if (file.size > (archive ? MAX_ARCHIVE_COMPRESSED_BYTES : 32 * 1024 * 1024)) return setError("The export file exceeds the import size limit.");
+                try {
+                  const res = await fetch("/api/communities/import", { method: "POST", body: file, headers: { "Content-Type": archive ? "application/gzip" : "application/json" } });
+                  const body = (await res.json().catch(() => null)) as { communityId?: string; error?: string } | null;
+                  if (!res.ok || !body?.communityId) return setError(body?.error ?? "The import failed.");
+                  setOpen(false);
+                  router.push(`/app/c/${body.communityId}`);
+                  router.refresh();
+                } catch {
+                  setError("The connection ended before import confirmation. Check your communities before retrying.");
+                }
               });
             }}
           />
-          <p id="community-import-help" className="text-xs text-muted-foreground">
-            A community export from openDiscord (owner&apos;s settings). Messages keep their original author names, marked as imported.
+          <p id={`${id}-import-help`} className="text-xs text-muted-foreground">
+            A JSON export or complete .odc.gz archive from the owner&apos;s settings. Archives include files (up to 256 MiB); imported messages keep their original author names and are marked as imported.
           </p>
         </div>
       </DialogContent>
