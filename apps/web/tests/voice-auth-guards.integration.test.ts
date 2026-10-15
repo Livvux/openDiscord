@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -159,5 +160,37 @@ describe("bounded ordered-guard contention characterization", () => {
       expect(peakWaiting).toBeGreaterThan(0);
       console.info("[voice guard characterization]", JSON.stringify({ operations: 18, pool: 3, peakWaiting, elapsedMs: Math.round(performance.now() - started), maxPoolWaitMs: Math.round(Math.max(...waits)), scope: "isolated DB-only no-call workload; not a capacity or production latency claim" }));
     } finally { await pool.end(); }
+  }, 12000);
+});
+
+describe("operator bootstrap entry ordering", () => {
+  it("takes DM then Voice before the administrator advisory and preserves zero-admin bootstrap", async () => {
+    const id = await users.create("Lifecycle bootstrap fixture"), barrier = await db.$client.connect();
+    let completed: Promise<{ code: number | null; stderr: string }> | undefined;
+    try {
+      await barrier.query("begin"); await barrier.query("set local lock_timeout = '2s'");
+      await barrier.query("select pg_advisory_xact_lock(810030)");
+      const child = spawn(process.execPath, ["--import", "tsx", "scripts/bootstrap-instance-admin.ts", `${id}@example.test`, "Lifecycle ordered bootstrap test"], { env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", chunk => { stderr += String(chunk); });
+      completed = new Promise((resolve, reject) => { child.on("error", reject); child.on("close", code => resolve({ code, stderr })); });
+      const deadline = Date.now() + 4000;
+      let waiting = false;
+      while (Date.now() < deadline) {
+        const { rows } = await db.$client.query<{ waiting: boolean }>("select exists(select 1 from pg_locks where locktype = 'advisory' and classid = 0 and objid = 810030 and not granted) as waiting");
+        if (rows[0].waiting) { waiting = true; break; }
+      }
+      expect(waiting).toBe(true);
+      // Bootstrap must not already own the conflicting administrator lock while waiting for Voice.
+      await barrier.query("select pg_advisory_xact_lock(187412, 1)");
+      await barrier.query("commit");
+      const result = await completed;
+      expect(result.stderr).toBe(""); expect(result.code).toBe(0);
+      const { rows } = await db.$client.query("select user_id from public.instance_admin where user_id = $1", [id]);
+      expect(rows).toHaveLength(1);
+    } finally {
+      await barrier.query("rollback"); await completed?.catch(() => {}); barrier.release();
+      await db.$client.query("delete from public.instance_admin where user_id = $1", [id]);
+    }
   }, 12000);
 });

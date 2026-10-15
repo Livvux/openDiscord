@@ -1,16 +1,19 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { channel, member, role, session } from "@/db/schema";
+import { abuseReport, channel, dmIdentity, instanceAdmin, instanceSettings, member, role, session, user } from "@/db/schema";
 import { voiceCall, voiceCallMember } from "@/db/voice-schema";
 import { createCommunity, deleteChannel, deleteCommunity, leaveCommunity, setChannelOverride } from "@/server/communities";
 import { registerDmDevice, revokeDmDevice } from "@/server/direct-messages";
 import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl, sweepVoiceLifecycle } from "@/server/voice-control";
 import { banMember, createRole, deleteRole, kickMember, setMemberRole, updateRole } from "@/server/moderation";
+import { resetDmIdentity } from "@/server/dm-reset";
+import { revokeUserSessions, setUserSuspension, setCommunitySuspension, setApproval, setClosedAlpha, setInstanceAdmin, transferCommunity, resolveReport } from "@/server/instance-admin";
 import { createIntegration } from "@/server/integrations";
 import { blockUser, unblockUser } from "@/server/blocks";
 import { Permission } from "@/server/permissions";
+import { auth } from "@/lib/auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -19,7 +22,8 @@ import { runMaintenance } from "@/server/maintenance";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
-afterAll(() => users.cleanup());
+const adminIds: string[] = [];
+afterAll(async () => { if (adminIds.length) await db.delete(instanceAdmin).where(inArray(instanceAdmin.userId, adminIds)); await users.cleanup(); });
 async function fixture() {
   const userId = await users.create("Voice lifecycle cascade");
   const sessionId = randomUUID(), anchorDeviceId = randomUUID(), anchorSecret = randomBytes(32).toString("hex");
@@ -157,7 +161,7 @@ describe("pinned BetterAuth1.7.7 PostgreSQL adapter boundaries", () => {
       const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, application_name: `voice-native-${randomUUID()}`, statement_timeout: 6000, lock_timeout: 5000 });
       const statements: string[] = [];
       const nativeDb = drizzle(pool, { schema, logger: { logQuery(query) { statements.push(query); } } });
-      const native = drizzleAdapter(nativeDb, { provider: "pg", schema })({});
+      const native = drizzleAdapter(nativeDb, { provider: "pg", schema })(auth.options);
       let deleting: Promise<unknown> | undefined;
       try {
         const { rows: [{ pid }] } = await pool.query<{ pid: number }>("select pg_backend_pid() as pid");
@@ -289,4 +293,106 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
       expect(await state(f.snapshot.memberId)).toBeUndefined();
     });
   }
+});
+
+async function admin(f: F) { await db.insert(instanceAdmin).values({ userId: f.userId }).onConflictDoNothing(); adminIds.push(f.userId); return { userId: f.userId, sessionId: f.sessionId }; }
+async function preservingSettings(fn: () => Promise<void>) {
+  const previous = await db.select().from(instanceSettings);
+  try { await fn(); } finally { await db.delete(instanceSettings); if (previous.length) await db.insert(instanceSettings).values(previous); }
+}
+describe("account and community policy lifecycle", () => {
+  for (const operation of ["revoke sessions", "suspend account", "reject pending"] as const) {
+    it(`${operation} invalidates before native cascade without duplicate generation bump`, async () => {
+      const f = await fixture(), p = await peer(f), actor = await admin(f);
+      if (operation === "reject pending") await db.update(user).set({ approvalStatus: "pending" }).where(eq(user.id, p.userId));
+      if (operation === "revoke sessions") await revokeUserSessions(actor, p.userId, "Lifecycle regression");
+      else if (operation === "suspend account") await setUserSuspension(actor, p.userId, true, "Lifecycle regression");
+      else await setApproval(actor, p.userId, "rejected", "Lifecycle regression");
+      expect(await state(p.snapshot.memberId)).toBeUndefined();
+      const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
+      expect(call.generation).toBe(p.snapshot.generation + 1);
+      expect(await state(f.snapshot.memberId)).toBe("waiting");
+    });
+  }
+  it("community suspension and report suspension terminate only scoped calls", async () => {
+    const f = await fixture(), p = await peer(f), unrelated = await fixture(), actor = await admin(f);
+    await setCommunitySuspension(actor, f.communityId, true, "Lifecycle regression");
+    expect(await state(f.snapshot.memberId)).toBe("left"); expect(await state(p.snapshot.memberId)).toBe("left");
+    expect(await state(unrelated.snapshot.memberId)).toBe("waiting");
+    await setCommunitySuspension(actor, f.communityId, false, "Lifecycle regression");
+    expect(await state(p.snapshot.memberId)).toBe("left");
+    const [report] = await db.insert(abuseReport).values({ reporterId: f.userId, communityId: unrelated.communityId, reason: "Lifecycle report" }).returning();
+    await resolveReport(actor, report.id, "removed", "Lifecycle report regression");
+    expect(await state(unrelated.snapshot.memberId)).toBe("left");
+  });
+  it("owner transfer invalidates capability loss and never revives the new owner's prior enrollment", async () => {
+    const f = await fixture(), p = await peer(f), actor = await admin(f);
+    const [everyone] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
+    await setChannelOverride(f.userId, f.channelId, everyone.id, 0, Permission.Video);
+    expect(await state(p.snapshot.memberId)).toBe("left");
+    const [target] = await db.select({ email: user.email }).from(user).where(eq(user.id, p.userId));
+    await transferCommunity(actor, f.communityId, target.email, "Lifecycle transfer regression");
+    expect(await state(f.snapshot.memberId)).toBe("left");
+    expect(await state(p.snapshot.memberId)).toBe("left");
+  });
+  it("enabling alpha removes pending membership but approved accounts survive", async () => preservingSettings(async () => {
+    const f = await fixture(), p = await peer(f), actor = await admin(f);
+    await db.update(user).set({ approvalStatus: "pending" }).where(eq(user.id, p.userId));
+    await setClosedAlpha(actor, true, "Lifecycle alpha regression");
+    expect(await state(p.snapshot.memberId)).toBe("left"); expect(await state(f.snapshot.memberId)).toBe("waiting");
+    await setClosedAlpha(actor, false, "Lifecycle alpha regression");
+    expect(await state(p.snapshot.memberId)).toBe("left");
+  }));
+  it("removing a legacy pending admin exemption follows actual alpha policy", async () => preservingSettings(async () => {
+    const f = await fixture(), p = await peer(f), actor = await admin(f);
+    await db.insert(instanceAdmin).values({ userId: p.userId }); adminIds.push(p.userId);
+    await db.update(user).set({ approvalStatus: "pending" }).where(eq(user.id, p.userId));
+    await setClosedAlpha(actor, true, "Lifecycle exemption regression");
+    expect(await state(p.snapshot.memberId)).toBe("waiting");
+    await setInstanceAdmin(actor, p.userId, false, "Lifecycle exemption regression");
+    expect(await state(p.snapshot.memberId)).toBe("left");
+  }));
+  it("identity reset atomically invalidates all account voice before anchor/session deletion", async () => {
+    const f = await fixture(), p = await peer(f);
+    const publicKey = "a".repeat(43);
+    const keys = { master_key: { keys: { [`ed25519:${publicKey}`]: publicKey } } };
+    await db.insert(dmIdentity).values({ userId: p.userId, keys });
+    // Installed reset API requires the exact existing public identity fingerprint and fresh auth gate.
+    const { createHash } = await import("node:crypto");
+    const identity = createHash("sha256").update(JSON.stringify([[`ed25519:${publicKey}`, publicKey]])).digest("hex");
+    await resetDmIdentity(p.userId, p.sessionId, { identity, twoFactorEnabled: false });
+    expect(await state(p.snapshot.memberId)).toBeUndefined();
+    const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, f.snapshot.callId));
+    expect(call.generation).toBe(p.snapshot.generation + 1);
+    expect(await state(f.snapshot.memberId)).toBe("waiting");
+  });
+});
+
+describe("native account write granularity and multi-session cascades", () => {
+  it("native user profile/TOTP edits retain valid enrollment until an actual session deletion", async () => {
+    const f = await fixture(), p = await peer(f);
+    const native = drizzleAdapter(db, { provider: "pg", schema })(auth.options);
+    await native.update({ model: "user", where: [{ field: "id", value: p.userId }], update: { name: "Updated native profile", twoFactorEnabled: true } });
+    expect(await state(p.snapshot.memberId)).toBe("waiting");
+    const current = await heartbeatVoiceControl({ userId: p.userId, sessionId: p.sessionId, memberId: p.snapshot.memberId, secret: p.secret }, { callId: p.snapshot.callId, memberId: p.snapshot.memberId, joinNonce: p.snapshot.joinNonce, expectedGeneration: p.snapshot.generation });
+    expect(current.generation).toBe(p.snapshot.generation);
+    await native.deleteMany({ model: "session", where: [{ field: "userId", value: p.userId }] });
+    expect(await state(p.snapshot.memberId)).toBeUndefined();
+  });
+  it("actual native all-session delete advances each surviving call exactly once", async () => {
+    const f = await fixture(), p = await peer(f), other = await fixture();
+    await db.insert(member).values({ communityId: other.communityId, userId: p.userId });
+    const secondSession = randomUUID();
+    await db.insert(session).values({ id: secondSession, userId: p.userId, token: randomUUID(), expiresAt: new Date(Date.now() + 3_600_000) });
+    const second = await joinVoiceControl({ ...p, sessionId: secondSession }, { channelId: other.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true });
+    const native = drizzleAdapter(db, { provider: "pg", schema })(auth.options);
+    await native.deleteMany({ model: "session", where: [{ field: "userId", value: p.userId }] });
+    for (const snapshot of [p.snapshot, second]) {
+      expect(await state(snapshot.memberId)).toBeUndefined();
+      const [call] = await db.select().from(voiceCall).where(eq(voiceCall.id, snapshot.callId));
+      expect(call.generation).toBe(snapshot.generation + 1);
+    }
+    expect(await state(f.snapshot.memberId)).toBe("waiting");
+    expect(await state(other.snapshot.memberId)).toBe("waiting");
+  });
 });
