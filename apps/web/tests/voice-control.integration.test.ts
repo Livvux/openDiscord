@@ -35,7 +35,7 @@ describe("unactivated voice control server admission", () => {
   it("creates a server-owned namespace and preserves the entire exact nonce binding", async () => {
     const first = await joinVoiceControl(auth(), join());
     expect(first).toMatchObject({ channelId, joinNonce, voiceDeviceId, generation: 1 });
-    expect(first.voiceUserId).toBe(`@voice_${first.memberId}:opendiscord.local`);
+    expect(first.voiceUserId).toBe(`@voice_${first.callId}_${first.memberId}:opendiscord.local`);
     expect(first.participantIdentity).toBe(`v1:${first.memberId}`);
     expect(await joinVoiceControl(auth(), join())).toMatchObject({ memberId: first.memberId, callId: first.callId });
     expect(JSON.stringify(first)).not.toContain(enrollmentSecret);
@@ -92,6 +92,41 @@ const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "s
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
+  it("strictly separates single-target current enqueue from explicit nondelivery retirement", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    await upload(a); await upload(b);
+    const request = send(a, b);
+    expect(await crypto(a, request)).toEqual({ nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } });
+    const before = await db.$count(voiceControlMailbox);
+    const retire = { ...request, kind: "retire", requestId: randomUUID() };
+    expect(await crypto(a, retire)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    expect(await crypto(a, retire)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`;
+    const unknownRequest = { ...retire, requestId: randomUUID(), body: { messages: { [unknown]: { [randomUUID()]: request.body.messages[b.snapshot.voiceUserId][b.snapshot.voiceDeviceId] } } } };
+    expect(await crypto(a, unknownRequest)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    expect(await db.$count(voiceControlMailbox)).toBe(before);
+    await expect(crypto(a, { ...retire, requestId: request.requestId })).rejects.toMatchObject({ code: "conflict" });
+    for (const kind of ["send", "retire", "signatures"]) {
+      const body = kind === "signatures" ? {} : { messages: {} };
+      await expect(crypto(a, { ...request, kind, ...(kind === "signatures" ? { eventType: undefined } : {}), requestId: randomUUID(), body })).rejects.toMatchObject({ code: "invalid" });
+    }
+    for (const kind of ["send", "retire"]) {
+      await expect(crypto(a, { ...request, kind, requestId: randomUUID(), body: { messages: { ...request.body.messages, [unknown]: { [randomUUID()]: {} } } } })).rejects.toMatchObject({ code: "invalid" });
+    }
+    await expect(crypto(a, { kind: "signatures", body: { [a.snapshot.voiceUserId]: {}, [b.snapshot.voiceUserId]: {} } })).rejects.toMatchObject({ code: "invalid" });
+  });
+  it("returns current same-call absence and truthful signature refusal without historical keys", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    await upload(a); await upload(b, { "signed_curve25519:one": keyContent("d") });
+    const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`, device = randomUUID();
+    expect(await crypto(a, { kind: "query", body: { device_keys: { [unknown]: [] } } })).toEqual({ device_keys: {}, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
+    const request = { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
+    expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
+    expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
+    expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
+    expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, b.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(0);
+    expect(await db.$count(voiceSignature, eq(voiceSignature.signerMemberId, a.snapshot.memberId))).toBe(0);
+  });
   it("requires a real owned live session, active anchor possession, Connect and consent", async () => {
     const f = await fixture(1), a = f.endpoints[0], input = { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: a.secret, consent: true };
     await expect(joinVoiceControl({ ...f.accounts[0], anchorSecret: randomBytes(32).toString("hex") }, input)).rejects.toMatchObject({ code: "forbidden" });
