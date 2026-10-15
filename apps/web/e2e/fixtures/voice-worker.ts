@@ -2,7 +2,7 @@ import { BaseKeyProvider, Room, RoomEvent, Track, createKeyMaterialFromBuffer, t
 import { StrictVoiceWorker } from "../../src/lib/voice/strict-worker";
 
 type Scenario = "normal" | "unknown-identity" | "missing-key" | "wrong-key" | "tamper" | "plaintext-signaling";
-type Metrics = { encoded: number; decoded: number; changed: number; errors: string[]; framesAtFailure: number | null; energy: number; connected: boolean };
+type Metrics = { encoded: number; decoded: number; changed: number; nonemptyEncoded: number; unmatched: number; encodeSetups: number; decodeSetups: number; scriptTransform: boolean; errors: string[]; framesAtFailure: number | null; energy: number; connected: boolean };
 type Frame = RTCEncodedAudioFrame | RTCEncodedVideoFrame;
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 
@@ -13,7 +13,7 @@ class Provider extends BaseKeyProvider {
   }
 }
 
-const metrics: Metrics = { encoded: 0, decoded: 0, changed: 0, errors: [], framesAtFailure: null, energy: 0, connected: false };
+const metrics: Metrics = { encoded: 0, decoded: 0, changed: 0, nonemptyEncoded: 0, unmatched: 0, encodeSetups: 0, decodeSetups: 0, scriptTransform: false, errors: [], framesAtFailure: null, energy: 0, connected: false };
 let sender: Room | undefined;
 let receiver: Room | undefined;
 let source: MediaStreamTrack | undefined;
@@ -32,6 +32,7 @@ class ObservedWorker extends StrictVoiceWorker {
       const data = message.data;
       if (data.readableStream instanceof ReadableStream && data.writableStream instanceof WritableStream) {
         const direction = message.kind;
+        if (direction === "encode") metrics.encodeSetups++; else metrics.decodeSetups++;
         const observe = new TransformStream<Frame, Frame>({ transform: (frame, controller) => {
           if (direction === "encode") {
             this.originals.set(frame.timestamp, new Uint8Array(frame.data.slice(0)));
@@ -47,7 +48,11 @@ class ObservedWorker extends StrictVoiceWorker {
           if (direction === "encode") {
             metrics.encoded++;
             const original = this.originals.get(frame.timestamp);
-            if (original && (original.length !== frame.data.byteLength || original.some((byte, index) => byte !== new Uint8Array(frame.data)[index]))) metrics.changed++;
+            if (!original) metrics.unmatched++;
+            else if (original.byteLength > 0) {
+              metrics.nonemptyEncoded++;
+              if (original.length !== frame.data.byteLength || original.some((byte, index) => byte !== new Uint8Array(frame.data)[index])) metrics.changed++;
+            }
             this.originals.delete(frame.timestamp);
           } else metrics.decoded++;
           controller.enqueue(frame);
@@ -112,12 +117,15 @@ async function start(input: { url: string; senderToken: string; receiverToken: s
   oscillator.connect(destination);
   oscillator.start();
   source = destination.stream.getAudioTracks()[0];
-  await sender.localParticipant.publishTrack(source, { source: Track.Source.Microphone, dtx: false, red: false });
+  const publication = await sender.localParticipant.publishTrack(source, { source: Track.Source.Microphone, dtx: false, red: false });
+  const nativeSender: unknown = publication.track ? Reflect.get(publication.track, "sender") : undefined;
+  metrics.scriptTransform = nativeSender instanceof RTCRtpSender && !!Reflect.get(nativeSender, "transform");
   metrics.connected = true;
 }
 
 async function snapshot(): Promise<Metrics> {
   const report = await remote?.getRTCStatsReport();
+  if (remote?.receiver && Reflect.get(remote.receiver, "transform")) metrics.scriptTransform = true;
   report?.forEach((entry) => { if (entry.type === "inbound-rtp" && typeof entry.totalAudioEnergy === "number") metrics.energy = entry.totalAudioEnergy; });
   return { ...metrics, errors: [...metrics.errors] };
 }
