@@ -25,6 +25,17 @@ The one-shot `migrate` service applies database migrations before `web` starts, 
 Without SMTP, accounts work without email verification and password-reset links are written to the
 `web` log (`docker compose logs web`). Set `SMTP_URL` and `MAIL_FROM` for real email.
 
+Optional integrations (see `.env.example`):
+
+- **Anti-spam on sign-up:** set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` from a Cloudflare
+  Turnstile widget whose hostnames include your `DOMAIN`. Every sign-up then needs a token verified
+  server-side. With the CLI: `cf turnstile widgets create --body '{"name":"opendiscord","mode":"managed","domains":["chat.example.org"]}'`.
+- **Image attachments:** set `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+  (any S3-compatible store works). Keep the bucket private: images are only served through the app,
+  which checks channel membership. With the `cf` CLI: `cf r2 buckets create --name opendiscord-media`,
+  then an account token (`cf accounts tokens create`) with *Workers R2 Storage Bucket Item Write*
+  scoped to that bucket. The access key ID is the token ID; the secret is the SHA-256 hex of the token value.
+
 ## Security notes
 
 - `web` is not published on a host port; only Caddy is. Keep it that way: rate limiting trusts the

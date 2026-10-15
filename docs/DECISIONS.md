@@ -27,9 +27,12 @@ Redis pub/sub or NATS is the next step.
 
 ## D4. Redis is not used
 
-Rate limiting for messages is a Postgres count over an indexed column; Better Auth's limiter is in
-memory per process. **Revisit when** running several replicas: switch Better Auth to database-backed
-rate limiting or add Redis.
+Rate limiting for messages is a Postgres count over an indexed column. Better Auth's per-IP limits use
+a Postgres table too (`auth_rate_limit`, one atomic upsert per request), so they hold across replicas.
+Its keys are HMACs of "IP + path" with the server secret, so no IP address is stored; rows older than a
+day are purged. Better Auth's own database storage was not used because it stores the raw IP. The
+general mutation burst limit and stream caps are still in memory per process. **Revisit when** those
+need to be shared: move them to the same table or add Redis.
 
 ## D5. Better Auth for authentication
 
@@ -53,10 +56,14 @@ mediasoup (library; we would build signalling and ops ourselves), Jitsi (complet
 meeting-oriented). **Choice:** LiveKit as an optional compose profile. The web app issues short-lived
 room tokens after checking channel permissions, so LiveKit never needs our database.
 
-## D9. Attachments (planned, P1)
+## D9. Attachments (images shipped; files and local volume planned)
 
-Local volume by default, any S3-compatible store optional (MinIO, Garage, Cloudflare R2, AWS S3) to
-avoid lock-in. Images re-encoded with `sharp` to strip metadata; optional ClamAV sidecar.
+Any S3-compatible store (Cloudflare R2 by default, MinIO, Garage, AWS S3), signed with SigV4 via
+`aws4fetch` instead of the much larger AWS SDK. Images only (PNG, JPEG, WebP, GIF, max 8 MB, 4 per
+message), decoded and re-encoded to WebP with `sharp`, which drops EXIF/GPS and rejects anything that
+isn't a real raster image. Objects are private and served through `/api/attachments/:id`, which
+checks channel membership on every request. Deleted messages unlink their images immediately; a sweeper
+removes unlinked objects after an hour. Local-volume storage and a ClamAV sidecar remain P1.
 
 ## D10. End-to-end encryption (planned, P1)
 

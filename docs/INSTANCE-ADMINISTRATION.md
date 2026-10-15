@@ -26,9 +26,20 @@ live session, current role and suspension state on the server. Administrators ca
 account while they retain the role. Demote them first. Concurrent admin changes are serialized,
 and removing the last administrator is rejected.
 
+## Closed Alpha
+
+Turn Closed Alpha on or off on the **Overview** tab (a reason is required and audited). While it is on,
+anyone can still register (if registration is open), but the account starts as *pending* and no
+session is issued until an administrator approves it on the **Approvals** tab. The check runs on the
+server for every session, request and community access, not just in the UI. Rejected accounts stay
+blocked, also after Closed Alpha is turned off, until an administrator approves them. Instance
+administrators are never gated. Accounts that existed before Closed Alpha was turned on keep their
+access. Turning it off restores normal registration and lets pending accounts in. Approved accounts get an email when SMTP is configured.
+
 ## Operations
 
-- **Users:** search by name/email, suspend/unsuspend, revoke every session. Suspension revokes sessions
+- **Users:** search by name/email, filter by status (pending, active, rejected, suspended, admins),
+  approve/reject, grant/remove admin rights, suspend/unsuspend, revoke every session. Suspension revokes sessions
   and blocks new sign-ins. Removing a suspension does not restore previous sessions. Admin accounts
   must be demoted before suspension.
 - **Communities:** search by name, suspend/unsuspend, transfer ownership to an existing active member.
