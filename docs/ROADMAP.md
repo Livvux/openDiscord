@@ -21,14 +21,16 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP in production (opendiscord.app, closed alpha): communities, channels,
-roles with a permission hierarchy, invites, moderation (kick, ban, message removal, audit log), realtime
-messaging over Server-Sent Events, image attachments in S3-compatible storage, reporting of messages and
-communities, instance administration (closed-alpha approval queue, account and community suspension,
-invite policy, caps, instance audit log), Turnstile on sign-up, GDPR export and deletion, password reset,
-TOTP and passkeys, backups, and architecture, threat-model and privacy documentation.
+`main` runs the text-chat MVP in production (opendiscord.app, closed alpha). The stacked pull requests
+#12–#27 add everything marked ✅ in the plan below: private channels, unread state and mentions,
+blocking and anti-raid controls, replies/reactions/pins/Markdown, search, AutoMod, presence and
+notification settings, voice and video with screen sharing, categories, file attachments, threads, bots,
+webhooks and the public API, community export/import and Web Push. Each PR carries its migration,
+integration tests, Playwright flows and doc updates.
 
-The gaps below are ordered by the priorities in the [prioritised plan](#prioritised-plan).
+Still open from P1: **direct messages with audited end-to-end encryption** (see the plan). Not verified
+by automated tests: real audio/video between physical devices and real Web Push delivery (headless
+browsers have neither); both need a manual check before release.
 
 ## Requirements matrix
 
@@ -69,7 +71,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | --- | --- | --- |
 | Communities and channels | ✅ | |
 | Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
-| Direct messages | ❌ | **P1** (with E2EE) |
+| Direct messages | ❌ | **P1**, blocked on the E2EE decision (see plan) |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
@@ -167,10 +169,10 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 
 ### P1 — core Discord replacement
 
-| Item | Depends on | Acceptance criteria |
+| Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (TURN not bundled; TCP fallback) |
-| Direct messages with audited E2EE | blocking, audited protocol library ([D10](DECISIONS.md)) | Server stores ciphertext only; key verification UI; docs state guarantees and limits |
+| Direct messages with audited E2EE | ❌ **decision needed** | Server stores ciphertext only; key verification UI; docs state guarantees and limits. No audited, maintained E2EE library is usable in the browser as-is: libolm is deprecated, libsignal has no web build, ts-mls is unaudited. The candidate is vodozemac (audited 2022) via `@matrix-org/matrix-sdk-crypto-wasm`, which needs a device-key and to-device message service: a multi-week project. Alternative: plain DMs clearly labelled as not end-to-end encrypted, with E2EE later |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |
