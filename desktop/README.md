@@ -12,7 +12,7 @@ The default is `https://opendiscord.app`. Self-host operators set the build-time
 
 Main-window navigation stays on the configured origin, including redirects. Cross-origin authentication redirects are consequently blocked; use the instance's same-origin login. New-window requests are denied inside the application. HTTPS links opened with `target=_blank` are delegated to the system browser after scheme and credential validation. Other schemes are denied. Ordinary external same-window links are blocked. There are no custom command handlers, plugins, remote capabilities, filesystem access, shell grants or updater. The internal Tauri bridge has no remote permissions. Normal TLS verification remains enabled and the server's CSP remains authoritative for remote content.
 
-Downloads are deliberately denied until native destination/consent behavior has cross-platform acceptance. Use the browser for attachment downloads and data exports. Upload pickers remain WebView behavior and require acceptance below.
+Downloads from the instance and blob exports bound to that origin require a native Save dialog; cancel denies the transfer. Only the suggested basename is used, and the user chooses the destination. The native dialog is called from Rust without exposing a filesystem or dialog command to remote JavaScript. Upload pickers remain WebView behavior. Download dialogs and blob exports still require per-OS runtime acceptance below.
 
 ## Evidence and release gates
 
@@ -26,7 +26,7 @@ Before public distribution, record OS/version/WebView and acceptance results for
 - Passkeys (platform authenticators may behave differently in embedded WebViews).
 - Microphone, camera, screen sharing, permission prompts and TURN/media traversal.
 - Notifications/background behavior (no native notification plugin is installed).
-- Uploads and explicit download/export consent behavior; downloads currently blocked.
+- Uploads and explicit download/export consent behavior; including blob exports.
 - Accessibility, keyboard navigation, mobile-width layout and restart recovery.
 
 macOS notarization/Developer ID, Windows signing, store publication, security review, physical-device media/passkey tests and mobile binaries remain separate acceptance gates. Do not infer full app parity from CI or Linux-only runtime QA.

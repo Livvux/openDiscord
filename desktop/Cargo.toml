@@ -12,3 +12,4 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 url = "2"
 open = "5"
+rfd = "0.17"

@@ -10,6 +10,7 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let pinned = instance.clone();
+            let downloads = instance.clone();
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -25,7 +26,28 @@ fn main() {
                 }
                 tauri::webview::NewWindowResponse::Deny
             })
-            .on_download(|_, _| false)
+            .on_download(move |_, event| match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    if !policy::download_origin(&downloads, &url) {
+                        return false;
+                    }
+                    let filename = destination
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("download");
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Save OpenDiscord download")
+                        .set_file_name(filename)
+                        .save_file()
+                    {
+                        *destination = path;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => true,
+            })
             .build()?;
             Ok(())
         })
