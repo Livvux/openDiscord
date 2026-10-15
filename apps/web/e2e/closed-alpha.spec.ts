@@ -40,7 +40,6 @@ test("closed alpha: requests wait for approval, approved accounts get in", async
     await applicant.goto("/sign-in");
     await applicant.getByLabel("Email").fill(applicantEmail);
     await applicant.getByLabel("Password").fill(PASSWORD);
-    await applicant.getByRole("checkbox", { name: /I am at least/ }).check();
     await applicant.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(applicant.getByRole("alert").filter({ hasText: "waiting for approval" })).toBeVisible();
     expect(await (await applicant.request.get("/api/auth/get-session")).json()).toBeNull();
