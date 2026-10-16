@@ -42,7 +42,9 @@ test.describe("private community images", () => {
     chat.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     for (const kind of ["emoji", "sticker"]) {
       await chat.getByRole("button", { name: "Choose community emoji or sticker" }).click();
-      await chat.getByRole("button", { name: `Choose ${kind} test_${kind}`, exact: true }).click();
+      const picker = chat.getByRole("dialog", { name: "Choose emoji or sticker" });
+      await picker.getByRole("textbox").fill(`test_${kind}`);
+      await picker.getByRole("gridcell", { name: `test_${kind}`, exact: true }).click();
     }
     await chat.getByRole("button", { name: "Send message", exact: true }).click();
     const log = chat.getByRole("log");
@@ -61,7 +63,10 @@ test.describe("private community images", () => {
     expect(geometry.left).toBeGreaterThanOrEqual(0);
     expect(geometry.right).toBeLessThanOrEqual(geometry.width);
     await reactButton.click();
-    await row.getByRole("button", { name: "Choose emoji test_emoji", exact: true }).click();
+    const picker = chat.getByRole("dialog", { name: "Add a reaction", exact: true });
+    await picker.getByRole("button", { name: "Show all Emojis" }).click();
+    await picker.getByRole("textbox").fill("test_emoji");
+    await picker.getByRole("gridcell", { name: "test_emoji", exact: true }).click();
     await expect(row.getByRole("button", { name: /:test_emoji: 1 reaction/ })).toBeVisible();
     await expectNoA11yViolations(chat);
     expect(await chat.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

@@ -1,3 +1,4 @@
+import { isUnicodeEmoji } from "@/lib/emoji";
 import { ASSET_TOKEN_SOURCE, assetTokens, type AssetView } from "@/lib/community-assets";
 import { assetsForMessages } from "./community-assets";
 // Read-side extras of a message view: reactions and the preview of the message it replies to.
@@ -27,12 +28,8 @@ export interface ReplyPreview {
 export const MAX_EMOJIS_PER_MESSAGE = 20;
 export const REPLY_EXCERPT_LENGTH = 100;
 
-const PICTO = String.raw`\p{Extended_Pictographic}(?:\ufe0f|\p{Emoji_Modifier})?`;
-/** Exactly one emoji: a keycap, a flag, or a pictograph with optional variation, skin tone and ZWJ parts. */
-const unicodeEmoji = z
-  .string()
-  .max(16)
-  .regex(new RegExp(String.raw`^(?:[#*0-9]\ufe0f?\u20e3|\p{Regional_Indicator}{2}|${PICTO}(?:\u200d${PICTO})*)$`, "u"), "Pick an emoji.");
+/** Exactly one supported Unicode emoji, including flags and mixed skin-tone sequences. */
+const unicodeEmoji = z.string().max(64).refine(isUnicodeEmoji, "Pick an emoji.");
 
 export const emoji = z.union([unicodeEmoji, z.string().regex(new RegExp(`^${ASSET_TOKEN_SOURCE}$`)).refine((value) => assetTokens(value)[0]?.kind === "emoji", "Pick an emoji.")]);
 
