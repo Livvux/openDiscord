@@ -23,7 +23,7 @@ function locks() {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
 }
-export async function agreementServiceFixture(count = 2, nativeOwners = count, beforeNative?: () => Promise<void>, ownerLast = false) {
+export async function agreementServiceFixture(count = 2, nativeOwners = count, beforeNative?: () => Promise<void>, ownerLast = false, ownerFirst = false) {
   locks();
   const accounts = [];
   for (let i = 0; i < count; i++) {
@@ -48,6 +48,7 @@ export async function agreementServiceFixture(count = 2, nativeOwners = count, b
   }
   for (const endpoint of endpoints) endpoint.snapshot = await heartbeatVoiceControl(auth(endpoint), binding(endpoint));
   await beforeNative?.();
+  if (ownerFirst) endpoints.sort((a, b) => a.snapshot.memberId.localeCompare(b.snapshot.memberId));
   if (ownerLast) endpoints.sort((a, b) => b.snapshot.memberId.localeCompare(a.snapshot.memberId));
   for (const endpoint of endpoints.slice(0, nativeOwners)) {
     endpoint.owner = await VoiceCryptoOwner.create({ accountId: endpoint.userId, guard: await acquireVoiceOwnerGuard(endpoint.userId), snapshot: endpoint.snapshot, lifetime: { signal: endpoint.lifetime.signal, assertCurrent() {} }, onFence: endpoint.fence, transport: async input => {

@@ -190,4 +190,41 @@ describe("unreachable in-band context agreement over three actual PostgreSQL nat
     }
   }, 60_000);
 
+  it("ACKs an early authenticated offer without authority while a third Owner still needs SAS/admission/selection", async () => {
+    const endpoints = (await agreementServiceFixture(3)).sort((x, y) => x.snapshot.memberId.localeCompare(y.snapshot.memberId));
+    const [a, b, c] = endpoints, ids = endpoints.map(e => e.snapshot.memberId);
+    await verifyAgreementPeers(a, b); await verifyAgreementPeers(a, c);
+    // A has independently admitted the complete roster. B and C still need each other.
+    await a.owner.selectAudience(ids, 1); const early = await a.owner.createContextOffer(); await a.owner.stageOfferedContext(early.ref);
+    await a.owner.sendContextControl(control(early.proposal, a, b, "context-offer"));
+    expect(await b.owner.receiveAgreement()).toEqual([{ kind: "context-not-ready", contextKind: "context-offer", senderId: a.snapshot.memberId, reason: "local-consent-pending" }]);
+    expect(b.fence).not.toHaveBeenCalledWith("native-or-schema-failure");
+    // The same real mailbox must remain usable for the remaining genuine SAS exchange.
+    await verifyAgreementPeers(b, c);
+    for (const endpoint of endpoints) await endpoint.owner.selectAudience(ids, 2);
+    await new Promise(resolve => setTimeout(resolve, 1_010)); const fresh = await a.owner.createContextOffer();
+    expect(fresh.proposal.sequence).toBe(2); expect(fresh.proposal.epochId).not.toBe(early.proposal.epochId); await a.owner.stageOfferedContext(fresh.ref);
+    const refs = new Map<AgreementEndpoint, VoiceAgreementEventRef>([[a, fresh.ref]]);
+    for (const endpoint of [b, c]) { await a.owner.sendContextControl(control(fresh.proposal, a, endpoint, "context-offer")); const event = context(await endpoint.owner.receiveAgreement(), "context-offer"); await endpoint.owner.stageOfferedContext(event.ref); refs.set(endpoint, event.ref); }
+    for (const sender of endpoints) for (const recipient of endpoints) if (sender !== recipient) await sender.owner.sendContextControl(control(fresh.proposal, sender, recipient, "context-accept"));
+    for (const endpoint of endpoints) { await acceptEvents(endpoint); const ref = refs.get(endpoint)!; expect(await endpoint.owner.contextAgreementComplete(ref)).toBe(true); await endpoint.owner.installContext(ref); }
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: fresh.proposal.callId, generation: fresh.proposal.generation, epochId: fresh.proposal.epochId, proposalSequence: fresh.proposal.sequence, sender: self(a), recipient: self(b), publisher: self(a), audience: [...fresh.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 37).toString("base64") };
+    await a.owner.sendControl(material); expect(await b.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+  }, 60_000);
+
+  it.each(["nonleader-offer", "wrong-recipient"] as const)("rejects genuine native %s only after successful current controls", async negative => {
+    const [a, b] = await agreementServiceFixture(2, 1, undefined, false, true), peer = await openAgreementPublicPeer(b);
+    await verifyAgreementPublicPeer(a, b, peer); await a.owner.selectAudience(a.snapshot.members.map(m => m.memberId), 1);
+    const local = await a.owner.createContextOffer(); await a.owner.stageOfferedContext(local.ref);
+    await a.owner.sendContextControl(control(local.proposal, a, b, "context-offer")); await peer.receive();
+    const ownMember = a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!;
+    await peer.encrypt(ownMember, encodeVoiceControlWire(control(local.proposal, b, a, "context-accept"))); await acceptEvents(a); await a.owner.installContext(local.ref);
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: local.proposal.callId, generation: local.proposal.generation, epochId: local.proposal.epochId, proposalSequence: local.proposal.sequence, sender: self(b), recipient: self(a), publisher: self(b), audience: [...local.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 41).toString("base64") };
+    await peer.encrypt(ownMember, encodeVoiceControlWire(material)); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+    const reference = randomUUID();
+    const forged = negative === "nonleader-offer" ? { ...control(local.proposal, b, a, "context-offer"), sequence: local.proposal.sequence + 1, reference, transaction: reference, epochId: randomUUID() } : control(local.proposal, b, b, "context-accept");
+    await peer.encrypt(ownMember, encodeVoiceControlWire(forged)); await expect(a.owner.receiveAgreement()).rejects.toThrow(negative === "nonleader-offer" ? /leader mismatch/ : /sender\/admission mismatch/);
+    expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure");
+  }, 60_000);
+
 });
