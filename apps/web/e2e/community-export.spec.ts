@@ -30,7 +30,8 @@ test.describe("community export and import", () => {
       await owner.getByLabel("Or import an export file").setInputFiles(file);
       const response = await importing;
       expect(response.status()).toBe(201);
-      await response.body();
+      // Navigation may evict Chromium's cached body; completion does not require rereading it.
+      expect(await response.finished()).toBeNull();
     });
     await expect(owner.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
     const msg = owner.getByRole("log").getByRole("listitem").filter({ hasText: "First message" });
