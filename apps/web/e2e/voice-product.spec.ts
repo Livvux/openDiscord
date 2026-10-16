@@ -61,7 +61,6 @@ async function videoFingerprint(page: Page) {
 
 test.describe("genuine Next product encrypted Voice", () => {
   test.describe.configure({ retries: 0 });
-  test.use({ trace: "off" }); // Native SAS is transient comparison data, never a trace artifact.
   test.skip(({ isMobile }) => isMobile, "Three separate desktop contexts; responsive behavior is checked explicitly after agreement.");
   test("three UI accounts verify/admit/consent, listeners decode Opus and moving VP8 beyond join JWT expiry", async ({ browser }, testInfo) => {
     test.setTimeout(240_000);

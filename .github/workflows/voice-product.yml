@@ -35,6 +35,8 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Collect product acceptance before expensive validation
+        run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts --list
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm db:migrate
