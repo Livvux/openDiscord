@@ -697,3 +697,10 @@ export class VoiceCryptoOwner {
     }, true);
   }
 }
+
+/** Product capability: the same Owner/ledger, with no primitive receive/context setter. */
+export type VoiceProductOwnerPort = VoiceAgreementOwnerPort & Pick<VoiceCryptoOwner, "query" | "flush" | "requestVerification" | "verificationStep" | "verificationStates" | "admit" | "transition">;
+export async function createVoiceProductOwner(options: VoiceOwnerOptions): Promise<VoiceProductOwnerPort> {
+  const owner = await VoiceCryptoOwner.create(options);
+  return Object.freeze({ ...owner.agreementPort(), query: owner.query.bind(owner), flush: owner.flush.bind(owner), requestVerification: owner.requestVerification.bind(owner), verificationStep: owner.verificationStep.bind(owner), verificationStates: owner.verificationStates.bind(owner), admit: owner.admit.bind(owner), transition: owner.transition.bind(owner) });
+}
