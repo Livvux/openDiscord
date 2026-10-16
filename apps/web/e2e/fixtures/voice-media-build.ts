@@ -7,7 +7,8 @@ import type { Page } from "@playwright/test";
 
 /** Isolated CI-only static bundle. No app/proof route or HTTP transport replacement. */
 export async function buildVoiceMediaHarness() {
-  const require = createRequire(import.meta.url);
+  // Playwright loads these Node-only TS helpers as CJS in this package.
+  const require = createRequire(join(process.cwd(), "package.json"));
   // Vite is already locked and installed as Vitest's peer. No dependency/lockfile change.
   const vitePath = require.resolve("vite", { paths: [dirname(require.resolve("vitest/package.json"))] });
   const vite: { build(config: Record<string, unknown>): Promise<unknown> } = await import(pathToFileURL(vitePath).href);
