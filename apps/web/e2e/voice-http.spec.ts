@@ -71,7 +71,8 @@ test("Voice HTTP uses the real browser session and registered enrollment without
   }
   for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND"]) {
     const response = await page.context().request.fetch("/api/voice/control", { method });
-    expect(response.status()).toBe(405);
+    // Next16.4 resolveHandler rejects unrecognized methods with400 before userland.
+    expect(response.status()).toBe(method === "PROPFIND" ? 400 : 405);
     const cacheDirectives = (response.headers()["cache-control"] ?? "").split(",").map(value => value.trim());
     expect(cacheDirectives).toEqual(expect.arrayContaining(["private", "no-store"]));
     expect(response.headers()["access-control-allow-origin"]).toBeUndefined();

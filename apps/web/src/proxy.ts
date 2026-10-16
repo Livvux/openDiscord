@@ -42,6 +42,7 @@ export function proxy(request: NextRequest) {
     return new NextResponse("Not found", { status: 404, headers: { "Content-Security-Policy": CSP, "Cache-Control": "no-store" } });
   }
   const response = NextResponse.next();
+  if (request.nextUrl.pathname === "/api/voice/control") response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Content-Security-Policy", CSP);
   return response;
 }

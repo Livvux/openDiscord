@@ -59,3 +59,15 @@ it("rejects a structurally valid snapshot for a different call before passing it
   const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
   await expect(createVoiceHttpClient({ fetch: request }).heartbeat(binding, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "protocol" });
 });
+
+it.each(["query9", "query3users", "claim5", "claim2users"] as const)("rejects %s signature cardinality before any native verifier", async scenario => {
+  const binding = { callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, deviceId = crypto.randomUUID();
+  const user = `@voice_${binding.callId}_${crypto.randomUUID()}:opendiscord.local`;
+  const signatures = Object.fromEntries(Array.from({ length: scenario === "query9" ? 9 : scenario === "claim5" ? 5 : 1 }, (_, index) => [`ed25519:key-${index}`, "AAAA"]));
+  const signers = Object.fromEntries(Array.from({ length: scenario === "query3users" ? 3 : scenario === "claim2users" ? 2 : 1 }, (_, index) => [`signer-${index}`, signatures]));
+  const query = scenario.startsWith("query");
+  const request = query ? { kind: "query" as const, body: { device_keys: { [user]: [] } } } : { kind: "claim" as const, body: { one_time_keys: { [user]: { [deviceId]: "signed_curve25519" } } }, requestId: "plain-contract-claim", nativeRequestId: "plain-contract-native-id" };
+  const response = query ? { device_keys: { [user]: { [deviceId]: { user_id: user, device_id: deviceId, algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"], keys: { [`curve25519:${deviceId}`]: "AAAA", [`ed25519:${deviceId}`]: "AAAA" }, signatures: signers } } }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} } : { one_time_keys: { [user]: { [deviceId]: { "signed_curve25519:key": { key: "AAAA", signatures: signers } } } }, failures: {} };
+  const client = createVoiceHttpClient({ fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } })) });
+  await expect(client.crypto(binding, request, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "protocol" });
+});
