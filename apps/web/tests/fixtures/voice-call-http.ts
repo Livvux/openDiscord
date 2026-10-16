@@ -84,6 +84,7 @@ export async function until(predicate: () => boolean, timeout = 12_000): Promise
 export async function verifyCalls(a: CallSession, b: CallSession): Promise<void> {
   const [first, second] = [a, b].sort((x, y) => x.getSnapshot().selfMemberId.localeCompare(y.getSnapshot().selfMemberId));
   const firstId = first.getSnapshot().selfMemberId, secondId = second.getSnapshot().selfMemberId;
+  await until(() => first.getSnapshot().keysPrepared && second.getSnapshot().keysPrepared);
   await first.requestVerification(secondId);
   try { await until(() => second.getSnapshot().sas.some(s => s.peer.memberId === firstId)); }
   catch { throw new Error(`Call invitation did not progress: ${JSON.stringify([safeCallSummary(first), safeCallSummary(second)])}`); }

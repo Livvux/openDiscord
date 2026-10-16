@@ -20,7 +20,7 @@ export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" 
 type VoiceSasView = Readonly<Omit<VoiceSasState, "emojiIndices"> & { emojiIndices: readonly number[] | null }>;
 export type VoiceCallView = Readonly<{
   state: VoiceCallState; roster: readonly Readonly<VoiceSnapshot["members"][number]>[];
-  fenceRevision: number; generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
+  keysPrepared: boolean; fenceRevision: number; generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
   localConsentPending: boolean; error?: string;
 }>;
 export type VoiceCallOptions = {
@@ -48,6 +48,8 @@ export class CallSession {
   private error?: string;
   private sas: VoiceSasState[] = [];
   private localConsentPending = false;
+  private preparedKeysGeneration?: number;
+  private keyPreparation?: { generation: number; promise: Promise<boolean> };
   private selectionRevision = 0;
   private fenceRevision = 0;
   private attempt?: Attempt;
@@ -65,7 +67,7 @@ export class CallSession {
   private transitionFlight?: Promise<void>;
   private lastPollStart = -Infinity;
   private actionFlight?: Promise<void>;
-  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false });
+  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], keysPrepared: false, fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false });
   private readonly resume = () => { try { this.checkCurrent(); } catch { /* checkCurrent closes synchronously */ } };
   private constructor(private readonly options: VoiceCallOptions) { this.http = createVoiceHttpClient({ fetch: options.fetch }); }
 
@@ -90,6 +92,7 @@ export class CallSession {
       session.checkCurrent();
       session.owner = await createVoiceProductOwner({ accountId: options.accountId, guard: session.guard, snapshot, lifetime: { signal: session.lifetime.signal, assertCurrent: () => session.checkCurrent() }, transport: session.transport, onFence: reason => session.ownerFence(reason) });
       session.checkCurrent();
+      await session.prepareKeys();
       window.addEventListener?.("pageshow", session.resume);
       globalThis.document?.addEventListener("visibilitychange", session.resume);
       session.emit(); session.schedulePoll(); session.scheduleHeartbeat();
@@ -100,7 +103,7 @@ export class CallSession {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private emit(): void {
     const snapshot = this.authority?.snapshot;
-    this.view = Object.freeze({ state: this.state, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
+    this.view = Object.freeze({ state: this.state, keysPrepared: !!snapshot && this.preparedKeysGeneration === snapshot.generation, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
     for (const listener of this.listeners) { try { listener(); } catch { /* Render observers cannot alter native control lifetime. */ } }
   }
   private assertAlive(): void {
@@ -182,6 +185,7 @@ export class CallSession {
     if (grant.snapshot.generation <= old.generation) { this.acceptGrant(grant); return; }
     if (!this.owner) throw new VoiceCallSessionError("generation-conflict");
     if (this.transitionActive) throw new VoiceRetirementConflict();
+    this.preparedKeysGeneration = undefined;
     this.fence();
     for (const [id, party] of this.admitted) if (!grant.snapshot.members.some(member => sameVoiceParty(party, voiceControlParty(member)))) this.admitted.delete(id);
     this.sas = [];
@@ -240,10 +244,37 @@ export class CallSession {
       } finally { this.discovery = undefined; }
     }
   };
+  private async prepareKeys(): Promise<boolean> {
+    this.checkCurrent();
+    const snapshot = this.authority!.snapshot;
+    if (this.transitionActive) return false;
+    if (this.preparedKeysGeneration === snapshot.generation) return true;
+    // Own successful factory bootstrap already published own device keys. Remote
+    // publication is authority metadata only: active never implies trust/consent.
+    if (snapshot.members.some(member => member.memberId !== snapshot.memberId && member.state !== "active")) return false;
+    if (this.keyPreparation) {
+      if (this.keyPreparation.generation !== snapshot.generation) return false;
+      return this.keyPreparation.promise;
+    }
+    this.prune();
+    if (this.requests.length >= HTTP_LIMIT - PRIORITY_RESERVE) return false;
+    const start = performance.now();
+    const promise = (async () => {
+      try { await this.bounded(this.owner!.query(snapshot.members.map(member => member.memberId)), start + ATTEMPT_MS); }
+      catch (error) { if (!this.isInterrupted(error)) void this.close("key-preparation-failed"); throw error; }
+      this.checkCurrent();
+      const current = this.authority!.snapshot;
+      if (this.transitionActive || current.generation !== snapshot.generation || current.callId !== snapshot.callId || current.memberId !== snapshot.memberId || current.joinNonce !== snapshot.joinNonce || current.voiceDeviceId !== snapshot.voiceDeviceId || current.voiceUserId !== snapshot.voiceUserId) return false;
+      this.preparedKeysGeneration = current.generation; this.emit(); return true;
+    })();
+    const flight = { generation: snapshot.generation, promise }; this.keyPreparation = flight;
+    try { return await promise; }
+    finally { if (this.keyPreparation === flight) this.keyPreparation = undefined; }
+  }
   private scheduleHeartbeat(): void {
     if (this.stopped) return;
     this.heartbeatTimer = setTimeout(() => { void (async () => {
-      try { const grant = await this.heartbeat(); await this.reconcile(grant); }
+      try { const grant = await this.heartbeat(); await this.reconcile(grant); await this.prepareKeys(); }
       catch (error) { this.fail(error); }
       finally { this.scheduleHeartbeat(); }
     })(); }, HEARTBEAT_MS);
@@ -259,6 +290,8 @@ export class CallSession {
     try {
       this.checkCurrent(); this.prune();
       if (this.state === "retry-required" || this.transitionActive || this.actionFlight || this.requests.length + 4 > HTTP_LIMIT - PRIORITY_RESERVE) return;
+      if (!await this.prepareKeys() || this.transitionActive || this.preparedKeysGeneration !== this.authority!.snapshot.generation) return;
+      this.checkCurrent();
       const owner = this.owner!; this.lastPollStart = performance.now();
       const start = performance.now(), events = await owner.receiveAgreement();
       this.checkCurrent();
@@ -364,7 +397,7 @@ export class CallSession {
     if (this.actionFlight || this.transitionActive) throw new VoiceCallSessionError("not-ready");
     // Product serialization covers user actions and complete batches only; this is
     // not a native queue. Transition/heartbeat never wait on this action promise.
-    const flight = (async () => { await this.pollFlight; this.checkCurrent(); await operation(); this.sas = await this.owner!.verificationStates(); this.checkCurrent(); this.emit(); })();
+    const flight = (async () => { await this.pollFlight; this.checkCurrent(); if (!await this.prepareKeys() || this.transitionActive || this.preparedKeysGeneration !== this.authority!.snapshot.generation) throw new VoiceCallSessionError("not-ready"); this.checkCurrent(); await operation(); this.sas = await this.owner!.verificationStates(); this.checkCurrent(); this.emit(); })();
     this.actionFlight = flight;
     try { await flight; } catch (error) { this.fail(error); throw error; } finally { this.actionFlight = undefined; }
   }
@@ -406,7 +439,7 @@ export class CallSession {
   }
   close(reason = "left"): Promise<void> {
     if (this.cleanup) return this.cleanup;
-    this.stopped = true; this.fenceRevision++; this.state = "ended"; this.attempt = undefined;
+    this.stopped = true; this.preparedKeysGeneration = undefined; this.fenceRevision++; this.state = "ended"; this.attempt = undefined;
     this.lifetime.abort();
     clearTimeout(this.pollTimer); clearTimeout(this.heartbeatTimer); clearTimeout(this.contextTimer); clearTimeout(this.leaseTimer);
     if (typeof window !== "undefined") window.removeEventListener?.("pageshow", this.resume);

@@ -43,6 +43,7 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
   });
   it("any409 during transition throws retirement conflict immediately without discovery or a promise cycle", async () => {
     let heartbeats = 0;
+    vi.mocked(native.port!.query).mockImplementation(async () => { await dispatch(1); });
     call = await CallSession.create({ ...options, fetch: fetcher(action => {
       if (action === "heartbeat") { heartbeats++; return Response.json(snapshot(2)); }
       return Response.json({ code: "conflict" }, { status: 409 });
@@ -85,11 +86,13 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
   });
   it("accounts every HTTP request, reserves heartbeat slots, and never polls faster than one second or overlaps", async () => {
     let heartbeats = 0;
+    vi.mocked(native.port!.query).mockImplementation(async () => { await dispatch(1); });
     call = await CallSession.create({ ...options, fetch: fetcher(action => {
       if (action === "heartbeat") { heartbeats++; return Response.json(snapshot()); }
       return Response.json({ cursor: "0", events: [], oneTimeKeys: { signed_curve25519: 0 }, unusedFallbackKeys: [] });
     }) });
-    for (let i = 0; i < 161; i++) await dispatch(1);
+    // Join + the real HTTP issued by the public query adapter +160ordinary requests.
+    for (let i = 0; i < 160; i++) await dispatch(1);
     await vi.advanceTimersByTimeAsync(10_000); expect(heartbeats).toBe(1); expect(native.port!.receiveAgreement).not.toHaveBeenCalled();
     await expect(dispatch(1)).rejects.toMatchObject({ code: "budget-exhausted" });
   });
@@ -151,6 +154,47 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     await vi.advanceTimersByTimeAsync(5_000); expect(native.port!.receiveAgreement).toHaveBeenCalledTimes(1);
     batch.resolve([]); await vi.advanceTimersByTimeAsync(999); expect(native.port!.receiveAgreement).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1); expect(native.port!.receiveAgreement).toHaveBeenCalledTimes(2);
+  });
+  it("waits for authoritative remote publication, then queries once before same-generation SAS receive", async () => {
+    const remoteId = crypto.randomUUID(), remoteDevice = crypto.randomUUID(), remoteNonce = crypto.randomUUID();
+    const published = (active: boolean): VoiceSnapshot => {
+      const value = snapshot(); value.members[0].state = "waiting";
+      value.members.push({ ...value.members[0], memberId: remoteId, userId: "remote", voiceDeviceId: remoteDevice, joinNonce: remoteNonce, voiceUserId: `@voice_${callId}_${remoteId}:opendiscord.local`, participantIdentity: `v1:${remoteId}`, state: active ? "active" : "waiting" });
+      return value;
+    };
+    const issued: string[] = [];
+    call = await CallSession.create({ ...options, fetch: async (_path, init) => {
+      const body = JSON.parse(String(init?.body)); issued.push(body.action);
+      if (body.action === "join") { nonce = body.input.joinNonce; deviceId = body.input.voiceDeviceId; return Response.json(published(false)); }
+      return Response.json(body.action === "heartbeat" ? published(true) : { removals: [] });
+    } });
+    expect(call.getSnapshot().keysPrepared).toBe(false); expect(call.getSnapshot().roster[0].state).toBe("waiting");
+    expect(native.port!.query).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(9_999); expect(native.port!.query).not.toHaveBeenCalled(); expect(native.port!.receiveAgreement).not.toHaveBeenCalled();
+    expect(issued).toEqual(["join"]);
+    await vi.advanceTimersByTimeAsync(1); expect(native.port!.query).toHaveBeenCalledWith([memberId, remoteId]); expect(call.getSnapshot().keysPrepared).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000); expect(native.port!.receiveAgreement).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_000); expect(native.port!.query).toHaveBeenCalledTimes(1);
+    expect(call.getSnapshot().generation).toBe(1); expect(call.getSnapshot().admittedMemberIds).toEqual([]); expect(call.getSnapshot().sas).toEqual([]);
+  });
+  it("does not let a superseded preparation query mark the new authoritative generation ready", async () => {
+    const query = gate<void>(); let conflict = true;
+    vi.mocked(native.port!.query).mockImplementationOnce(() => query.promise);
+    const opening = CallSession.create({ ...options, fetch: fetcher(action => {
+      if (action === "heartbeat") return Response.json(snapshot(2));
+      if (action === "crypto" && conflict) { conflict = false; return Response.json({ code: "conflict" }, { status: 409 }); }
+      return Response.json({ cursor: "0", events: [], oneTimeKeys: { signed_curve25519: 0 }, unusedFallbackKeys: [] });
+    }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(native.port!.query).toHaveBeenCalledTimes(1);
+    await expect(dispatch(1)).rejects.toMatchObject({ code: "conflict" });
+    expect(native.port!.transition).toHaveBeenCalledTimes(1);
+    query.resolve(); call = await opening;
+    expect(call.getSnapshot().generation).toBe(2); expect(call.getSnapshot().keysPrepared).toBe(false);
+    expect(native.port!.receiveAgreement).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(native.port!.query).toHaveBeenCalledTimes(2); expect(call.getSnapshot().keysPrepared).toBe(true);
+    expect(native.port!.receiveAgreement).toHaveBeenCalledTimes(1);
   });
   it("a delayed lease grant uses request start and resume checks cannot extend it", async () => {
     const join = gate<Response>();
