@@ -31,6 +31,9 @@ real browser, uploads/posts a clean file through the UI and exports the real
 community archive. Authenticated HTTP import accepts that archive. A copy changes
 only the attachment bytes, declared lengths and SHA-256 to EICAR, retaining valid
 archive structure. Upload and import must return the scanner-specific rejection.
+Each rejection phase signs up a separate real authenticated importer: the
+application permits one archive attempt per account per ten minutes. The export
+owner performs the clean import; no rate-limit state is reset or bypassed.
 The job then stops only its own engine; clean upload/import must fail closed with
 the scanner-unavailable response. Each rejected operation must leave attachment
 rows, community IDs and every private file name/hash unchanged. The browser

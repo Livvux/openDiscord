@@ -5,7 +5,7 @@ import { createConnection } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { Pool } from "pg";
 import { createCommunity, newUserPage, signUp } from "../e2e/helpers";
 
@@ -53,7 +53,8 @@ test("real signatures reject EICAR and unavailable scanning before upload/import
   const page = await newUserPage(browser);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  let email: string | undefined;
+  const pages = [page];
+  const emails: string[] = [];
   async function inventory() {
     const files = await readdir(join(directory!, "attachments")).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
@@ -74,7 +75,7 @@ test("real signatures reject EICAR and unavailable scanning before upload/import
     expect(await command("INSTREAM", clean)).toBe("stream: OK");
     expect(await command("INSTREAM", eicar)).toMatch(/^stream: .*Eicar.* FOUND$/i);
     await writeFile(info.outputPath("engine.json"), JSON.stringify({ version, image: process.env.SCANNER_IMAGE, capturedAt: new Date().toISOString() }, null, 2));
-    email = await signUp(page, "Scanner Acceptance");
+    emails.push(await signUp(page, "Scanner Acceptance"));
     await createCommunity(page, "Private scanner fixture");
     const match = new URL(page.url()).pathname.match(/\/app\/c\/([^/]+)\/([^/]+)/);
     if (!match) throw new Error("Missing community/channel route");
@@ -96,10 +97,10 @@ test("real signatures reject EICAR and unavailable scanning before upload/import
     const exported = await page.request.get(`/api/communities/${communityId}/export?attachments=1`);
     expect(exported.status()).toBe(200);
     const archive = await exported.body();
-    const importArchive = (data: Buffer) => page.request.post("/api/communities/import", {
+    const importArchive = (actor: Page, data: Buffer) => actor.request.post("/api/communities/import", {
       headers: { origin, "content-type": "application/gzip" }, data,
     });
-    expect((await importArchive(archive)).status()).toBe(201);
+    expect((await importArchive(page, archive)).status()).toBe(201);
     const accepted = await inventory();
     expect(accepted.rows).toHaveLength(2);
     expect(accepted.files.map((file) => file.hash)).toEqual([hash(clean), hash(clean)]);
@@ -115,17 +116,25 @@ test("real signatures reject EICAR and unavailable scanning before upload/import
     });
     const infectedArchive = gzipSync(infected.map((record) => JSON.stringify(record)).join("\n") + "\n");
     for (const phase of ["eicar", "unavailable"] as const) {
+      // A real account gets one archive attempt per ten minutes. Each phase owns
+      // a fresh authenticated actor instead of resetting or bypassing that limit.
+      const importer = await newUserPage(browser);
+      pages.push(importer);
+      importer.on("pageerror", (error) => errors.push(error.message));
+      emails.push(await signUp(importer, `Scanner ${phase}`));
       if (phase === "unavailable") await run("docker", ["stop", "--time", "5", container]);
       const before = await inventory();
       const uploaded = await upload(phase === "eicar" ? eicar : clean);
       const expectedStatus = phase === "eicar" ? 400 : 409;
       const message = phase === "eicar" ? "rejected by the malware scanner" : "scanner is unavailable";
-      expect(uploaded.status()).toBe(expectedStatus);
-      expect(await uploaded.text()).toContain(message);
+      const uploadBody = await uploaded.text();
+      expect(uploaded.status(), uploadBody).toBe(expectedStatus);
+      expect(uploadBody).toContain(message);
       expect(await inventory()).toEqual(before);
-      const imported = await importArchive(phase === "eicar" ? infectedArchive : archive);
-      expect(imported.status()).toBe(expectedStatus);
-      expect(await imported.text()).toContain(message);
+      const imported = await importArchive(importer, phase === "eicar" ? infectedArchive : archive);
+      const importBody = await imported.text();
+      expect(imported.status(), importBody).toBe(expectedStatus);
+      expect(importBody).toContain(message);
       expect(await inventory()).toEqual(before);
       results.push({ phase, upload: uploaded.status(), import: imported.status(), unchanged: true });
     }
@@ -133,12 +142,12 @@ test("real signatures reject EICAR and unavailable scanning before upload/import
     expect(errors).toEqual([]);
     await writeFile(info.outputPath("acceptance.json"), JSON.stringify({ cleanUploadAndImport: true, results, pageErrors: errors.length }, null, 2));
   } finally {
-    if (email) {
-      await db.query('DELETE FROM attachment WHERE uploader_id IN (SELECT id FROM "user" WHERE email = $1)', [email]);
-      await db.query('DELETE FROM community WHERE owner_id IN (SELECT id FROM "user" WHERE email = $1)', [email]);
-      await db.query('DELETE FROM "user" WHERE email = $1', [email]);
+    if (emails.length) {
+      await db.query('DELETE FROM attachment WHERE uploader_id IN (SELECT id FROM "user" WHERE email = ANY($1::text[]))', [emails]);
+      await db.query('DELETE FROM community WHERE owner_id IN (SELECT id FROM "user" WHERE email = ANY($1::text[]))', [emails]);
+      await db.query('DELETE FROM "user" WHERE email = ANY($1::text[])', [emails]);
     }
-    await page.context().close();
+    await Promise.all(pages.map((owned) => owned.context().close()));
     await db.end();
   }
 });
