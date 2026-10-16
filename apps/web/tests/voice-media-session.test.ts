@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MediaSession, InstalledVoiceMediaContext, VoiceMediaBridge } from "@/lib/voice/media-session";
+import type { MediaSession, InstalledVoiceMediaContext, VoiceMediaBridge, VoiceMediaView } from "@/lib/voice/media-session";
 import { VOICE_CONTROL_EVENT, voiceControlParty, type VoiceOwnerControl } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
 
@@ -56,10 +56,11 @@ function setup(sources: ("microphone" | "camera" | "screen_share" | "screen_shar
   const snapshot: VoiceSnapshot = { callId, channelId, generation: 1, memberId: self.memberId, joinNonce: self.joinNonce, voiceUserId: self.voiceUserId, voiceDeviceId: self.voiceDeviceId, participantIdentity: self.participantIdentity, members, removals: [], serverTime: new Date(0).toISOString(), leaseExpiresAt: new Date(30000).toISOString() };
   const context: InstalledVoiceMediaContext = { snapshot, epochId: crypto.randomUUID(), proposalSequence: 3, reference: crypto.randomUUID(), audience: members.map(voiceControlParty), self: voiceControlParty(self), deadline: 10000 };
   let current = true;
+  const presentation = vi.fn<(view: VoiceMediaView) => void>();
   const send = vi.fn<(control: VoiceOwnerControl) => Promise<void>>(async () => {}), fatal = vi.fn();
   const token = vi.fn(async () => ({ grant: { token: "deterministic-public-room-double", url: "wss://example.test", snapshot, roomName: `voice:${channelId}:${callId}:1`, participantIdentity: self.participantIdentity, sources, canPublishData: false as const, expiresAt: new Date(30000).toISOString() }, deadline: 30000 }));
-  const bridge: VoiceMediaBridge = { current() { if (!current) throw new Error("Stale context."); }, send, fatal, token };
-  return { context, bridge, send, fatal, token, retire() { current = false; }, peers: context.audience.slice(1) };
+  const bridge: VoiceMediaBridge = { current() { if (!current) throw new Error("Stale context."); }, send, fatal, token, presentation };
+  return { context, bridge, send, fatal, token, presentation, retire() { current = false; }, peers: context.audience.slice(1) };
 }
 type Setup = ReturnType<typeof setup>;
 async function open(test: Setup) {
@@ -83,6 +84,18 @@ function ack(worker: Worker, identity: string) { worker.dispatchEvent(new Messag
 const ownAck = (test: Setup) => ack(harness.rooms[0].worker, test.context.self.participantIdentity);
 
 describe("MediaSession deterministic public Room/Worker effect doubles (not real ACK/media evidence)", () => {
+  it("reports keying separately from ready and clears all presentation synchronously on fence", async () => {
+    const test = setup([]); await open(test); await prepare(test); ownAck(test); await settle();
+    expect(test.presentation.mock.lastCall?.[0]).toMatchObject({ mediaState: "keying", sources: [], microphone: false, camera: false, screenShare: false, tiles: [] });
+    await media!.consume(receipt(test, 0, "key-ready")); await media!.consume(receipt(test, 1, "key-ready"));
+    const ready = test.presentation.mock.lastCall![0];
+    expect(ready.mediaState).toBe("ready"); expect(Object.isFrozen(ready)).toBe(true);
+    expect(JSON.stringify(ready)).not.toMatch(/keyId|reference|token|material|CryptoKey|participantIdentity/);
+    expect(harness.rooms[0].localParticipant.setMicrophoneEnabled).not.toHaveBeenCalled();
+    media!.fence();
+    expect(test.presentation.mock.lastCall?.[0]).toEqual({ mediaState: "ended", sources: [], microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: [] });
+    expect(() => media!.mountVideo("obsolete", {} as HTMLVideoElement)).toThrow("fenced");
+  });
   it("rejects positive ownACK before all exact setKey submissions without readiness or capture", async () => {
     harness.keys = false; const test = setup(); await open(test); await prepare(test); ownAck(test); await settle();
     expect(test.fatal).toHaveBeenCalledOnce(); expect(test.send.mock.calls.some(([control]) => control.kind === "key-ready")).toBe(false);

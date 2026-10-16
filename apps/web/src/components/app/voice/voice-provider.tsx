@@ -1,275 +1,130 @@
 "use client";
 
-import type { Room, Track as LiveKitTrack } from "livekit-client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { joinVoice } from "@/app/app/actions";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { authClient } from "@/lib/auth-client";
+import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
+import type { VoiceSource } from "@/lib/voice/media-session";
 
-export interface VoicePeer {
-  id: string;
-  name: string;
-  speaking: boolean;
-  muted: boolean;
-  isLocal: boolean;
-}
-
-export type VoiceStatus = "idle" | "connecting" | "connected";
-
-export interface VideoTile {
-  key: string;
-  name: string;
-  isLocal: boolean;
-  screen: boolean;
-  track: LiveKitTrack;
-}
-
+type Channel = { id: string; name: string; href: string };
+type VerificationStep = Parameters<CallSession["verificationStep"]>[1];
 interface VoiceValue {
-  status: VoiceStatus;
-  /** The voice channel we're connected (or connecting) to. */
-  channel: { id: string; name: string; href: string } | null;
-  peers: VoicePeer[];
-  videos: VideoTile[];
-  muted: boolean;
-  canSpeak: boolean;
-  canVideo: boolean;
-  cameraOn: boolean;
-  sharing: boolean;
+  channel: Channel | null;
+  view: VoiceCallView | null;
+  joining: boolean;
+  busy: boolean;
+  pendingSources: readonly VoiceSource[];
+  authenticated: boolean;
   error: string | null;
-  /** The browser blocked autoplay of remote audio; `startAudio` (from a click) unblocks it. */
-  audioBlocked: boolean;
-  startAudio: () => Promise<void>;
-  join: (channel: { id: string; name: string; href: string }) => Promise<void>;
-  leave: () => void;
-  toggleMute: () => Promise<void>;
-  toggleCamera: () => Promise<void>;
-  toggleScreenShare: () => Promise<void>;
+  join(channel: Channel): Promise<void>;
+  leave(): void;
+  requestVerification(memberId: string): Promise<void>;
+  verificationStep(handle: string, step: VerificationStep): Promise<void>;
+  admit(memberId: string): Promise<void>;
+  confirmFullRoster(): Promise<void>;
+  toggleSource(source: VoiceSource): Promise<void>;
+  mountVideo(id: string, element: HTMLVideoElement): () => void;
+  startAudio(): Promise<void>;
 }
-
 const VoiceContext = createContext<VoiceValue | null>(null);
-/** `livekit.TrackSource` values in LiveKit's protocol, as used in participant permissions. */
-const PROTO_CAMERA = 1;
-const PROTO_MICROPHONE = 2;
-
 export function useVoice(): VoiceValue {
   const value = useContext(VoiceContext);
   if (!value) throw new Error("useVoice must be used inside <VoiceProvider>");
   return value;
 }
-
-function peersOf(room: Room): VoicePeer[] {
-  const local = room.localParticipant;
-  const all = [local, ...room.remoteParticipants.values()];
-  return all.map((p) => ({
-    id: p.identity,
-    name: p.name || "Member",
-    speaking: p.isSpeaking,
-    muted: !p.isMicrophoneEnabled,
-    isLocal: p === local,
-  }));
+const noopSubscribe = () => () => {};
+const emptySnapshot = () => null;
+export function voiceStatus(view: VoiceCallView | null, joining: boolean): string {
+  if (joining) return "Creating temporary Voice device…";
+  if (!view) return "Join to review the current audience.";
+  if (view.state === "ended") return "Voice stopped. Join again to start a fresh call.";
+  if (view.media.mediaState === "ready") return view.media.microphone ? "Encrypted voice ready — microphone on" : "Encrypted voice ready — microphone off";
+  if (view.media.mediaState === "keying" || view.state === "agreed") return "Preparing encrypted media…";
+  if (view.state === "retry-required") return "Audience attempt expired. Review everyone and retry.";
+  if (view.state === "negotiating") return "Agreeing the full audience…";
+  if (view.state === "waiting") return "Waiting for participant setup and audience consent.";
+  return "Verify every participant, then admit them separately.";
+}
+function errorText(error: unknown): string {
+  if (error instanceof VoiceCallSessionError) {
+    if (error.code === "messaging-setup-required") return "Set up encrypted messaging in Devices and recovery first, then return and join Voice.";
+    if (error.code === "not-ready") return "The other participant is not ready yet. Wait, then explicitly retry this action.";
+    if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
+    return `Voice stopped (${error.code}). Join again when ready.`;
+  }
+  // Permission errors and browser picker cancellation must never claim capture succeeded.
+  if (error instanceof DOMException && ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError"].includes(error.name)) return "Capture did not start. Check device permissions or retry the screen picker.";
+  return "Voice could not complete this action. Check the call status and retry.";
 }
 
-/** Camera and screen tracks that are playing (published locally or subscribed remotely). */
-function videosOf(room: Room): VideoTile[] {
-  const local = room.localParticipant;
-  return [local, ...room.remoteParticipants.values()].flatMap((p) =>
-    [...p.trackPublications.values()]
-      .filter((pub) => pub.kind === "video" && pub.track && !pub.isMuted)
-      .map((pub) => ({
-        key: `${p.identity}:${pub.trackSid}`,
-        name: p.name || "Member",
-        isLocal: p === local,
-        screen: pub.source === "screen_share",
-        track: pub.track!,
-      })),
-  );
-}
-
-/** App-wide, so a voice call survives navigating to text channels (like a phone call in the background). */
-export function VoiceProvider({ children }: { children: React.ReactNode }) {
-  const room = useRef<Room | null>(null);
-  // Each join gets a number; a join that was overtaken by a newer one (or a leave) stops after every await.
-  const generation = useRef(0);
+/** One authenticated app lifetime; navigation only mounts and detaches presentation. */
+export function VoiceProvider({ accountId, sessionId, children }: { accountId: string; sessionId: string; children: React.ReactNode }) {
+  const auth = authClient.useSession();
+  const authenticated = !auth.isPending && !auth.error && auth.data?.user.id === accountId && auth.data.session.id === sessionId;
+  const identityCurrent = useRef(false);
+  const mounted = useRef(false);
+  const revision = useRef(0);
+  const current = useRef<CallSession | null>(null);
   const audio = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<VoiceStatus>("idle");
-  const [channel, setChannel] = useState<VoiceValue["channel"]>(null);
-  const [peers, setPeers] = useState<VoicePeer[]>([]);
-  const [videos, setVideos] = useState<VideoTile[]>([]);
-  const [canVideo, setCanVideo] = useState(false);
-  const [cameraOn, setCameraOn] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [muted, setMuted] = useState(true);
-  const [canSpeak, setCanSpeak] = useState(false);
+  const [session, setSession] = useState<CallSession | null>(null);
+  const [channel, setChannel] = useState<Channel | null>(null);
+  const [joining, setJoining] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pendingSources, setPendingSources] = useState<VoiceSource[]>([]);
+  const sourceFlights = useRef(new Set<VoiceSource>());
   const [error, setError] = useState<string | null>(null);
-  const [audioBlocked, setAudioBlocked] = useState(false);
-
+  const view = useSyncExternalStore(session?.subscribe ?? noopSubscribe, session?.getSnapshot ?? emptySnapshot, emptySnapshot);
   const leave = useCallback(() => {
-    generation.current += 1;
-    const current = room.current;
-    room.current = null;
-    void current?.disconnect();
-    setStatus("idle");
-    setChannel(null);
-    setPeers([]);
-    setVideos([]);
-    setCameraOn(false);
-    setSharing(false);
-    if (audio.current) audio.current.replaceChildren();
+    revision.current++;
+    const old = current.current; current.current = null;
+    // close fences synchronously, before its best-effort asynchronous retirement.
+    void old?.close().catch(() => {});
+    setSession(null); setChannel(null); setJoining(false); setBusy(false); setPendingSources([]); sourceFlights.current.clear();
   }, []);
-
-  const join = useCallback(
-    async (target: { id: string; name: string; href: string }) => {
-      leave();
-      const mine = generation.current;
-      const stale = () => generation.current !== mine;
-      setError(null);
-      setStatus("connecting");
-      setChannel(target);
-      const result = await joinVoice(target.id);
-      if (stale()) return;
-      if (!result.ok) {
-        setError(result.error);
-        setStatus("idle");
-        setChannel(null);
-        return;
-      }
-      // Loaded on demand: the WebRTC client is large and most visits never join voice.
-      const { Room, RoomEvent, Track } = await import("livekit-client");
-      if (stale()) return;
-      const next = new Room({ adaptiveStream: true, dynacast: true });
-      room.current = next;
-      const refresh = () => {
-        if (room.current !== next) return;
-        setPeers(peersOf(next));
-        setVideos(videosOf(next));
-        setCameraOn(next.localParticipant.isCameraEnabled);
-        setSharing(next.localParticipant.isScreenShareEnabled);
-      };
-      next
-        .on(RoomEvent.ParticipantConnected, refresh)
-        .on(RoomEvent.ParticipantDisconnected, refresh)
-        .on(RoomEvent.ActiveSpeakersChanged, refresh)
-        .on(RoomEvent.TrackMuted, refresh)
-        .on(RoomEvent.TrackUnmuted, refresh)
-        .on(RoomEvent.LocalTrackPublished, refresh)
-        .on(RoomEvent.LocalTrackUnpublished, refresh)
-        .on(RoomEvent.TrackPublished, refresh)
-        .on(RoomEvent.TrackUnpublished, refresh)
-        .on(RoomEvent.TrackSubscribed, (track) => {
-          if (track.kind === Track.Kind.Audio) audio.current?.appendChild(track.attach());
-          refresh();
-        })
-        .on(RoomEvent.TrackUnsubscribed, (track) => {
-          track.detach().forEach((el) => el.remove());
-          refresh();
-        })
-        .on(RoomEvent.AudioPlaybackStatusChanged, () => setAudioBlocked(!next.canPlaybackAudio))
-        .on(RoomEvent.ParticipantPermissionsChanged, () => {
-          // A moderator's change applies live: reflect what we may still publish.
-          const permissions = next.localParticipant.permissions;
-          const sources = permissions?.canPublishSources ?? [];
-          const speak = !!permissions?.canPublish && (sources.length === 0 || sources.includes(PROTO_MICROPHONE));
-          setCanSpeak(speak);
-          setCanVideo(!!permissions?.canPublish && (sources.length === 0 || sources.includes(PROTO_CAMERA)));
-          if (!speak) setMuted(true);
-          refresh();
-        })
-        .on(RoomEvent.Disconnected, () => {
-          if (room.current !== next) return;
-          // Removed by the server (kicked, banned, lost access) or the network gave up.
-          setError("You were disconnected from voice.");
-          leave();
-        });
-      try {
-        await next.connect(result.data.url, result.data.token);
-        if (stale()) {
-          void next.disconnect();
-          return;
-        }
-      } catch {
-        if (room.current === next) {
-          setError("Couldn't connect to voice. Check your connection and try again.");
-          leave();
-        }
-        return;
-      }
-      setCanSpeak(result.data.canSpeak);
-      setCanVideo(result.data.canVideo);
-      setStatus("connected");
-      // Autoplay rules may block remote audio until a user gesture; offer a button then.
-      setAudioBlocked(!next.canPlaybackAudio);
-      if (result.data.canSpeak) {
-        try {
-          await next.localParticipant.setMicrophoneEnabled(true);
-          setMuted(false);
-        } catch {
-          setMuted(true);
-          setError("Microphone access was blocked. You can listen; allow the microphone to speak.");
-        }
-      } else setMuted(true);
-      refresh();
-    },
-    [leave],
-  );
-
-  const toggleMute = useCallback(async () => {
-    const current = room.current;
-    if (!current || !canSpeak) return;
-    const next = !muted;
-    try {
-      await current.localParticipant.setMicrophoneEnabled(!next);
-      setMuted(next);
-      setError(null);
-    } catch {
-      setError("Microphone access was blocked. Allow it in your browser to speak.");
-    }
-    setPeers(peersOf(current));
-  }, [canSpeak, muted]);
-
-  const toggleCamera = useCallback(async () => {
-    const current = room.current;
-    if (!current || !canVideo) return;
-    try {
-      await current.localParticipant.setCameraEnabled(!current.localParticipant.isCameraEnabled);
-      setError(null);
-    } catch {
-      setError("Camera access was blocked or no camera was found.");
-    }
-    setCameraOn(current.localParticipant.isCameraEnabled);
-    setVideos(videosOf(current));
-  }, [canVideo]);
-
-  const toggleScreenShare = useCallback(async () => {
-    const current = room.current;
-    if (!current || !canVideo) return;
-    try {
-      await current.localParticipant.setScreenShareEnabled(!current.localParticipant.isScreenShareEnabled, { audio: true });
-      setError(null);
-    } catch {
-      // Cancelling the browser's picker lands here too; that's not worth an error message.
-    }
-    setSharing(current.localParticipant.isScreenShareEnabled);
-    setVideos(videosOf(current));
-  }, [canVideo]);
-
-  const startAudio = useCallback(async () => {
-    await room.current?.startAudio();
-    setAudioBlocked(!(room.current?.canPlaybackAudio ?? true));
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; revision.current++; identityCurrent.current = false; const old = current.current; current.current = null; void old?.close("provider-unmounted").catch(() => {}); };
   }, []);
-
-  useEffect(() => () => void room.current?.disconnect(), []);
-
-  const value = useMemo(
-    () => ({
-      status, channel, peers, videos, muted, canSpeak, canVideo, cameraOn, sharing, error, audioBlocked,
-      startAudio, join, leave, toggleMute, toggleCamera, toggleScreenShare,
-    }),
-    [status, channel, peers, videos, muted, canSpeak, canVideo, cameraOn, sharing, error, audioBlocked,
-      startAudio, join, leave, toggleMute, toggleCamera, toggleScreenShare],
-  );
-  return (
-    <VoiceContext.Provider value={value}>
-      {children}
-      {/* Remote audio plays from here, outside any page, so navigation doesn't cut it off. */}
-      <div ref={audio} hidden />
-    </VoiceContext.Provider>
-  );
+  useEffect(() => {
+    identityCurrent.current = authenticated;
+    if (!authenticated && !auth.isPending) leave();
+  }, [authenticated, auth.isPending, leave]);
+  useEffect(() => {
+    if (session && audio.current) return session.mountAudio(audio.current);
+  }, [session]);
+  const join = useCallback(async (target: Channel) => {
+    leave(); const mine = revision.current;
+    const assertSessionCurrent = () => { if (!mounted.current || !identityCurrent.current || mine !== revision.current) throw new VoiceCallSessionError("ended"); };
+    setError(null); setChannel(target); setJoining(true);
+    try {
+      assertSessionCurrent();
+      if (typeof RTCRtpSender === "undefined" || typeof RTCRtpReceiver === "undefined" || !("createEncodedStreams" in RTCRtpSender.prototype) || !("createEncodedStreams" in RTCRtpReceiver.prototype)) throw new VoiceCallSessionError("unsupported-media");
+      const created = await CallSession.create({ accountId, sessionId, channelId: target.id, consent: true, assertSessionCurrent });
+      try { assertSessionCurrent(); } catch (error) { void created.close("join-superseded").catch(() => {}); throw error; }
+      current.current = created; setSession(created);
+    } catch (error) { if (mine === revision.current && mounted.current) setError(error instanceof VoiceCallSessionError && error.code === "unsupported-media" ? "This browser does not support the encoded-stream encryption Voice requires. Use a supported Chromium browser." : errorText(error)); }
+    finally { if (mine === revision.current && mounted.current) setJoining(false); }
+  }, [accountId, sessionId, leave]);
+  const run = useCallback(async (operation: (call: CallSession) => Promise<void>) => {
+    const call = current.current, mine = revision.current;
+    if (!call) return;
+    setBusy(true); setError(null);
+    try { await operation(call); } catch (error) { if (mine === revision.current && mounted.current) setError(errorText(error)); }
+    finally { if (mine === revision.current && mounted.current) setBusy(false); }
+  }, []);
+  const toggleSource = async (source: VoiceSource) => {
+    const call = current.current, mine = revision.current;
+    if (!call || sourceFlights.current.has(source)) return;
+    sourceFlights.current.add(source); setPendingSources([...sourceFlights.current]); setError(null);
+    const media = call.getSnapshot().media;
+    try {
+      if (source === "microphone") await call.setMicrophoneEnabled(!media.microphone);
+      else if (source === "camera") await call.setCameraEnabled(!media.camera);
+      else await call.setScreenShareEnabled(!media.screenShare);
+    } catch (error) { if (mine === revision.current && mounted.current) setError(errorText(error)); }
+    finally { if (mine === revision.current && mounted.current) { sourceFlights.current.delete(source); setPendingSources([...sourceFlights.current]); } }
+  };
+  const mountVideo = useCallback((id: string, element: HTMLVideoElement) => current.current?.mountVideo(id, element) ?? (() => {}), []);
+  return <VoiceContext.Provider value={{ channel, view, joining, busy, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(call => call.confirmFullRoster()), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
+    {children}<div ref={audio} hidden aria-hidden="true" />
+  </VoiceContext.Provider>;
 }

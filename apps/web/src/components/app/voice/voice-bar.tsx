@@ -1,43 +1,18 @@
 "use client";
 
-import { MicIcon, MicOffIcon, PhoneOffIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { useVoice } from "./voice-provider";
+import { useVoice, voiceStatus } from "./voice-provider";
+import { VoiceSourceButton } from "./voice-room";
 
-/** Compact controls for an ongoing call, wherever you are in the app. */
 export function VoiceBar() {
   const voice = useVoice();
-  if (voice.status === "idle" || !voice.channel) {
-    // A call that ended on its own (removed, network) explains itself here too, not only on the voice page.
-    return voice.error ? (
-      <p role="alert" className="border-t border-white/5 px-3 py-2 text-xs text-destructive">{voice.error}</p>
-    ) : null;
-  }
-  return (
-    <section aria-label="Voice connection" className="flex items-center gap-1 border-t border-white/5 px-3 py-2">
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium text-emerald-400">{voice.status === "connecting" ? "Connecting…" : "Voice connected"}</p>
-        <Link href={voice.channel.href} className="block truncate text-xs text-zinc-400 hover:text-zinc-200">
-          {voice.channel.name}
-        </Link>
-      </div>
-      {voice.audioBlocked && (
-        <Button variant="secondary" size="sm" onClick={() => void voice.startAudio()}>Enable audio</Button>
-      )}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={voice.muted ? "Unmute microphone" : "Mute microphone"}
-        aria-pressed={voice.muted}
-        disabled={!voice.canSpeak || voice.status !== "connected"}
-        onClick={() => void voice.toggleMute()}
-      >
-        {voice.muted ? <MicOffIcon /> : <MicIcon />}
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Leave voice" onClick={voice.leave}>
-        <PhoneOffIcon />
-      </Button>
-    </section>
-  );
+  if (!voice.channel) return voice.error ? <p role="alert" className="border-t px-3 py-2 text-xs text-destructive">{voice.error}</p> : null;
+  return <section aria-label="Voice connection" className="grid gap-2 border-t px-3 py-2">
+    <p className="text-xs" role="status">{voiceStatus(voice.view, voice.joining)}</p>
+    <Link href={voice.channel.href} className="truncate text-xs underline">{voice.channel.name}</Link>
+    {voice.error && <p role="alert" className="text-xs text-destructive">{voice.error}</p>}
+    {voice.view?.media.audioBlocked && <Button size="sm" onClick={() => void voice.startAudio()}>Enable audio playback</Button>}
+    <div className="flex flex-wrap gap-1"><VoiceSourceButton source="microphone" sidebar /><Button size="sm" variant="destructive" onClick={voice.leave}>Leave Voice</Button></div>
+  </section>;
 }

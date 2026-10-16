@@ -6,7 +6,7 @@ import type { VoiceBinding, VoiceSnapshot } from "./contracts";
 import type { VoiceAgreementEventRef, VoiceOwnerAgreementReceived, VoiceOwnerTransport, VoiceProductOwnerPort, VoiceSasState } from "./crypto-owner";
 import { VoiceContextRejected, sameVoiceProposal, type VoiceContextProposal } from "./epoch-agreement";
 import type { VoiceContextControl } from "./context-control";
-import type { MediaSession, InstalledVoiceMediaContext } from "./media-session";
+import type { VoiceMediaView, MediaSession, InstalledVoiceMediaContext } from "./media-session";
 
 const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 60_000;
 // All HTTP actions share this budget. Optional work leaves 18 slots for heartbeat,
@@ -18,11 +18,11 @@ export class VoiceCallSessionError extends Error {
 }
 export class VoiceRetirementConflict extends VoiceCallSessionError { constructor() { super("retirement-conflict"); this.name = "VoiceRetirementConflict"; } }
 export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" | "retry-required" | "ended";
-type VoiceSasView = Readonly<Omit<VoiceSasState, "emojiIndices"> & { emojiIndices: readonly number[] | null }>;
+type VoiceSasView = Readonly<Omit<VoiceSasState, "emojiIndices" | "emoji"> & { emojiIndices: readonly number[] | null; emoji?: readonly Readonly<{ symbol: string; description: string }>[] | null }>;
 export type VoiceCallView = Readonly<{
   state: VoiceCallState; roster: readonly Readonly<VoiceSnapshot["members"][number]>[];
   keysPrepared: boolean; fenceRevision: number; generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
-  localConsentPending: boolean; error?: string;
+  localConsentPending: boolean; media: VoiceMediaView; error?: string;
 }>;
 export type VoiceCallOptions = {
   accountId: string; sessionId: string; channelId: string; consent: true;
@@ -33,7 +33,7 @@ export type VoiceCallOptions = {
 type Attempt = { deadline: number; revision: number; ref?: VoiceAgreementEventRef; proposal?: VoiceContextProposal; installed: boolean };
 type Grant = { snapshot: VoiceSnapshot; start: number; deadline: number };
 
-/** Unactivated browser control lifetime. No media, React singleton, DM enrollment or persistence. */
+/** Authenticated browser call lifetime. DM enrollment is an explicit prerequisite. */
 export class CallSession {
   private readonly lifetime = new AbortController();
   private readonly http;
@@ -42,6 +42,8 @@ export class CallSession {
   private readonly admitted = new Map<string, VoiceControlParty>();
   private owner?: VoiceProductOwnerPort;
   private media?: MediaSession;
+  private mediaView: VoiceMediaView = Object.freeze({ mediaState: "none", sources: [], microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: [] });
+  private readonly audioRoots = new Map<HTMLElement, (() => void) | undefined>();
   private isInterrupted: (error: unknown) => boolean = () => false;
   private guard?: VoiceOwnerGuard;
   private secret = "";
@@ -69,7 +71,7 @@ export class CallSession {
   private transitionFlight?: Promise<void>;
   private lastPollStart = -Infinity;
   private actionFlight?: Promise<void>;
-  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], keysPrepared: false, fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false });
+  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], keysPrepared: false, fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false, media: this.mediaView });
   private readonly resume = () => { try { this.checkCurrent(); } catch { /* checkCurrent closes synchronously */ } };
   private constructor(private readonly options: VoiceCallOptions) { this.http = createVoiceHttpClient({ fetch: options.fetch }); }
 
@@ -105,7 +107,7 @@ export class CallSession {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private emit(): void {
     const snapshot = this.authority?.snapshot;
-    this.view = Object.freeze({ state: this.state, keysPrepared: !!snapshot && this.preparedKeysGeneration === snapshot.generation, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
+    this.view = Object.freeze({ state: this.state, media: this.mediaView, keysPrepared: !!snapshot && this.preparedKeysGeneration === snapshot.generation, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), ...(value.emoji ? { emoji: Object.freeze(value.emoji.map(emoji => Object.freeze({ ...emoji }))) } : {}), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
     for (const listener of this.listeners) { try { listener(); } catch { /* Render observers cannot alter native control lifetime. */ } }
   }
   private assertAlive(): void {
@@ -360,6 +362,7 @@ export class CallSession {
       const { MediaSession } = await this.bounded(import("./media-session"), deadline); current();
       const media = new MediaSession(context, {
         current,
+        presentation: view => { this.mediaView = view; this.emit(); },
         send: async control => {
           current(); validateVoiceOwnerControl(control, snapshot, context.epochId, context.audience, context.proposalSequence);
           if (!sameVoiceParty(control.sender, context.self)) throw new VoiceCallSessionError("binding-changed");
@@ -377,7 +380,7 @@ export class CallSession {
         },
         fatal: reason => { void this.close(reason); },
       });
-      current(); this.media = media; media.start();
+      current(); this.media = media; for (const container of this.audioRoots.keys()) this.audioRoots.set(container, media.mountAudio(container)); media.start();
       // Only the installed Owner returns these authenticated controls, exactly once.
       for (const control of drained) { current(); await media.consume(control); current(); }
       this.state = "agreed"; this.emit();
@@ -470,6 +473,12 @@ export class CallSession {
       if (members[0].memberId === snapshot.memberId) await this.propose(attempt);
     });
   }
+  mountAudio(container: HTMLElement): () => void {
+    this.checkCurrent(); this.audioRoots.set(container, this.media?.mountAudio(container));
+    return () => { this.audioRoots.get(container)?.(); this.audioRoots.delete(container); };
+  }
+  mountVideo(id: string, element: HTMLVideoElement): () => void { this.checkCurrent(); if (!this.media) throw new VoiceCallSessionError("not-ready"); return this.media.mountVideo(id, element); }
+  startAudio(): Promise<void> { this.checkCurrent(); if (!this.media) return Promise.reject(new VoiceCallSessionError("not-ready")); return this.media.startAudio(); }
   setMicrophoneEnabled(enabled: boolean): Promise<void> { this.checkCurrent(); if (!this.media) return Promise.reject(new VoiceCallSessionError("not-ready")); return this.media.setSource("microphone", enabled); }
   setCameraEnabled(enabled: boolean): Promise<void> { this.checkCurrent(); if (!this.media) return Promise.reject(new VoiceCallSessionError("not-ready")); return this.media.setSource("camera", enabled); }
   setScreenShareEnabled(enabled: boolean): Promise<void> { this.checkCurrent(); if (!this.media) return Promise.reject(new VoiceCallSessionError("not-ready")); return this.media.setSource("screen_share", enabled); }
@@ -485,6 +494,8 @@ export class CallSession {
   close(reason = "left"): Promise<void> {
     if (this.cleanup) return this.cleanup;
     this.media?.fence(); this.media = undefined;
+    this.audioRoots.forEach(detach => detach?.()); this.audioRoots.clear();
+    this.error ??= reason === "left" ? undefined : reason;
     this.stopped = true; this.preparedKeysGeneration = undefined; this.fenceRevision++; this.state = "ended"; this.attempt = undefined;
     this.lifetime.abort();
     clearTimeout(this.pollTimer); clearTimeout(this.heartbeatTimer); clearTimeout(this.contextTimer); clearTimeout(this.leaseTimer);

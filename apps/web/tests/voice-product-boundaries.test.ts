@@ -158,7 +158,7 @@ describe("bound grant serialized against actual lifecycle mutations", () => {
     expect(provider).not.toMatch(/crypto-owner|http-client|VoiceCryptoOwner/);
     const control = readFileSync(new URL("../src/server/voice-control.ts", import.meta.url), "utf8");
     expect(control).not.toMatch(/livekit-server-sdk|new AccessToken|RoomServiceClient|fetch\(/);
-    const signer = readFileSync(new URL("../src/server/voice.ts", import.meta.url), "utf8").split("export async function createBoundVoiceToken")[1].split("export interface VoiceParticipant")[0];
+    const signer = readFileSync(new URL("../src/server/voice.ts", import.meta.url), "utf8").split("export async function createBoundVoiceToken")[1].split("export async function reconcileVoice")[0];
     expect(signer.indexOf("await grantBoundVoiceMedia")).toBeGreaterThanOrEqual(0);
     expect(signer.indexOf("new AccessToken")).toBeGreaterThan(signer.indexOf("await grantBoundVoiceMedia"));
   });

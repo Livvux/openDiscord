@@ -1,4 +1,4 @@
-import { BaseKeyProvider, Encryption_Type, Room, RoomEvent, Track, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication } from "livekit-client";
+import { BaseKeyProvider, Encryption_Type, Room, RoomEvent, Track, type LocalTrack, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication } from "livekit-client";
 import { StrictVoiceWorker } from "./strict-worker";
 import { sameVoiceParty, validateVoiceOwnerControl, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 import type { VoiceSnapshot } from "./contracts";
@@ -14,9 +14,14 @@ export type VoiceMediaBridge = Readonly<{
   send(control: VoiceOwnerControl): Promise<void>;
   token(): Promise<{ grant: Token; deadline: number }>;
   fatal(reason: string): void;
+  presentation?(view: VoiceMediaView): void;
 }>;
 type Material = { key: CryptoKey; keyId: string; reference: string; wire: string };
-type Source = "microphone" | "camera" | "screen_share";
+export type VoiceSource = "microphone" | "camera" | "screen_share";
+type Source = VoiceSource;
+export type VoiceMediaTile = Readonly<{ id: string; memberId: string; source: Source; kind: "audio" | "video"; isLocal: boolean }>;
+export type VoiceMediaView = Readonly<{ mediaState: "none" | "keying" | "ready" | "ended"; sources: readonly Source[]; microphone: boolean; camera: boolean; screenShare: boolean; audioBlocked: boolean; tiles: readonly VoiceMediaTile[] }>;
+export const emptyVoiceMedia = (mediaState: VoiceMediaView["mediaState"] = "none"): VoiceMediaView => Object.freeze({ mediaState, sources: Object.freeze([]), microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: Object.freeze([]) });
 
 class ParticipantKeys extends BaseKeyProvider {
   constructor(keys: ReadonlyMap<string, CryptoKey>) {
@@ -45,6 +50,54 @@ export class MediaSession {
   private keyingComplete = false;
   private connected = false;
   private tokenDeadline = Infinity;
+  private readonly tiles = new Map<string, { view: VoiceMediaTile; track: RemoteTrack | LocalTrack }>();
+  private readonly attachments = new Map<HTMLMediaElement, RemoteTrack | LocalTrack>();
+  private readonly audioRoots = new Set<HTMLElement>();
+  private source(source: Track.Source): Source | undefined { return source === Track.Source.Microphone ? "microphone" : source === Track.Source.Camera ? "camera" : source === Track.Source.ScreenShare ? "screen_share" : undefined; }
+  private present(): void {
+    if (this.dead) { this.bridge.presentation?.(emptyVoiceMedia("ended")); return; }
+    const local = this.room?.localParticipant;
+    this.bridge.presentation?.(Object.freeze({ mediaState: this.keyingComplete ? "ready" : "keying", sources: Object.freeze([...this.sources]), microphone: local?.isMicrophoneEnabled === true, camera: local?.isCameraEnabled === true, screenShare: local?.isScreenShareEnabled === true, audioBlocked: this.room?.canPlaybackAudio === false, tiles: Object.freeze([...this.tiles.values()].map(tile => tile.view)) }));
+  }
+  private detach(element: HTMLMediaElement): void { this.attachments.get(element)?.detach(element); this.attachments.delete(element); }
+  private removeTrack(track: RemoteTrack | LocalTrack): void {
+    for (const [element, attached] of this.attachments) if (attached === track) { this.detach(element); if (element instanceof HTMLAudioElement) element.remove(); }
+    for (const [id, tile] of this.tiles) if (tile.track === track) this.tiles.delete(id);
+  }
+  private localTracks(): void {
+    if (this.dead || !this.room) return;
+    for (const tile of this.tiles.values()) if (tile.view.isLocal) this.removeTrack(tile.track);
+    for (const publication of this.room.localParticipant.trackPublications.values()) {
+      const source = this.source(publication.source), track = publication.track;
+      if (source && track && !publication.isMuted && publication.kind === Track.Kind.Video) {
+        const id = crypto.randomUUID();
+        this.tiles.set(id, { track, view: Object.freeze({ id, memberId: this.context.self.memberId, source, kind: "video", isLocal: true }) });
+      }
+    }
+    this.present();
+  }
+  private attachAudio(): void {
+    if (this.dead) return;
+    const container = this.audioRoots.values().next().value;
+    if (!container) return;
+    for (const tile of this.tiles.values()) {
+      if (tile.view.kind !== "audio" || tile.view.isLocal || [...this.attachments.values()].includes(tile.track)) continue;
+      const element = document.createElement("audio");
+      tile.track.attach(element); this.attachments.set(element, tile.track); container.append(element);
+    }
+  }
+  mountAudio(container: HTMLElement): () => void {
+    this.current(); this.audioRoots.add(container); this.attachAudio();
+    return () => { if (!this.audioRoots.delete(container)) return; for (const element of [...this.attachments.keys()]) if (element instanceof HTMLAudioElement && container.contains(element)) { this.detach(element); element.remove(); } this.attachAudio(); };
+  }
+  mountVideo(id: string, element: HTMLVideoElement): () => void {
+    this.current(); const tile = this.tiles.get(id);
+    if (!tile || tile.view.kind !== "video") throw new Error("Voice video is no longer current.");
+    this.detach(element); element.muted = tile.view.isLocal; element.playsInline = true;
+    tile.track.attach(element); this.attachments.set(element, tile.track);
+    return () => { if (this.attachments.get(element) === tile.track) this.detach(element); };
+  }
+  async startAudio(): Promise<void> { this.current(); if (!this.room) throw new Error("Media not ready."); await this.checked(this.room.startAudio()); this.present(); }
 
   constructor(private readonly context: InstalledVoiceMediaContext, private readonly bridge: VoiceMediaBridge) {
     this.current();
@@ -69,7 +122,7 @@ export class MediaSession {
     finally { bytes.fill(0); }
   }
   /** Starts without waiting on future native receive batches. */
-  start(): void { this.run(this.initialize()); }
+  start(): void { this.present(); this.run(this.initialize()); }
   private async initialize(): Promise<void> {
     this.current();
     if (typeof RTCRtpSender === "undefined" || typeof RTCRtpReceiver === "undefined" || !("createEncodedStreams" in RTCRtpSender.prototype) || !("createEncodedStreams" in RTCRtpReceiver.prototype)) throw new Error("Encoded-stream encryption unavailable.");
@@ -116,27 +169,40 @@ export class MediaSession {
     const { grant, deadline } = await this.checked(this.bridge.token());
     this.tokenDeadline = deadline; this.current();
     for (const source of grant.sources) if (source !== "screen_share_audio") this.sources.add(source);
+    this.present();
     const expected = new Map(this.context.audience.map(party => [party.participantIdentity, this.materials.get(party.memberId)!.key]));
     const provider = new ParticipantKeys(expected);
-    const worker = new StrictVoiceWorker(new URL(new URL("livekit-client/e2ee-worker", import.meta.url).href, location.href), [...expected.keys()], reason => this.fail(reason), { ownIdentity: this.context.self.participantIdentity, expected });
+    const worker = new StrictVoiceWorker(new URL("livekit-client/e2ee-worker", import.meta.url), [...expected.keys()], reason => this.fail(reason), { ownIdentity: this.context.self.participantIdentity, expected });
     this.worker = worker;
     const room = new Room({ encryption: { keyProvider: provider, worker } }); this.room = room;
     room.on(RoomEvent.Reconnecting, () => this.fail("media-reconnecting"));
     room.on(RoomEvent.SignalReconnecting, () => this.fail("media-signal-reconnecting"));
     room.on(RoomEvent.Disconnected, () => this.fail("media-disconnected"));
     room.on(RoomEvent.EncryptionError, () => this.fail("media-encryption-failed"));
+    room.on(RoomEvent.AudioPlaybackStatusChanged, () => this.present());
+    room.on(RoomEvent.LocalTrackPublished, () => this.localTracks());
+    room.on(RoomEvent.LocalTrackUnpublished, () => this.localTracks());
+    room.on(RoomEvent.TrackMuted, () => this.localTracks());
+    room.on(RoomEvent.TrackUnmuted, () => this.localTracks());
+    room.on(RoomEvent.ParticipantPermissionsChanged, (_previous, participant) => {
+      if (participant !== room.localParticipant) return;
+      const permissions = participant.permissions;
+      const protocolSources = { microphone: 2, camera: 1, screen_share: 3 } as const;
+      if (permissions?.canSubscribe === false || [...this.sources].some(source => permissions?.canPublish === false || (permissions?.canPublishSources?.length && !permissions.canPublishSources.includes(protocolSources[source])))) this.fail("media-permission-reduced");
+    });
     room.on(RoomEvent.TrackPublished, (publication, participant) => this.subscribe(publication, participant));
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       try {
         this.current(); this.validate(publication, participant);
         if (!this.subscriptions.has(publication)) throw new Error("Unrequested media track.");
         this.remotes.add(track);
-        const element = track.attach();
-        if (element instanceof HTMLVideoElement) element.playsInline = true;
-        document.body.append(element);
+        const member = this.context.audience.find(party => party.participantIdentity === participant.identity)!;
+        const id = crypto.randomUUID(), source = this.source(publication.source)!;
+        this.tiles.set(id, { track, view: Object.freeze({ id, memberId: member.memberId, source, kind: publication.kind === Track.Kind.Audio ? "audio" : "video", isLocal: false }) });
+        this.attachAudio(); this.present();
       } catch { track.detach().forEach(element => element.remove()); track.stop(); this.fail("media-attach-failed"); }
     });
-    room.on(RoomEvent.TrackUnsubscribed, track => { this.remotes.delete(track); track.detach().forEach(element => element.remove()); });
+    room.on(RoomEvent.TrackUnsubscribed, track => { this.remotes.delete(track); this.removeTrack(track); this.present(); });
     await this.checked(room.setE2EEEnabled(true));
     try {
       this.current(); await room.connect(grant.url, grant.token, { autoSubscribe: false }); this.current();
@@ -154,7 +220,7 @@ export class MediaSession {
   }
   private completeKeying(): void {
     if (!this.localEnabled || !this.readinessSent || this.ready.size !== this.others().length) return;
-    this.current(); this.keyingComplete = true; clearTimeout(this.timer);
+    this.current(); this.keyingComplete = true; clearTimeout(this.timer); this.present();
   }
   private validate(publication: RemoteTrackPublication, participant: RemoteParticipant): void {
     this.current();
@@ -190,12 +256,15 @@ export class MediaSession {
       const track = publication?.track;
       try { this.current(); } catch (error) { track?.stop(); void this.room.disconnect(); throw error; }
       if (track) this.captures.add(track.mediaStreamTrack);
+      this.localTracks();
     } finally { this.sourceFlights.delete(source); }
   }
   private readonly sources = new Set<Source>();
   fence(): void {
     if (this.dead) return;
     this.dead = true; clearTimeout(this.timer);
+    for (const element of [...this.attachments.keys()]) { this.detach(element); if (element instanceof HTMLAudioElement) element.remove(); }
+    this.tiles.clear(); this.audioRoots.clear(); this.present();
     this.captures.forEach(track => track.stop());
     this.room?.localParticipant.trackPublications.forEach(publication => publication.track?.stop());
     this.remotes.forEach(track => { track.detach().forEach(element => element.remove()); track.stop(); });
