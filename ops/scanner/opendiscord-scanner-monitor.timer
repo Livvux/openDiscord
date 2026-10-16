@@ -1,0 +1,11 @@
+[Unit]
+Description=Check OpenDiscord private scanner every five minutes
+
+[Timer]
+OnBootSec=300s
+OnUnitInactiveSec=300s
+AccuracySec=1s
+Unit=opendiscord-scanner-monitor.service
+
+[Install]
+WantedBy=timers.target

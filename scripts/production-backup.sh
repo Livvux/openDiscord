@@ -30,6 +30,8 @@ docker exec -i "$OPENDISCORD_DB_CONTAINER" pg_restore --list < "$work/database.d
 # Capture object references from this exact dump, not a later mutable database read.
 docker exec -i "$OPENDISCORD_DB_CONTAINER" pg_restore --data-only --table=attachment --file=- < "$work/database.dump" > "$work/attachments.sql"
 docker inspect "$OPENDISCORD_WEB_CONTAINER" --format '{{json .Config.Env}}' > "$work/web-env.json"
+# Capture before the storage helper deletes this private environment snapshot.
+python3 "$(dirname "$0")/capture-scanner-recovery.py" "$work"
 python3 - "$work" <<'PY'
 import json,pathlib,re,sys
 p=pathlib.Path(sys.argv[1]);env=dict(s.split('=',1) for s in json.loads((p/'web-env.json').read_text()) if '=' in s)
