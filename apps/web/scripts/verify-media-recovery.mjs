@@ -30,6 +30,7 @@ const work = mkdtempSync(join(tmpdir(), `${prefix}-`));
 chmodSync(work, 0o700);
 const owned = new Map();
 const createdPaths = [];
+const fixtureFiles = new Map();
 const paths = ['/etc/opendiscord-backup', '/var/backups/opendiscord', '/etc/dokploy/traefik/dynamic', '/etc/nftables.d'];
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const run = (file, args, options = {}) => execFileSync(file, args, {
@@ -63,6 +64,8 @@ const account = `${prefix}@example.test`;
 const outsider = `${prefix}-outsider@example.test`;
 const accountPassword = `Recovery-${randomBytes(16).toString('hex')}`;
 let report;
+let failed = false;
+let cleanupFailed = false;
 let phase = 'guards';
 
 function start(name, args) {
@@ -144,6 +147,15 @@ async function signin(page, email) {
   await form.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.waitForURL('**/app');
 }
+function fixtureFile(path, value) {
+  assert(paths.some((directory) => path.startsWith(`${directory}/`)));
+  writeFileSync(path, value, { mode: 0o600, flag: 'wx' });
+  fixtureFiles.set(path, hash(readFileSync(path)));
+}
+function objects() {
+  return JSON.parse(rclone('lsjson', `fixture:${backupBucket}`, '--recursive', '--files-only').toString())
+    .map(({ Path, Size }) => ({ Path, Size })).sort((a, b) => a.Path.localeCompare(b.Path));
+}
 function backup() {
   return run('bash', [join(root, 'scripts/production-backup.sh')], { env: {
     ...process.env, OPENDISCORD_DB_CONTAINER: container(sourceDB), OPENDISCORD_WEB_CONTAINER: container(sourceWeb),
@@ -158,21 +170,25 @@ try {
     createdPaths.push(path);
     run('sudo', ['chown', String(process.getuid()), path]);
     chmodSync(path, 0o700);
+    fixtureFile(join(path, '.recovery-owner'), prefix);
   }
   mkdirSync(appDir); mkdirSync(voiceDir);
   writeFileSync(envFile, webEnv(5432, sourceBucket), { mode: 0o600 });
   writeFileSync(s3EnvFile, `AWS_ACCESS_KEY_ID=${access}\nAWS_SECRET_ACCESS_KEY=${secret}\nS3_BUCKET=${sourceBucket},${targetBucket},${backupBucket}\n`, { mode: 0o600 });
   writeFileSync(localConfig, `[fixture]\ntype = s3\nprovider = Other\naccess_key_id = ${access}\nsecret_access_key = ${secret}\nendpoint = ${s3}\nno_check_bucket = true\nforce_path_style = true\n`, { mode: 0o600 });
-  writeFileSync('/etc/opendiscord-backup/rclone.conf', readFileSync(localConfig).toString().replace('[fixture]', '[opendiscord-backup]'), { mode: 0o600 });
+  fixtureFile('/etc/opendiscord-backup/rclone.conf', readFileSync(localConfig).toString().replace('[fixture]', '[opendiscord-backup]'));
   run('age-keygen', ['-o', identity]);
-  writeFileSync('/etc/opendiscord-backup/age-recipient', run('age-keygen', ['-y', identity]), { mode: 0o600 });
+  fixtureFile('/etc/opendiscord-backup/age-recipient', run('age-keygen', ['-y', identity]));
   // Synthetic recovery configuration, including optional router files. Never sourced or executed.
   for (const [path, value] of [
     [join(appDir, '.env'), readFileSync(envFile)], [join(appDir, 'docker-compose.dokploy.yml'), 'services: {}\n'],
     [join(voiceDir, '.env'), 'SYNTHETIC_RECOVERY_FIXTURE=1\n'], [join(voiceDir, 'docker-compose.yml'), 'services: {}\n'],
     ['/etc/dokploy/traefik/dynamic/opendiscord.yml', 'http: {}\n'], ['/etc/dokploy/traefik/dynamic/opendiscord-turn.yml', 'tcp: {}\n'],
     ['/etc/nftables.d/dokploy-public-ingress.nft', '# synthetic recovery fixture\n'],
-  ]) writeFileSync(path, value, { mode: 0o600 });
+  ]) {
+    if (paths.some((directory) => path.startsWith(`${directory}/`))) fixtureFile(path, value);
+    else writeFileSync(path, value, { mode: 0o600 });
+  }
   phase = 'services';
   start(store, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', s3EnvFile, s3Image, 'mini', '-dir=/data']);
   await waitFor(s3);
@@ -212,7 +228,7 @@ try {
   await client.end();
   assert.equal(refs.length, 1); assert.equal(refs[0].size, fixture.length);
   assert.equal(hash(rclone('cat', `fixture:${sourceBucket}/${refs[0].key}`)), hash(fixture));
-phase = 'operational-backup';
+  phase = 'operational-backup';
   backup();
   const lastSuccess = readFileSync('/var/backups/opendiscord/last-success');
   const archiveKey = lastSuccess.toString().trim().split(' ')[1];
@@ -231,22 +247,31 @@ phase = 'operational-backup';
   assert.equal(readFileSync(join(extracted, 'manifest.txt'), 'utf8'), 'format=opendiscord-recovery-v1\nattachment_references=1\n');
   assert.deepEqual(readFileSync(join(extracted, 'config/app.env')), readFileSync(envFile));
   assert.equal(hash(readFileSync(join(extracted, 'media', refs[0].key))), hash(fixture));
-phase = 'restoration';
+  phase = 'restoration';
   restore(targetDB, readFileSync(join(extracted, 'database.dump')));
   assert.deepEqual(await snapshot(5433), sourceSnapshot);
   rclone('copy', join(extracted, 'media'), `fixture:${targetBucket}`, '--quiet');
   assert.equal(hash(rclone('cat', `fixture:${targetBucket}/${refs[0].key}`)), hash(fixture));
   // Missing referenced bytes must fail before encryption/upload and must preserve last-success.
-phase = 'missing-reference';
-  const beforeObjects = rclone('lsjson', `fixture:${backupBucket}`, '--recursive');
+  phase = 'missing-reference';
+  const beforeObjects = objects();
   rclone('deletefile', `fixture:${sourceBucket}/${refs[0].key}`);
   let failure;
   try { backup(); } catch (error) { failure = error; }
+  phase = 'missing-reference-exit';
   assert(failure, 'Missing referenced object was accepted');
+  phase = 'missing-reference-reason';
+  const rejection = failure.stderr?.toString().includes('Referenced attachment missing from backup')
+    ? 'missing-reference' : 'other-backup-rejection';
+  console.log(`Negative backup rejection category: ${rejection}; status: ${Number.isInteger(failure.status) ? failure.status : 'unknown'}`);
   assert(failure.stderr.toString().includes('Referenced attachment missing from backup'));
+  phase = 'missing-reference-last-success';
   assert.deepEqual(readFileSync('/var/backups/opendiscord/last-success'), lastSuccess);
-  assert.deepEqual(rclone('lsjson', `fixture:${backupBucket}`, '--recursive'), beforeObjects);
-phase = 'restored-browser';
+  phase = 'missing-reference-remote-objects';
+  assert.deepEqual(objects(), beforeObjects);
+  phase = 'missing-reference-remote-bytes';
+  assert.equal(hash(rclone('cat', `fixture:${backupBucket}/${archiveKey}`)), hash(encrypted));
+  phase = 'restored-browser';
   const targetEnv = join(work, 'target.env');
   writeFileSync(targetEnv, webEnv(5433, targetBucket), { mode: 0o600 });
   start(targetWeb, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', targetEnv, '-e', 'PORT=3201', image]);
@@ -272,16 +297,41 @@ phase = 'restored-browser';
     anonymousDownload: 401, anonymousObject: 403, corruptedAgeRejected: true, missingReferenceRejected: true,
     failurePreservedRemoteArchiveAndLastSuccess: true, s3Image };
 } catch (error) {
+  failed = true;
   // Child errors can include env arguments, response bodies or config. Never print them.
-  console.error(`Media recovery acceptance failed in ${phase} (${error.name}); sensitive diagnostics suppressed.`);
-  throw new Error('Media recovery acceptance failed; no private fixture diagnostics emitted');
+  const category = error.name === 'AssertionError' ? 'assertion' : 'runtime';
+  console.error(`Media recovery acceptance failed in ${phase} (${category}); sensitive diagnostics suppressed.`);
 } finally {
-  await browser?.close();
-  for (const name of containers.reverse()) docker('rm', '-f', '-v', container(name));
-  // Paths were required absent and created above by this invocation only.
-  for (const path of createdPaths.reverse()) if (existsSync(path)) rmSync(path, { recursive: true, force: true });
-  rmSync(work, { recursive: true, force: true });
+  // Finish every independent owned cleanup; cleanup errors cannot hide the original failure.
+  const clean = async (category, action) => {
+    try { await action(); } catch {
+      cleanupFailed = true;
+      console.error(`Owned cleanup failed (${category}); sensitive diagnostics suppressed.`);
+    }
+  };
+  await clean('browser', async () => { await browser?.close(); });
+  for (const name of containers.reverse()) await clean('container', () => docker('rm', '-f', '-v', container(name)));
+  for (const path of createdPaths.reverse()) await clean('operator-fixture', () => {
+    assert.equal(readFileSync(join(path, '.recovery-owner'), 'utf8'), prefix);
+    for (const [file, digest] of fixtureFiles) {
+      if (file.startsWith(`${path}/`)) {
+        assert.equal(hash(readFileSync(file)), digest);
+        rmSync(file);
+      }
+    }
+    // These mutable outputs are generated only by our unchanged backup invocation.
+    if (path === '/var/backups/opendiscord') {
+      for (const name of ['backup.lock', 'last-success']) {
+        const file = join(path, name);
+        if (existsSync(file)) rmSync(file);
+      }
+    }
+    // Only unlink our now-empty, preflight-absent directory; foreign contents fail closed.
+    run('sudo', ['rmdir', '--', path]);
+  });
+  await clean('temporary-files', () => rmSync(work, { recursive: true, force: true }));
 }
+if (failed || cleanupFailed) throw new Error('Media recovery acceptance or owned cleanup failed; see safe phase/category diagnostics');
 assert(report);
 report.cleanupCompleted = true;
 writeFileSync('media-recovery-summary.json', JSON.stringify(report, null, 2) + '\n');
