@@ -30,7 +30,7 @@ jobs:
       # Pin the image AND its bundled databases; no FreshClam network dependency per PR.
       SCANNER_IMAGE: clamav/clamav@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
