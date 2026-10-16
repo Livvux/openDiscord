@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
+import { classifyVoiceProductConsole, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { vi.useFakeTimers(); });
@@ -95,5 +95,19 @@ describe("fixed public Voice phase and reason diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain(privateText);
     expect(readVoiceProductPresentation([element("status", phases[0][0]), element("status", phases[1][0]), element("alert", "Voice: context-expired. Review the call status before retrying."), element("alert", privateText)])).toEqual({ phase: "unknown", reason: "other" });
     expect(readVoiceProductPresentation([element("alert", ""), element("status", "Agreeing the full audience… suffix")])).toEqual({ phase: "unknown", reason: "none" });
+  });
+});
+
+
+describe("bounded Voice console diagnostics", () => {
+  it("keeps only status and a fixed endpoint category, including during permission revocation", () => {
+    const result = classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 403 (Forbidden)", "https://example.test/api/voice/control?token=private", "https://example.test/app/private");
+    expect(result).toEqual({ kind: "http-resource", status: 403, endpoint: "voice-control" });
+    expect(JSON.stringify(result)).not.toMatch(/private|token|example/);
+  });
+  it("does not turn unknown messages or foreign/missing locations into allowed errors", () => {
+    expect(classifyVoiceProductConsole("private native error", "", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "other" });
+    expect(classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 409 (Conflict)", "https://foreign.test/api/voice/control", "https://example.test/app")).toEqual({ kind: "http-resource", status: 409, endpoint: "other" });
+    expect(classifyVoiceProductConsole("private error", "https://example.test/_next/static/chunks/private.js", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "app-script" });
   });
 });

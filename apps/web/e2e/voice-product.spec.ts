@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
-import { observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
+import { classifyVoiceProductConsole, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
 import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
@@ -88,7 +88,9 @@ test.describe("genuine Next product encrypted Voice", () => {
     assertDisposableVoiceCi({ ci: process.env.CI, githubActions: process.env.GITHUB_ACTIONS, apiKey: process.env.LIVEKIT_API_KEY, apiSecret: process.env.LIVEKIT_API_SECRET, url: process.env.LIVEKIT_URL, authUrl: process.env.BETTER_AUTH_URL });
     const verifier = new TokenVerifier("devkey", "secret");
     const pages: Page[] = [], names = ["UI Voice Publisher", "UI Voice Listener One", "UI Voice Listener Two"];
-    const runtimeErrors: string[] = [], consoleErrors: string[] = [], workerResponses: { page: number; status: number; javascript: boolean }[] = [];
+    const runtimeErrors: string[] = [];
+    const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean })[] = [];
+    const workerResponses: { page: number; status: number; javascript: boolean }[] = [];
     const grants: { page: number; sources: string[]; publish: boolean; subscribe: boolean; expiry: number }[] = [];
     const observation: Promise<void>[] = [];
     const memberIds = new Map<Page, string>();
@@ -113,7 +115,7 @@ test.describe("genuine Next product encrypted Voice", () => {
         if (message.type() !== "error") return;
         // A genuine generation transition can return409; detailed lower-layer conflict gates remain authoritative.
         if (message.text() === "Failed to load resource: the server responded with a status of 409 (Conflict)" && new URL(message.location().url || page.url()).pathname === "/api/voice/control") return;
-        consoleErrors.push("console-error");
+        consoleErrors.push({ page: index, revoking: stage === "connect-revocation", ...classifyVoiceProductConsole(message.text(), message.location().url, page.url()) });
       });
       const onResponse = (response: Response) => {
         if (!observing) return;
@@ -284,7 +286,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       const summary = await Promise.all(pages.map(evidence));
-      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
+      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, consoleDiagnostics: consoleErrors.slice(0, 20) }));
       expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
@@ -309,7 +311,7 @@ test.describe("genuine Next product encrypted Voice", () => {
           const stats = await evidence(page);
           return { ...stats, workerUrl: undefined, ...await presentation(page), audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, consoleDiagnostics: consoleErrors.slice(0, 20) }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;

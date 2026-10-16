@@ -1,6 +1,19 @@
 import { writeFile } from "node:fs/promises";
 import type { TestInfo } from "@playwright/test";
 
+export function classifyVoiceProductConsole(text: string, location: string, pageUrl: string) {
+  const status = /^Failed to load resource: the server responded with a status of ([45]\d{2}) \([^\r\n]*\)$/.exec(text);
+  let endpoint: "voice-control" | "app-script" | "other" = "other";
+  try {
+    const url = new URL(location), page = new URL(pageUrl);
+    if (url.origin === page.origin) {
+      if (url.pathname === "/api/voice/control") endpoint = "voice-control";
+      else if (url.pathname.startsWith("/_next/static/")) endpoint = "app-script";
+    }
+  } catch { /* Missing console locations remain unclassified. */ }
+  return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint };
+}
+
 export type VoiceProductPhase = "verifying" | "waiting" | "consent-pending" | "negotiating" | "retry-required" | "preparing" | "ready" | "stopped" | "unknown";
 export type VoiceProductReason = "none" | "control-failed" | "lease-expired" | "binding-changed" | "session-changed" | "provider-unmounted" | "context-expired" | "not-ready" | "budget-exhausted" | "generation-conflict" | "retirement-conflict" | "media-initialization-failed" | "other";
 export type VoiceProductCheckpoint = "initial-consent" | "delayed-consent" | "waiting-expiry" | "responder-retry" | "leader-retry" | "media-ready";
