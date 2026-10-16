@@ -39,6 +39,7 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   expect((await posting).status()).toBe(200);
   const posted = member.getByRole("log").getByRole("listitem").filter({ hasText: "Hello from the explicitly public workshop" }).first();
   await expect(posted).toBeVisible();
+  await expect(posted).toHaveAttribute("data-message-id", /^[0-9a-f-]{36}$/);
   const messageId = await posted.getAttribute("data-message-id");
   expect(messageId).toMatch(/^[0-9a-f-]{36}$/);
   const row = member.locator(`[data-message-id="${messageId}"]`);
