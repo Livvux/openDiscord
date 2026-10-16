@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
-import { observeVoiceProductResult, withVoiceProductCleanup, type VoiceProductObservationStage } from "./fixtures/voice-product-results";
+import { observeVoiceProductResult, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductObservationStage } from "./fixtures/voice-product-results";
+import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
@@ -18,12 +19,20 @@ async function explicitJoin(page: Page) {
   await page.getByRole("button", { name: "Create temporary device and join" }).click();
   await expect(audience(page)).toBeVisible({ timeout: 20_000 });
 }
-async function verifyPair(a: Page, aName: string, b: Page, bName: string) {
+type RequestSelection = Awaited<ReturnType<typeof readVoiceRequestCandidates>>;
+async function verifyPair(a: Page, aName: string, b: Page, bName: string, record: (selection: RequestSelection) => void) {
   const aPeer = participant(a, bName), bPeer = participant(b, aName);
-  const aRequest = aPeer.getByRole("button", { name: "Request Voice verification" });
-  const bRequest = bPeer.getByRole("button", { name: "Request Voice verification" });
-  await expect.poll(async () => await aRequest.isEnabled().catch(() => false) || await bRequest.isEnabled().catch(() => false)).toBe(true);
-  const [first, second] = await aRequest.isVisible() ? [aPeer, bPeer] : [bPeer, aPeer];
+  const aRequest = aPeer.getByRole("button", { name: "Request Voice verification", exact: true });
+  const bRequest = bPeer.getByRole("button", { name: "Request Voice verification", exact: true });
+  const observed: { current?: RequestSelection } = {};
+  await expect.poll(async () => {
+    const selection = await readVoiceRequestCandidates(() => aRequest.evaluateAll(voiceRequestCandidate), () => bRequest.evaluateAll(voiceRequestCandidate));
+    observed.current = selection; record(selection);
+    return selection.side !== null;
+  }).toBe(true);
+  const selected = observed.current;
+  if (!selected || selected.side === null) throw new Error("No unique eligible Voice verification action.");
+  const [first, second] = selected.side === 0 ? [aPeer, bPeer] : [bPeer, aPeer];
   await first.getByRole("button", { name: "Request Voice verification" }).click();
   await second.getByRole("button", { name: "Accept Voice verification" }).click();
   await first.getByRole("button", { name: "Start SAS comparison" }).click();
@@ -74,6 +83,7 @@ test.describe("genuine Next product encrypted Voice", () => {
     let observationFailed = false, observing = true, commitsClosed = false, primaryFailure = false;
     const stopResponseObservers: (() => void)[] = [];
     const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed" }[] = [];
+    const pairCandidates: RequestSelection[] = [];
     let stage = "signup";
     const attach = async (page: Page, index: number) => {
       await page.addInitScript(installVoiceProductObserver);
@@ -151,9 +161,9 @@ test.describe("genuine Next product encrypted Voice", () => {
       for (const page of pages) await explicitJoin(page);
       for (const page of pages) await expect(audience(page).getByRole("listitem", { name: /^Voice participant / })).toHaveCount(3);
       stage = "native-sas-and-admission";
-      await verifyPair(pages[0], names[0], pages[1], names[1]);
-      await verifyPair(pages[0], names[0], pages[2], names[2]);
-      await verifyPair(pages[1], names[1], pages[2], names[2]);
+      await verifyPair(pages[0], names[0], pages[1], names[1], selection => { pairCandidates[0] = selection; });
+      await verifyPair(pages[0], names[0], pages[2], names[2], selection => { pairCandidates[1] = selection; });
+      await verifyPair(pages[1], names[1], pages[2], names[2], selection => { pairCandidates[2] = selection; });
       for (const page of pages) expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0, workers: 0 });
       stage = "full-audience-consent";
       // Canonical ordering is read from real authorized join responses, never supplied to product control.
@@ -230,9 +240,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       const summary = await Promise.all(pages.map(evidence));
-      const attached = await observeVoiceProductResult(async () => {
-        await testInfo.attach("voice-product-evidence", { body: JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrors, consoleErrors }), contentType: "application/json" });
-      }, { timeoutMs: 2000, stage: "diagnostic" });
+      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
       expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
@@ -254,17 +262,16 @@ test.describe("genuine Next product encrypted Voice", () => {
       await withVoiceProductCleanup(async () => {
         await Promise.all(observation); commitsClosed = true;
         const diagnostics = await Promise.all(pages.map(page => observeVoiceProductResult(async () => {
-          const stats = await evidence(page); return { ...stats, workerUrl: undefined };
+          const stats = await evidence(page);
+          return { ...stats, workerUrl: undefined, audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await observeVoiceProductResult(async () => {
-          await testInfo.attach("voice-product-evidence-final", { body: JSON.stringify({ stage, observationFailed, observationFailures, diagnostics, grantCount: grants.length, runtimeErrors, consoleErrors }), contentType: "application/json" });
-        }, { timeoutMs: 2000, stage: "diagnostic" });
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;
         const closed = await Promise.all(pages.map(page => observeVoiceProductResult(() => page.context().close(), { timeoutMs: 2000, stage: "cleanup" })));
         if (closed.some(result => !result.ok)) cleanupFailed = true;
-      });
+      }).catch(() => { cleanupFailed = true; });
       if (!primaryFailure && (observationFailed || cleanupFailed)) throw new Error("Voice product observation or cleanup failed; see bounded diagnostic stages.");
     }
   });

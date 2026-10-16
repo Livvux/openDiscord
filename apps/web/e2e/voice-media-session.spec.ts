@@ -155,8 +155,17 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       await owner.getByRole("heading", { level: 2, name: "actual-media" }).click();
       await expect(async () => handles[0].evaluate(h => h.microphone(true))).toPass({ timeout: 8_000 });
       await handles[0].evaluate(h => h.camera(true));
-      for (const handle of handles.slice(1)) {
-        await expect.poll(() => handle.evaluate(async h => { const stats = await h.stats(); return stats.audioEnergy > 0 && stats.videoFrames > 10 && stats.width > 0 && stats.codecs.includes("audio/opus") && stats.codecs.includes("video/VP8"); }), { timeout: 15_000 }).toBe(true);
+      for (const [index, handle] of handles.slice(1).entries()) {
+        let resumed = false;
+        await expect.poll(async () => {
+          const stats = await handle.evaluate(h => h.stats());
+          if (stats.audioBlocked && !resumed) {
+            resumed = true;
+            await pages[index + 1].getByRole("heading", { level: 2, name: "actual-media" }).click();
+            await handle.evaluate(h => h.startAudio());
+          }
+          return stats.audioEnergy > 0 && stats.videoFrames > 10 && stats.width > 0 && stats.codecs.includes("audio/opus") && stats.codecs.includes("video/VP8");
+        }, { timeout: 15_000 }).toBe(true);
         expect(await handle.evaluate(h => h.stats())).toMatchObject({ captureCalls: 0, sourceCalls: 0, localSenders: 0, liveSources: 0, ownAck: true, keysBeforeOwnAck: 3 });
       }
       expect([...assets].some(path => path.endsWith(".wasm"))).toBe(true); expect([...assets].some(path => path.includes("e2ee") && path.endsWith(".mjs"))).toBe(true);
@@ -172,7 +181,18 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       await owner.getByRole("heading", { level: 2, name: "actual-media" }).click();
       await expect(async () => handles[0].evaluate(h => h.microphone(true))).toPass({ timeout: 8_000 });
       await handles[0].evaluate(h => h.camera(true));
-      for (const handle of handles.slice(1)) await expect.poll(() => handle.evaluate(async h => { const stats = await h.stats(); return stats.audioEnergy > 0 && stats.videoFrames > 10 && stats.codecs.includes("audio/opus") && stats.codecs.includes("video/VP8"); }), { timeout: 15_000 }).toBe(true);
+      for (const [index, handle] of handles.slice(1).entries()) {
+        let resumed = false;
+        await expect.poll(async () => {
+          const stats = await handle.evaluate(h => h.stats());
+          if (stats.audioBlocked && !resumed) {
+            resumed = true;
+            await pages[index + 1].getByRole("heading", { level: 2, name: "actual-media" }).click();
+            await handle.evaluate(h => h.startAudio());
+          }
+          return stats.audioEnergy > 0 && stats.videoFrames > 10 && stats.codecs.includes("audio/opus") && stats.codecs.includes("video/VP8");
+        }, { timeout: 15_000 }).toBe(true);
+      }
       const beforeExpiry = await Promise.all(handles.slice(1).map(handle => handle.evaluate(h => h.stats())));
       // Actual browser/SFU time, no fake clock/heartbeat. JWT join TTL is <=30s.
       await owner.evaluate(() => new Promise(resolve => setTimeout(resolve, 31_000)));

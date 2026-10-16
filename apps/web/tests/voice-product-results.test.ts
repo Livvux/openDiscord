@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeVoiceProductResult, withVoiceProductCleanup } from "../e2e/fixtures/voice-product-results";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { observeVoiceProductResult, withVoiceProductCleanup, writeVoiceProductEvidence } from "../e2e/fixtures/voice-product-results";
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { vi.useFakeTimers(); });
@@ -36,5 +39,17 @@ describe("bounded genuine Voice product acceptance observation", () => {
     const close = vi.fn(async () => {});
     await expect(withVoiceProductCleanup(async () => { throw new Error("diagnostic failed"); }, close)).rejects.toThrow("diagnostic failed");
     expect(close).toHaveBeenCalledOnce();
+  });
+  it.each([false, true])("retains the actual allowlisted diagnostic file when attachment fails: %s", async failAttachment => {
+    const directory = await mkdtemp(join(tmpdir(), "voice-product-evidence-"));
+    try {
+      const path = join(directory, "voice-product-evidence-final.json"), body = JSON.stringify({ stage: "native-sas-and-admission", grantCount: 0 });
+      const close = vi.fn(async () => {});
+      const attach = vi.fn(async () => { if (failAttachment) throw new Error("Attachment unavailable."); });
+      const result = await withVoiceProductCleanup(() => writeVoiceProductEvidence({ outputPath: (...segments) => join(directory, ...segments), attach }, "voice-product-evidence-final", body), close);
+      expect(await readFile(path, "utf8")).toBe(body);
+      expect(attach).toHaveBeenCalledWith("voice-product-evidence-final", { path, contentType: "application/json" });
+      expect(result.ok).toBe(!failAttachment); expect(close).toHaveBeenCalledOnce();
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });

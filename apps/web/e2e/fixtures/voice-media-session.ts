@@ -81,6 +81,9 @@ export async function open(channelId: string) {
   localStorage.setItem(`opendiscord.dm.device:${session.user.id}`, JSON.stringify({ id: anchor.id, secret: anchor.secret, storeKey: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))) }));
   const { CallSession } = await import("../../src/lib/voice/call-session");
   const call: CallSession = await CallSession.create({ accountId: session.user.id, sessionId: session.session.id, channelId, consent: true, assertSessionCurrent() { if (!valid) throw new Error("Disposable browser session retired."); } });
+  // Presentation belongs to this harness call, separate from the page's idle Voice provider.
+  const audio = document.createElement("div"); audio.hidden = true; document.body.append(audio);
+  const detachAudio = call.mountAudio(audio);
   return {
     grants: grants.snapshot,
     settleGrants: grants.settle,
@@ -91,6 +94,7 @@ export async function open(channelId: string) {
     confirm: () => call.confirmFullRoster(),
     microphone: async (enabled: boolean) => { sourceCalls++; await call.setMicrophoneEnabled(enabled); },
     camera: async (enabled: boolean) => { sourceCalls++; await call.setCameraEnabled(enabled); },
+    startAudio: () => call.startAudio(),
     async stats() {
       let audioEnergy = 0, videoFrames = 0, width = 0; const codecs = new Set<string>();
       for (const connection of connections) {
@@ -105,10 +109,11 @@ export async function open(channelId: string) {
         });
       }
       const view = call.getSnapshot(), current = workers.at(-1);
-      return { state: view.state, error: view.error, captureCalls, sourceCalls, audioEnergy, videoFrames, width, codecs: [...codecs], workerCount: workers.length, submitted: current?.submitted.size ?? 0, ownAck: current?.ownAck.has(`v1:${view.selfMemberId}`) ?? false, keysBeforeOwnAck: current?.ackSizes.get(`v1:${view.selfMemberId}`) ?? 0, allTerminated: workers.every(worker => worker.terminated), liveSources: sources.filter(track => track.readyState === "live").length, localSenders: connections.flatMap(connection => connection.getSenders()).filter(sender => !!sender.track && sender.track.readyState === "live").length };
+      return { state: view.state, error: view.error, audioBlocked: view.media.audioBlocked, audioElements: audio.querySelectorAll("audio").length, captureCalls, sourceCalls, audioEnergy, videoFrames, width, codecs: [...codecs], workerCount: workers.length, submitted: current?.submitted.size ?? 0, ownAck: current?.ownAck.has(`v1:${view.selfMemberId}`) ?? false, keysBeforeOwnAck: current?.ackSizes.get(`v1:${view.selfMemberId}`) ?? 0, allTerminated: workers.every(worker => worker.terminated), liveSources: sources.filter(track => track.readyState === "live").length, localSenders: connections.flatMap(connection => connection.getSenders()).filter(sender => !!sender.track && sender.track.readyState === "live").length };
     },
     rekey: () => call.confirmFullRoster(),
     async close() {
+      detachAudio(); audio.remove();
       await grants.settle();
       valid = false; await call.close("ci-harness-complete");
       sources.forEach(track => track.stop()); animations.forEach(clearInterval); await Promise.all(contexts.map(context => context.close()));
