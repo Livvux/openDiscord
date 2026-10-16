@@ -1,10 +1,10 @@
-import { TokenVerifier } from "livekit-server-sdk";
+import { Room, RoomServiceClient, TokenVerifier } from "livekit-server-sdk";
 import type { VoiceCryptoRequest } from "@/lib/voice/contracts";
 import { createVoiceHttpClient } from "@/lib/voice/http-client";
 import { PublicServicePeer } from "./fixtures/voice-service-peer";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, community, session, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
@@ -16,6 +16,13 @@ import { VOICE_HTTP_REQUEST_BYTES } from "@/server/voice-http";
 import { REGISTRATION_HEADERS } from "./helpers";
 
 const ids: string[] = [], origin = new URL(process.env.BETTER_AUTH_URL!).origin;
+// Unit-stage CI has no SFU daemon. Only the SDK ports are fake; auth/SQL/native HTTP/JWT stay real.
+beforeEach(() => {
+  vi.spyOn(RoomServiceClient.prototype, "createRoom").mockImplementation(async options => new Room({ name: options.name }));
+  vi.spyOn(RoomServiceClient.prototype, "listParticipants").mockResolvedValue([]);
+  vi.spyOn(RoomServiceClient.prototype, "deleteRoom").mockResolvedValue();
+});
+afterEach(() => vi.restoreAllMocks());
 afterAll(async () => { if (ids.length) { await db.delete(community).where(inArray(community.ownerId, ids)); await db.delete(user).where(inArray(user.id, ids)); } });
 function request(body: unknown, headers: Record<string, string> = {}) { return new Request(`${origin}/api/voice/control`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: JSON.stringify(body) }); }
 async function account() {
@@ -66,6 +73,7 @@ describe("actual cookie-authenticated Voice route", () => {
     } });
     try { await peer.query(); await peer.sync(); } finally { peer.close(); }
     const grant = await client.token(binding, a.input.enrollmentSecret, new AbortController().signal);
+    expect(RoomServiceClient.prototype.createRoom).toHaveBeenCalledWith({ name: `voice:${current.channelId}:${current.callId}:${current.generation}` });
     const claims = await new TokenVerifier(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!).verify(grant.token, 0);
     expect(claims.sub).toBe(current.participantIdentity);
     expect(claims.video).toMatchObject({ room: `voice:${current.channelId}:${current.callId}:${current.generation}`, roomJoin: true, canPublishData: false, canPublishSources: ["microphone", "camera", "screen_share", "screen_share_audio"] });

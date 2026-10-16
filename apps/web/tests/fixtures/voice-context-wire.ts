@@ -7,13 +7,13 @@ import { acquireVoiceOwnerGuard } from "../../src/lib/voice/owner-guard";
 import { OwnerUnitPeer, OwnerUnitWire } from "./voice-owner-peer";
 
 /** Payload feasibility only: eight exact parties, two actual native endpoints, no media. */
-export async function contextWireFixture(onRequest: VoiceOwnerTransport, maximumIds: boolean, senderLeader: boolean) {
+export async function contextWireFixture(onRequest: VoiceOwnerTransport, idKind: "uuid" | "max-ascii" | "max-utf8", senderLeader: boolean, count = 8) {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
   const callId = randomUUID();
-  const members = Array.from({ length: 8 }, (_, index) => {
+  const members = Array.from({ length: count }, (_, index) => {
     const memberId = randomUUID();
-    return { memberId, userId: maximumIds ? `${index}`.padEnd(128, "u") : randomUUID(), voiceDeviceId: randomUUID(), joinNonce: randomUUID(), voiceUserId: `@voice_${callId}_${memberId}:opendiscord.local`, participantIdentity: `v1:${memberId}`, anchorDeviceId: randomUUID(), displayName: "Wire feasibility", state: "waiting" as const };
+    return { memberId, userId: idKind === "uuid" ? randomUUID() : `${index}`.padEnd(128, idKind === "max-ascii" ? "u" : "界"), voiceDeviceId: randomUUID(), joinNonce: randomUUID(), voiceUserId: `@voice_${callId}_${memberId}:opendiscord.local`, participantIdentity: `v1:${memberId}`, anchorDeviceId: randomUUID(), displayName: "Wire feasibility", state: "waiting" as const };
   }).sort((a, b) => a.memberId.localeCompare(b.memberId));
   const own = members[senderLeader ? 1 : 0], remote = members[senderLeader ? 0 : 1];
   const snapshot: VoiceSnapshot = { callId, channelId: randomUUID(), generation: 1, ...own, members, removals: [], serverTime: new Date().toISOString(), leaseExpiresAt: new Date(Date.now() + 30_000).toISOString() };
@@ -40,6 +40,6 @@ export async function contextWireFixture(onRequest: VoiceOwnerTransport, maximum
     await owner.receive(); await peer.receive(); await owner.receive(); await peer.receive();
     await owner.query(members.map(member => member.memberId)); await peer.query();
     expect((await owner.verificationStates())[0].done).toBe(true);
-    return { snapshot, own, remote, peer, close: async () => { await owner!.close(); peer.close(); } };
+    return { snapshot, own, remote, peer, owner, close: async () => { await owner!.close(); peer.close(); } };
   } catch (error) { await owner?.close(); peer.close(); throw error; }
 }
