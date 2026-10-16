@@ -31,3 +31,46 @@ JWT expiry bounds connection use immediately before and after connect; it does n
 The controlled Chromium gate bundles only test static modules/worker/WASM with the existing locked Vite API and serves a finite static URL list through Playwright. Existing authenticated HTML and all cookie HTTP/native/service traffic remain real, without a proof route, window epoch coordinator, test JWT or private SDK manager. Transparent native Worker/RTCPeerConnection observation forwards genuine messages/streams and stores aggregate evidence only. Controlled non-silent oscillator and moving canvas capture produce real Opus/VP8 over the SFU. This authored gate is not acceptance until exact-head CI executes it successfully; three-account product UI and physical-device/mobile/screen-audio acceptance remain later.
 
 Tests distinguish adapter races with a mocked public port from actual public native Owners, authenticated cookies, HTTP route and PostgreSQL service. The three-Owner asynchronous consent test compares real public SAS, continues genuine mailbox ACK/SAS after early local-not-ready, explicitly retries full selection and reaches independent all-peer barriers. Test-only observation of genuine public factory return values enables an actual encrypted material consumer-delivery assertion. These Node tests mock only media effects to retain their control scope; they make no real ACK/media claim. This is control/native/service evidence, not authenticated product-browser, media, device, deployment or production acceptance.
+
+## Product presentation and acceptance
+
+The app shell now resolves authenticated account/session IDs under its own Suspense
+boundary and keys one VoiceProvider by that exact identity. The provider observes the
+official auth client session state, fences before sign-out or encryption-identity reset,
+and closes on unmount. Navigation only detaches video elements; the provider audio root
+and authenticated CallSession survive text-channel navigation.
+
+Joining requires separate consent to a temporary Voice device and existing encrypted
+messaging setup. Voice never enrolls a messaging device. Each exact full-roster peer must
+complete genuine native SDK SAS comparison on both browsers, then be separately admitted.
+Full-audience consent is another explicit action. The UI displays native `Sas.emoji()`
+symbols and descriptions from pinned Matrix crypto SDK18.9.0; no local emoji table or
+trust conversion is involved. Generation changes clear current media and require full
+roster consent again. Microphone, camera and screen sharing remain off until explicit
+source clicks. Screen capture requests video only.
+
+CallView exposes immutable, key-free media state and opaque playback tile IDs. It does
+not expose Room, Track, tokens or key material. `agreed` alone is never displayed as media
+ready. MediaSession validates current subscriptions and owns attach/detach operations;
+fences synchronously clear all presentation and stop captures. Exact own token source
+grants control local actions, while a listen-only peer can still decrypt admitted media.
+
+`Voice product acceptance` is a separate disposable hosted job. It builds the actual
+Next production server and starts LiveKit1.13.10 with `room.auto_create: false`. Its
+three separate authenticated accounts use real product signup, community membership,
+messaging setup, Voice consent, three native SAS pair comparisons, six admissions and
+three full-audience decisions. Native Worker/RTCPeerConnection observers forward original
+operations unchanged and retain only counts/order/stats. The test checks worker fetch
+content type/CSP, own positive SDK ACK after all exact key submissions, listen-only empty
+source grants, non-silent decoded Opus, changing VP8 pixels in actual product video
+mounts, navigation remounts, responsive layout, capture toggles, renewed calls past the
+original join JWT expiry, and Connect revocation. SAS values, keys, tokens and identities
+are excluded from the diagnostic summary; comparison traces are disabled.
+
+These are test requirements, not a claim that the current revision has passed them.
+The exact hosted check IDs and outcomes belong in the implementation report. Existing
+control/lifecycle/media suites retain lower-layer negative coverage; they do not substitute
+for the actual Next product gate. Physical audio devices, WebKit encrypted media,
+eight-browser capacity, arbitrary networks and external cryptographic audit remain outside
+this acceptance. Source CI never enables production: operator freeze, migration, exact SFU
+configuration, cleanup and independent review remain release prerequisites.

@@ -29,7 +29,7 @@ vi.mock("livekit-client", () => {
       if (harness.keys) this.options.encryption.keyProvider.keys.forEach((key, participantIdentity) => this.worker.postMessage({ kind: "setKey", data: { key, participantIdentity, keyIndex: 0 } }));
     }
   }
-  return { BaseKeyProvider: Keys, Room, Encryption_Type: { NONE: 0, GCM: 1, CUSTOM: 2 }, RoomEvent: { Reconnecting: "reconnecting", SignalReconnecting: "signalReconnecting", Disconnected: "disconnected", EncryptionError: "encryptionError", TrackPublished: "trackPublished", TrackSubscribed: "trackSubscribed", TrackUnsubscribed: "trackUnsubscribed" }, Track: { Kind: { Audio: "audio", Video: "video" }, Source: { Microphone: "microphone", Camera: "camera", ScreenShare: "screen_share" } } };
+  return { BaseKeyProvider: Keys, Room, Encryption_Type: { NONE: 0, GCM: 1, CUSTOM: 2 }, RoomEvent: { Reconnecting: "reconnecting", SignalReconnecting: "signalReconnecting", Disconnected: "disconnected", EncryptionError: "encryptionError", TrackPublished: "trackPublished", TrackSubscribed: "trackSubscribed", TrackUnsubscribed: "trackUnsubscribed", AudioPlaybackStatusChanged: "audioPlaybackChanged", LocalTrackPublished: "localTrackPublished", LocalTrackUnpublished: "localTrackUnpublished", TrackMuted: "trackMuted", TrackUnmuted: "trackUnmuted", ParticipantPermissionsChanged: "participantPermissionsChanged" }, Track: { Kind: { Audio: "audio", Video: "video" }, Source: { Microphone: "microphone", Camera: "camera", ScreenShare: "screen_share" } } };
 });
 class WorkerDouble extends EventTarget {
   posts: unknown[] = [];
@@ -95,6 +95,39 @@ describe("MediaSession deterministic public Room/Worker effect doubles (not real
     media!.fence();
     expect(test.presentation.mock.lastCall?.[0]).toEqual({ mediaState: "ended", sources: [], microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: [] });
     expect(() => media!.mountVideo("obsolete", {} as HTMLVideoElement)).toThrow("fenced");
+  });
+  it("mounts each remote once, detaches presentation without stopping the call and rejects obsolete tile IDs", async () => {
+    class Element {
+      children: Element[] = []; muted = false; playsInline = false;
+      append(element: Element) { this.children.push(element); }
+      contains(element: Element) { return this.children.includes(element); }
+      remove() {}
+    }
+    class Audio extends Element {}
+    class Video extends Element {}
+    vi.stubGlobal("HTMLAudioElement", Audio); vi.stubGlobal("HTMLVideoElement", Video);
+    vi.stubGlobal("document", { createElement: () => new Audio() });
+    const test = setup([]); await open(test); await prepare(test); ownAck(test); await settle();
+    const track = { attach: vi.fn((element: Element) => element), detach: vi.fn(() => []), stop: vi.fn() };
+    const publication = { source: "camera", kind: "video", mimeType: "video/vp8", isEncrypted: true, trackInfo: { encryption: 1 }, setSubscribed: vi.fn() };
+    const peer = { identity: test.peers[0].participantIdentity };
+    harness.rooms[0].events.get("trackPublished")!(publication, peer); ack(harness.rooms[0].worker, peer.identity); await settle();
+    harness.rooms[0].events.get("trackSubscribed")!(track, publication, peer);
+    const tile = test.presentation.mock.lastCall![0].tiles[0];
+    expect(tile).toMatchObject({ memberId: test.peers[0].memberId, source: "camera", kind: "video", isLocal: false });
+    expect(Object.isFrozen(tile)).toBe(true);
+    const element = new Video() as unknown as HTMLVideoElement;
+    const detach = media!.mountVideo(tile.id, element);
+    expect(track.attach).toHaveBeenCalledExactlyOnceWith(element);
+    detach(); detach(); expect(track.detach).toHaveBeenCalledOnce();
+    expect(track.stop).not.toHaveBeenCalled(); expect(harness.rooms[0].disconnect).not.toHaveBeenCalled();
+    media!.mountVideo(tile.id, element);
+    harness.rooms[0].events.get("trackUnsubscribed")!(track);
+    expect(() => media!.mountVideo(tile.id, element)).toThrow("no longer current");
+    media!.fence();
+    const calls = test.presentation.mock.calls.length;
+    harness.rooms[0].events.get("audioPlaybackChanged")!();
+    expect(test.presentation).toHaveBeenCalledTimes(calls);
   });
   it("rejects positive ownACK before all exact setKey submissions without readiness or capture", async () => {
     harness.keys = false; const test = setup(); await open(test); await prepare(test); ownAck(test); await settle();
