@@ -1,5 +1,8 @@
 FROM node:25-alpine AS base
-RUN npm install --global corepack@0.34.5 && corepack enable
+# The image bundles Yarn launchers that conflict with Corepack's shims.
+RUN rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && npm install --global corepack@0.34.5 \
+    && corepack enable
 WORKDIR /repo
 
 FROM base AS build
