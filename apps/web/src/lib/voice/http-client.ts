@@ -45,10 +45,14 @@ export async function readVoiceResponse(response: Response, maxBytes = RESPONSE_
   } finally { signal?.removeEventListener("abort", cancel); reader.releaseLock(); }
 }
 const empty = z.object({}).strict(), object = z.record(z.string().max(256), z.unknown());
-const signaturesBounded = (value: { signatures?: Record<string, Record<string, string>> }) => !value.signatures || (Object.keys(value.signatures).length <= 2 && Object.values(value.signatures).every(keys => Object.keys(keys).length <= 2));
-const deviceKeys = voiceDeviceKeysSchema.refine(value => Object.keys(value.keys).length === 2 && signaturesBounded(value));
-const crossKey = voiceSignedObjectSchema.extend({ usage: z.array(z.enum(["master", "self_signing", "user_signing"])).length(1) }).refine(value => Object.keys(value.keys).length === 1 && signaturesBounded(value));
-const prekey = voicePrekeySchema.refine(signaturesBounded);
+// Server selfSignatures accepts four initial own entries before known signing IDs exist.
+// Query merges those with at most four stored known IDs; prekeys never receive that merge.
+const SIGNATURE_RESPONSE_LIMITS = { querySigners: 2, queryKeys: 8, claimSigners: 1, claimKeys: 4 } as const;
+const signaturesBounded = (value: { signatures?: Record<string, Record<string, string>> }, signers: number, keys: number) => !value.signatures || (Object.keys(value.signatures).length <= signers && Object.values(value.signatures).every(map => Object.keys(map).length <= keys));
+const querySignaturesBounded = (value: { signatures?: Record<string, Record<string, string>> }) => signaturesBounded(value, SIGNATURE_RESPONSE_LIMITS.querySigners, SIGNATURE_RESPONSE_LIMITS.queryKeys);
+const deviceKeys = voiceDeviceKeysSchema.refine(value => Object.keys(value.keys).length === 2 && querySignaturesBounded(value));
+const crossKey = voiceSignedObjectSchema.extend({ usage: z.array(z.enum(["master", "self_signing", "user_signing"])).length(1) }).refine(value => Object.keys(value.keys).length === 1 && querySignaturesBounded(value));
+const prekey = voicePrekeySchema.refine(value => signaturesBounded(value, SIGNATURE_RESPONSE_LIMITS.claimSigners, SIGNATURE_RESPONSE_LIMITS.claimKeys));
 const boundedRecord = <T extends z.ZodType>(schema: T, count: number) => z.record(z.string().min(1).max(256), schema).refine(value => Object.keys(value).length <= count);
 const users = <T extends z.ZodType>(schema: T) => boundedRecord(schema, 8);
 function cryptoResponse(request: VoiceCryptoRequest, raw: unknown): unknown {

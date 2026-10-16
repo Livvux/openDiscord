@@ -18,7 +18,7 @@ const users = testUsers();
 afterAll(() => users.cleanup());
 const signature = Buffer.alloc(64, 7).toString("base64");
 const publicKey = (byte: number) => Buffer.alloc(32, byte).toString("base64");
-const initialKeys = (count = 4) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`ed25519:initial-${index}`, signature]));
+const initialKeys = (count = 4) => Object.fromEntries(Array.from({ length: count }, (_, index): [string, string] => [`ed25519:initial-${index}`, signature]));
 type Party = Awaited<ReturnType<typeof fixture>>[number];
 async function fixture(count = 1) {
   const accounts = [];
@@ -46,15 +46,16 @@ function wire(party: Party, request: VoiceCryptoRequest) { return handleVoiceCry
 function device(party: Party, keys = initialKeys()) {
   return { user_id: party.snapshot.voiceUserId, device_id: party.snapshot.voiceDeviceId, algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"], keys: { [`curve25519:${party.snapshot.voiceDeviceId}`]: publicKey(1), [`ed25519:${party.snapshot.voiceDeviceId}`]: publicKey(2) }, signatures: { [party.snapshot.voiceUserId]: keys } };
 }
-function signing(party: Party, count = 4) {
-  return Object.fromEntries(["master", "self_signing", "user_signing"].map((usage, index) => [`${usage}_key`, { user_id: party.snapshot.voiceUserId, usage: [usage], keys: { [`ed25519:${publicKey(index + 3)}`]: publicKey(index + 3) }, signatures: { [party.snapshot.voiceUserId]: initialKeys(count) } }]));
+type SigningObject = { user_id: string; usage: string[]; keys: Record<string, string>; signatures: Record<string, Record<string, string>> };
+function signing(party: Party, count = 4): Record<string, SigningObject> {
+  return Object.fromEntries(["master", "self_signing", "user_signing"].map((usage, index): [string, SigningObject] => [`${usage}_key`, { user_id: party.snapshot.voiceUserId, usage: [usage], keys: { [`ed25519:${publicKey(index + 3)}`]: publicKey(index + 3) }, signatures: { [party.snapshot.voiceUserId]: initialKeys(count) } }]));
 }
 function prekey(party: Party, fallback = false, count = 4) { return { key: publicKey(fallback ? 9 : 8), signatures: { [party.snapshot.voiceUserId]: initialKeys(count) }, ...(fallback ? { fallback: true } : {}) }; }
 async function bootstrap(party: Party) { await wire(party, { kind: "upload", body: { device_keys: device(party) }, requestId: randomUUID() }); await wire(party, { kind: "signing", body: signing(party) }); }
 async function stored(party: Party) {
   return {
     identities: await db.select({ device: voiceIdentity.deviceKeys, signing: voiceIdentity.crossSigningKeys }).from(voiceIdentity).where(eq(voiceIdentity.memberId, party.snapshot.memberId)),
-    prekeys: await db.select({ id: voicePrekey.keyId, content: voicePrekey.content, used: voicePrekey.used, retired: voicePrekey.retired }).from(voicePrekey).where(eq(voicePrekey.memberId, party.snapshot.memberId)),
+    prekeys: await db.select({ id: voicePrekey.keyId, content: voicePrekey.content, used: voicePrekey.used, fallback: voicePrekey.fallback, retired: voicePrekey.retired }).from(voicePrekey).where(eq(voicePrekey.memberId, party.snapshot.memberId)),
     receipts: await db.select({ request: voiceControlReceipt.requestId, response: voiceControlReceipt.response }).from(voiceControlReceipt).where(eq(voiceControlReceipt.senderMemberId, party.snapshot.memberId)),
   };
 }
@@ -90,7 +91,7 @@ describe("finite public JSON voice signature contract before any native verifier
   });
   it("roundtrips real device/master query union8 and requester4, replaces stored signatures and never caches query", async () => {
     const [target, requester] = await fixture(2); await bootstrap(target); await bootstrap(requester);
-    const known = (party: Party) => Object.fromEntries([`ed25519:${party.snapshot.voiceDeviceId}`, ...[3, 4, 5].map(index => `ed25519:${publicKey(index)}`)].map(key => [key, signature]));
+    const known = (party: Party) => Object.fromEntries([`ed25519:${party.snapshot.voiceDeviceId}`, ...[3, 4, 5].map(index => `ed25519:${publicKey(index)}`)].map((key): [string, string] => [key, signature]));
     const targetMaster = signing(target).master_key;
     const upload = async (signer: Party, keys: Record<string, string>) => wire(signer, { kind: "signatures", body: { [target.snapshot.voiceUserId]: { [target.snapshot.voiceDeviceId]: { ...device(target), signatures: { [signer.snapshot.voiceUserId]: keys } }, [publicKey(3)]: { ...targetMaster, signatures: { [signer.snapshot.voiceUserId]: keys } } } }, requestId: randomUUID() });
     await upload(target, known(target)); await upload(requester, known(requester));
@@ -114,6 +115,6 @@ describe("finite public JSON voice signature contract before any native verifier
     expect((await stored(target)).prekeys.filter(key => key.used)).toHaveLength(1);
     const fallback = await wire(requester, { ...request, requestId: randomUUID(), nativeRequestId: randomUUID() });
     await expect(clientResponse(requester, request, fallback)).resolves.toBeDefined();
-    expect(JSON.stringify(fallback)).toContain('"fallback":true'); expect((await stored(target)).prekeys.filter(key => key.used)).toHaveLength(1);
+    expect(JSON.stringify(fallback)).toContain('"fallback":true'); expect((await stored(target)).prekeys.filter(key => key.used && !key.fallback)).toHaveLength(1);
   });
 });
