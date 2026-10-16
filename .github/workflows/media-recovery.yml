@@ -1,0 +1,36 @@
+name: Media recovery acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  media-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      OPENDISCORD_ISOLATED_MEDIA_RECOVERY: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Install isolated recovery tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age rclone
+          pnpm --filter web exec playwright install --with-deps chromium
+      - name: Build actual production web image
+        run: docker build --target web -t opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }} .
+      - name: Rehearse exact operational archive with private media
+        run: pnpm --filter web exec node scripts/verify-media-recovery.mjs
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: media-recovery-summary
+          path: apps/web/media-recovery-summary.json
+          if-no-files-found: error
+          retention-days: 7

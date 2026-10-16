@@ -1,0 +1,79 @@
+name: Real scanner acceptance
+
+on:
+  pull_request:
+  push: { branches: [main] }
+
+permissions:
+  contents: read
+
+jobs:
+  real-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opendiscord
+          POSTGRES_PASSWORD: opendiscord
+          POSTGRES_DB: scanner_acceptance
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/scanner_acceptance
+      BETTER_AUTH_SECRET: ci-scanner-acceptance-secret-not-for-production
+      BETTER_AUTH_URL: http://localhost:3200
+      OPENDISCORD_SCANNER_ACCEPTANCE: "1"
+      SCANNER_CONTAINER: opendiscord-scanner-${{ github.run_id }}-${{ github.run_attempt }}
+      # Official bundled-signature image, resolved from stable on 2026-10-16.
+      # Pin the image AND its bundled databases; no FreshClam network dependency per PR.
+      SCANNER_IMAGE: clamav/clamav@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      # Build before loading ClamAV signatures to avoid concurrent memory peaks.
+      - run: pnpm build
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - name: Prepare private disposable storage
+        run: |
+          fixture_dir=$(mktemp -d /tmp/opendiscord-scanner-XXXXXXXX)
+          chmod 700 "$fixture_dir"
+          echo "ATTACHMENT_DIR=$fixture_dir" >> "$GITHUB_ENV"
+      - name: Start the real engine with bundled signatures
+        run: |
+          mkdir -p scanner-evidence
+          docker pull "$SCANNER_IMAGE"
+          docker image inspect "$SCANNER_IMAGE" --format '{{json .RepoDigests}}' > scanner-evidence/image-digests.json
+          docker run -d --name "$SCANNER_CONTAINER" --memory 4g --cpus 2 \
+            -p 127.0.0.1:3310:3310 -e CLAMAV_NO_FRESHCLAMD=true "$SCANNER_IMAGE"
+          for attempt in $(seq 1 90); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' "$SCANNER_CONTAINER")
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$attempt" = 90 ]; then echo 'ClamAV readiness deadline exceeded'; exit 1; fi
+            sleep 2
+          done
+          docker exec "$SCANNER_CONTAINER" clamd --version > scanner-evidence/engine-version.txt
+          docker exec "$SCANNER_CONTAINER" sh -c 'for file in /var/lib/clamav/*.cvd /var/lib/clamav/*.cld; do if [ -f "$file" ]; then sha256sum "$file"; sigtool --info "$file"; fi; done' > scanner-evidence/signatures.txt
+      - name: Authenticated browser upload and import acceptance
+        run: pnpm --filter web exec playwright test --config playwright.scanner.config.ts
+      - name: Remove owned scanner and private fixture
+        if: always()
+        run: |
+          docker rm -f "$SCANNER_CONTAINER" >/dev/null 2>&1 || true
+          if [[ "${ATTACHMENT_DIR:-}" == /tmp/opendiscord-scanner-* ]]; then rm -rf -- "$ATTACHMENT_DIR"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-scanner-acceptance
+          path: |
+            scanner-evidence/
+            apps/web/test-results/**/engine.json
+            apps/web/test-results/**/acceptance.json
+            apps/web/test-results/**/real-scanner-clean-upload.png
+          retention-days: 7
+          if-no-files-found: error

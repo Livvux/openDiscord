@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
+import { withCommunityImport } from "./import-lock";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
@@ -16,12 +17,14 @@ test.describe("private community images", () => {
     const channelUrl = page.url();
     const communityId = /\/c\/([^/]+)/.exec(channelUrl)![1];
     await page.goto(`/app/c/${communityId}/settings`);
+    const imageLibrary = page.getByRole("region", { name: "Emoji and stickers", exact: true });
+    await expect(imageLibrary).toBeVisible();
     for (const kind of ["emoji", "sticker"]) {
-      await page.getByLabel("Image name", { exact: true }).fill(`test_${kind}`);
-      await page.getByLabel("Image kind", { exact: true }).selectOption(kind);
-      await page.getByLabel("Static image", { exact: true }).setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
+      await imageLibrary.getByLabel("Image name", { exact: true }).fill(`test_${kind}`);
+      await imageLibrary.getByLabel("Image kind", { exact: true }).selectOption(kind);
+      await imageLibrary.getByLabel("Static image", { exact: true }).setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
       const response = page.waitForResponse((response) => response.url().includes(`/communities/${communityId}/assets?`) && response.request().method() === "POST");
-      await page.getByRole("button", { name: "Upload community image" }).click();
+      await imageLibrary.getByRole("button", { name: "Upload community image" }).click();
       expect((await response).status()).toBe(201);
       await expect(page.getByRole("button", { name: `Delete test_${kind}`, exact: true })).toBeVisible();
     }
@@ -69,9 +72,11 @@ test.describe("private community images", () => {
     const archiveLink = page.getByRole("link", { name: "Download archive with files", exact: true });
     const archiveResponse = await page.request.get((await archiveLink.getAttribute("href"))!);
     expect(archiveResponse.status()).toBe(200);
-    const importedResponse = await page.request.post("/api/communities/import", { data: await archiveResponse.body(), headers: { "Content-Type": "application/gzip", Origin: new URL(page.url()).origin } });
-    expect(importedResponse.status()).toBe(201);
-    const imported = await importedResponse.json() as { communityId: string };
+    const imported = await withCommunityImport(async () => {
+      const importedResponse = await page.request.post("/api/communities/import", { data: await archiveResponse.body(), headers: { "Content-Type": "application/gzip", Origin: new URL(page.url()).origin } });
+      expect(importedResponse.status()).toBe(201);
+      return await importedResponse.json() as { communityId: string };
+    });
     await page.goto(`/app/c/${imported.communityId}`);
     await expect(page.getByRole("log").getByRole("img", { name: ":test_emoji:", exact: true })).toBeVisible();
     expect(await page.getByRole("log").getByRole("img", { name: ":test_emoji:", exact: true }).getAttribute("src")).not.toBe(imageUrl);

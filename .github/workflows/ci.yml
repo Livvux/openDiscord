@@ -62,6 +62,20 @@ jobs:
           sudo apt-get install -y age
           pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
       - run: pnpm build
+      - name: Characterize isolated authenticated HTTP and SSE
+        timeout-minutes: 4
+        env:
+          OPENDISCORD_ISOLATED_LOAD: "1"
+          BETTER_AUTH_URL: http://localhost:3300
+          OPENDISCORD_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: pnpm --filter web exec tsx scripts/characterize-http-sse.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: http-sse-characterization
+          path: apps/web/http-sse-characterization.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Start LiveKit (dev mode)
         id: livekit
         run: docker run -d --name opendiscord-ci-livekit --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
