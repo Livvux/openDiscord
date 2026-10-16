@@ -6,6 +6,7 @@ Artifacts intentionally contain only step outcomes and sanitized platform metada
 import base64
 import hashlib
 import http.client
+import io
 import json
 import os
 import pathlib
@@ -74,6 +75,7 @@ class Native:
         self.profile = index
         self.port = 4444 + index * 2
         self.session = None
+        self.connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=40)
         self.home = sandbox / str(index)
         for directory in ['Downloads', '.config', '.local/share', '.cache']:
             (self.home / directory).mkdir(parents=True, exist_ok=True)
@@ -88,11 +90,26 @@ class Native:
         metadata['last_native_request'] = {
             'profile': self.profile, 'method': method, 'endpoint': endpoint_class(path),
         }
-        request = urllib.request.Request(f'http://127.0.0.1:{self.port}' + path,
-            json.dumps(body).encode() if body is not None else None,
-            {'Content-Type': 'application/json'}, method=method)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)['value']
+        try:
+            encoded = json.dumps(body).encode() if body is not None else None
+            self.connection.timeout = timeout
+            if self.connection.sock is not None:
+                self.connection.sock.settimeout(timeout)
+            try:
+                self.connection.request(method, path, body=encoded, headers={'Content-Type': 'application/json'})
+            except OSError as error:
+                # Match urllib's existing request/connect-error classification for readiness.
+                raise urllib.error.URLError(error) from None
+            with self.connection.getresponse() as response:
+                payload = response.read()
+                if not 200 <= response.status < 300:
+                    raise urllib.error.HTTPError(f'http://127.0.0.1:{self.port}' + path,
+                        response.status, 'Native WebDriver request failed', response.headers, io.BytesIO(payload))
+                return json.loads(payload)['value']
+        except BaseException:
+            # No replay: discard this connection and propagate the first command failure.
+            self.connection.close()
+            raise
 
     def start(self):
         wait(lambda: self.request('GET', '/status'))
@@ -334,6 +351,8 @@ def transport_contract(client, budget=20):
                 outcome['commands'].append(command)
                 if connection is not None:
                     connection.timeout = timeout
+                    if connection.sock is not None:
+                        connection.sock.settimeout(timeout)
                     connection.request(method, path, body=encoded, headers={'Content-Type': 'application/json'})
                     response = connection.getresponse()
                 else:
@@ -350,14 +369,20 @@ def transport_contract(client, budget=20):
             try:
                 request('GET', '/status')
                 prefix = '/session/' + client.session
-                elements = request('POST', prefix + '/elements', {'using': 'css selector', 'value': 'input[type="email"]'})
-                if not isinstance(elements, list) or len(elements) != 1:
-                    raise ValueError('Public email control contract failed')
+                elements = request('POST', prefix + '/elements', {'using': 'css selector', 'value': 'html'})
+                outcome['lookup_shape'] = {
+                    'value_type': 'array' if isinstance(elements, list) else 'object' if isinstance(elements, dict) else 'other',
+                    'list_count': len(elements) if isinstance(elements, list) else None,
+                    'reference_valid': (isinstance(elements, list) and len(elements) == 1
+                        and isinstance(elements[0], dict) and isinstance(elements[0].get(ELEMENT), str)),
+                }
+                if not outcome['lookup_shape']['reference_valid']:
+                    raise ValueError('Public document control contract failed')
                 identifier = elements[0][ELEMENT]
                 displayed = request('GET', prefix + '/element/' + identifier + '/displayed')
                 enabled = request('GET', prefix + '/element/' + identifier + '/enabled')
                 if displayed is not True or enabled is not True:
-                    raise ValueError('Public email control contract failed')
+                    raise ValueError('Public document control contract failed')
                 executed = request('POST', prefix + '/execute/sync', {'script': 'return true', 'args': []})
                 if executed is not True:
                     raise ValueError('Public read-only script contract failed')
@@ -506,6 +531,11 @@ def cleanup_clients(clients, budget=10):
             os.killpg(client.process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+        except OSError as error:
+            errors.append(type(error).__name__)
+    for client in clients:
+        try:
+            client.connection.close()
         except OSError as error:
             errors.append(type(error).__name__)
     grace_end = min(deadline_at, time.monotonic() + 3)
