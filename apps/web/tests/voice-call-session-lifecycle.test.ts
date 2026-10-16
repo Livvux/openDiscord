@@ -4,8 +4,15 @@ import type { VoiceOwnerOptions, VoiceProductOwnerPort } from "@/lib/voice/crypt
 import { VoiceContextProposal, VoiceContextRejected } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty, type VoiceOwnerControl } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
+import type { InstalledVoiceMediaContext, VoiceMediaBridge } from "@/lib/voice/media-session";
 
 const native = vi.hoisted(() => ({ options: undefined as VoiceOwnerOptions | undefined, port: undefined as VoiceProductOwnerPort | undefined }));
+const mediaEffects = vi.hoisted(() => ({ consume: vi.fn(async (_control: VoiceOwnerControl) => {}), fence: vi.fn(), contexts: [] as InstalledVoiceMediaContext[], bridges: [] as VoiceMediaBridge[] }));
+// Control adapter ordering only. Real worker/media acceptance is in the browser suite.
+vi.mock("@/lib/voice/media-session", () => ({ MediaSession: class {
+  constructor(context: InstalledVoiceMediaContext, bridge: VoiceMediaBridge) { mediaEffects.contexts.push(context); mediaEffects.bridges.push(bridge); }
+  start() {} consume = mediaEffects.consume; fence = mediaEffects.fence;
+} }));
 vi.mock("@/lib/voice/crypto-owner", () => ({ createVoiceProductOwner: async (options: VoiceOwnerOptions) => { native.options = options; return native.port; }, VoiceGenerationInterrupted: class extends Error {} }));
 const callId = crypto.randomUUID(), memberId = crypto.randomUUID(), channelId = crypto.randomUUID();
 let deviceId = crypto.randomUUID(), nonce = crypto.randomUUID();
@@ -16,6 +23,8 @@ function snapshot(generation = 1, duration = 30_000): VoiceSnapshot {
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 let call: CallSession | undefined;
 beforeEach(() => {
+  mediaEffects.consume.mockClear(); mediaEffects.fence.mockClear();
+  mediaEffects.contexts.length = 0; mediaEffects.bridges.length = 0;
   native.options = undefined;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const held = new Set<string>();
@@ -25,11 +34,58 @@ beforeEach(() => {
 });
 afterEach(async () => { await call?.close(); call = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
 const options = { accountId: "account", sessionId: "session", channelId, consent: true as const, assertSessionCurrent() {} };
+async function installCurrent() {
+  const party = voiceControlParty(snapshot().members[0]), reference = crypto.randomUUID();
+  const proposal = new VoiceContextProposal({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId, generation: 1, epochId: crypto.randomUUID(), sequence: 1, reference, transaction: reference, sender: party, recipient: party, leader: party, audience: [party] });
+  vi.mocked(native.port!.createContextOffer).mockResolvedValue({ ref: Object.freeze({ kind: "context-offer" }), proposal });
+  vi.mocked(native.port!.contextAgreementComplete).mockResolvedValue(true);
+  await call!.confirmFullRoster(); return proposal;
+}
 const dispatch = (generation: number) => native.options!.transport({ binding: { callId, memberId, joinNonce: nonce, expectedGeneration: generation }, request: { kind: "sync" }, signal: native.options!.lifetime.signal });
 function fetcher(handle?: (action: string, generation: number) => Promise<Response> | Response): typeof fetch {
   return async (_path, init) => { const body = JSON.parse(String(init?.body)); if (body.action === "join") { nonce = body.input.joinNonce; deviceId = body.input.voiceDeviceId; return Response.json(snapshot()); } return handle?.(body.action, body.input.expectedGeneration) ?? Response.json(body.action === "heartbeat" ? snapshot() : body.action === "leave" ? { removals: [] } : { cursor: "0", events: [], oneTimeKeys: { signed_curve25519: 0 }, unusedFallbackKeys: [] }); };
 }
 describe("CallSession deterministic lifetime adapter (native port mocked, no native acceptance claim)", () => {
+  it("private media handoff omits Owner/ref/secret, freezes exact installed context and fences before render observers", async () => {
+    call = await CallSession.create({ ...options, fetch: fetcher() }); const proposal = await installCurrent();
+    const context = mediaEffects.contexts[0], bridge = mediaEffects.bridges[0];
+    expect(Object.keys(bridge).sort()).toEqual(["current", "fatal", "send", "token"]);
+    expect(context).not.toHaveProperty("owner"); expect(context).not.toHaveProperty("secret"); expect(context).not.toHaveProperty("ref");
+    expect(context).toMatchObject({ epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, deadline: 10000 });
+    expect(Object.isFrozen(context)).toBe(true); expect(Object.isFrozen(context.snapshot.members)).toBe(true);
+    call.subscribe(() => { expect(mediaEffects.fence).toHaveBeenCalled(); throw new Error("Broken render observer."); });
+    native.options!.onFence("generation-transition");
+    expect(() => bridge.current()).toThrow();
+  });
+  it("token409 follows discovery policy; same-generation is fatal and newer generation cannot retry the old bridge", async () => {
+    let newer = false;
+    call = await CallSession.create({ ...options, fetch: fetcher(action => action === "token" ? Response.json({ code: "conflict" }, { status: 409 }) : action === "heartbeat" ? Response.json(snapshot(newer ? 2 : 1)) : Response.json({ removals: [] })) });
+    await installCurrent();
+    await expect(mediaEffects.bridges[0].token()).rejects.toMatchObject({ code: "generation-conflict" });
+    expect(call.getSnapshot().state).toBe("ended"); await call.close();
+    newer = true;
+    call = await CallSession.create({ ...options, fetch: fetcher(action => action === "token" ? Response.json({ code: "conflict" }, { status: 409 }) : action === "heartbeat" ? Response.json(snapshot(2)) : Response.json({ removals: [] })) });
+    await installCurrent();
+    const bridge = mediaEffects.bridges.at(-1)!;
+    vi.mocked(native.port!.transition).mockImplementation(async () => { await expect(bridge.token()).rejects.toThrow(); });
+    await expect(bridge.token()).rejects.toMatchObject({ code: "conflict" });
+    expect(call.getSnapshot().generation).toBe(2); expect(() => bridge.current()).toThrow();
+  });
+  it("an already-issued token409 during native transition ends immediately without nested discovery", async () => {
+    const response = gate<Response>(); let heartbeats = 0;
+    call = await CallSession.create({ ...options, fetch: fetcher(action => {
+      if (action === "token") return response.promise;
+      if (action === "heartbeat") { heartbeats++; return Response.json(snapshot(2)); }
+      if (action === "crypto") return Response.json({ code: "conflict" }, { status: 409 });
+      return Response.json({ removals: [] });
+    }) });
+    await installCurrent(); const token = mediaEffects.bridges[0].token().catch(error => error);
+    vi.mocked(native.port!.transition).mockImplementation(async () => {
+      response.resolve(Response.json({ code: "conflict" }, { status: 409 }));
+      expect(await token).toBeInstanceOf(VoiceRetirementConflict);
+    });
+    await expect(dispatch(1)).rejects.toThrow(); expect(heartbeats).toBe(1); expect(call.getSnapshot().state).toBe("ended");
+  });
   it("does not gate successful target-generation retirement traffic on its own transition", async () => {
     let first = true;
     call = await CallSession.create({ ...options, fetch: fetcher((action) => {
@@ -137,7 +193,7 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     vi.mocked(native.port!.stageOfferedContext).mockRejectedValueOnce(new VoiceContextRejected("Retired voice proposal replay."));
     await vi.advanceTimersByTimeAsync(1_000);
     expect(native.port!.retainPendingMaterial).not.toHaveBeenCalled();
-    expect(call.getSnapshot().state).toBe("ended"); expect(call.getSnapshot().error).toBe("unsupported-media");
+    expect(call.getSnapshot().state).toBe("agreed"); expect(mediaEffects.consume).toHaveBeenCalledExactlyOnceWith(material);
   });
   it.each([new Error("Voice leader sequence conflict."), new Error("Schema/native binding failure.")])("does not suppress current staging failures: %s", async failure => {
     call = await CallSession.create({ ...options, fetch: fetcher() });

@@ -3,6 +3,9 @@ import * as nativeFactory from "@/lib/voice/crypto-owner";
 import type { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty } from "@/lib/voice/owner-control";
 import { callHttpFixture, cleanupCallUsers, closeCalls, observeCallPort, startCall, until, verifyCalls } from "./fixtures/voice-call-http";
+const consumed = vi.hoisted(() => vi.fn(async (_control: import("@/lib/voice/owner-control").VoiceOwnerControl) => {}));
+// Preserve real native/cookie/service control coverage in Node; this mock makes no media claim.
+vi.mock("@/lib/voice/media-session", () => ({ MediaSession: class { start() {} consume = consumed; fence() {} } }));
 
 afterEach(closeCalls);
 afterAll(cleanupCallUsers);
@@ -36,8 +39,8 @@ describe("unactivated CallSession with actual cookie HTTP / PostgreSQL / public 
     const leaderAccount = fixture.accounts.find(account => account.call === a)!, leader = issued.get(leaderAccount.accountId)!, proposal = leader.proposal!;
     const sender = voiceControlParty(a.getSnapshot().roster.find(member => member.memberId === a.getSnapshot().selfMemberId)!), recipient = voiceControlParty(b.getSnapshot().roster.find(member => member.memberId === b.getSnapshot().selfMemberId)!);
     await leader.port.sendControl({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: proposal.callId, generation: proposal.generation, epochId: proposal.epochId, proposalSequence: proposal.sequence, sender, recipient, publisher: sender, audience: [...proposal.audience], keyId: crypto.randomUUID(), reference: crypto.randomUUID(), transaction: crypto.randomUUID(), material: Buffer.alloc(32, 9).toString("base64") });
-    await until(() => b.getSnapshot().state === "ended");
-    expect(b.getSnapshot().error).toBe("unsupported-media");
+    await until(() => consumed.mock.calls.some(([control]) => control.publisher.memberId === sender.memberId && control.recipient.memberId === recipient.memberId));
+    expect(b.getSnapshot().state).toBe("agreed");
     for (const account of fixture.accounts) {
       expect(account.calls.some(call => call.kind === "ack")).toBe(true);
       const starts = account.calls.map(call => call.start);
