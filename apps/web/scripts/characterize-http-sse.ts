@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AssertionError } from "node:assert";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cp, writeFile } from "node:fs/promises";
@@ -16,6 +17,25 @@ import { hashRateLimitKey } from "../src/server/rate-limit-store";
 import { getMinimumAge } from "../src/server/operator-policy";
 import { SseFrames, summarize } from "./http-sse-metrics";
 
+type Phase = "setup-users" | "setup-community" | "setup-bots" | "start-server" | "outsider-denial" | "open-streams" | "history-reads" | "message-fanout" | "reconnect" | "sentinel" | "close-streams" | "lease-cleanup" | "server-cleanup" | "fixture-cleanup";
+type Endpoint = "ready" | "outsider-history" | "outsider-sse" | "history" | "sse" | "write";
+let phase: Phase = "setup-users";
+const phases: Array<{ phase: Phase; elapsedMs: number }> = [];
+const progress = { users: 0, bots: 0, streamsOpened: 0, streamsReady: 0, reads: 0, writes: 0, fanoutReceipts: 0 };
+const statuses: Partial<Record<Endpoint, Record<number, number>>> = {};
+const diagnosticStart = performance.now();
+function enter(next: Phase) { phase = next; phases.push({ phase, elapsedMs: Math.round(performance.now() - diagnosticStart) }); }
+function recordStatus(endpoint: Endpoint, status: number) {
+  const counts = statuses[endpoint] ??= {};
+  counts[status] = (counts[status] ?? 0) + 1;
+}
+function recordFailure(error: unknown) {
+  // Never serialize exception messages, stack, actual/expected values or HTTP bodies.
+  report.failurePhase ??= phase;
+  report.failureCategory ??= error instanceof AssertionError ? "assertion" : error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name) ? error.name : "operation";
+  if (error instanceof AssertionError && ["==", "===", "!=", "!==", "match", "fail"].includes(error.operator)) report.assertionOperator ??= error.operator;
+}
+
 const origin = "http://localhost:3300";
 const connection = new URL(process.env.DATABASE_URL ?? "postgres://invalid");
 if (process.env.GITHUB_ACTIONS !== "true" || process.env.OPENDISCORD_ISOLATED_LOAD !== "1"
@@ -32,7 +52,9 @@ let communityId: string | undefined;
 let server: ReturnType<typeof spawn> | undefined;
 const report: Record<string, unknown> = {
   scope: "Single production-build process, real HTTP cookie-auth reads/SSE and bot-token-auth writes. Synthetic fixtures; excludes browsers, media, multi-replica capacity and production capacity/SLO claims.",
-  source: process.env.GITHUB_SHA,
+  executedMergeSha: process.env.GITHUB_SHA,
+  sourceHead: process.env.OPENDISCORD_SOURCE_HEAD,
+  phases, progress, statuses,
   environment: { node: process.version, platform: process.platform, logicalCpus: cpus().length, hostMemoryMiB: Math.round(totalmem() / 1048576), resourceMeasurement: "Host metadata only; application CPU/RSS not measured." },
   fixture: { readers: 20, history: 3000, historyRequests: 100, botWriters: 4, writes: 16, reconnectWrites: 1 },
   passed: false,
@@ -57,6 +79,7 @@ function openStream(cookie: string) {
     const response = await fetch(`${origin}/api/communities/${communityId}/events`, {
       headers: { cookie }, signal: AbortSignal.any([abort.signal, controller.signal]),
     });
+    recordStatus("sse", response.status);
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
     assert.ok(response.body);
@@ -68,7 +91,7 @@ function openStream(cookie: string) {
         const chunk = await reader.read();
         if (chunk.done) break;
         for (const frame of frames.push(decoder.decode(chunk.value, { stream: true }))) {
-          if (frame.event === "ready") ready = true;
+          if (frame.event === "ready") { if (!ready) progress.streamsReady++; ready = true; }
           if (frame.event === "message.created") {
             const data: unknown = JSON.parse(frame.data);
             assert.ok(typeof data === "object" && data !== null && "id" in data && typeof data.id === "string");
@@ -79,12 +102,13 @@ function openStream(cookie: string) {
       }
       assert.ok(abort.signal.aborted || controller.signal.aborted, "Unexpected SSE end");
     } finally { await reader.cancel(); reader.releaseLock(); }
-  })().catch((error: unknown) => { if (!abort.signal.aborted && !controller.signal.aborted) failure = error; });
+  })().catch((error: unknown) => { if (!abort.signal.aborted && !controller.signal.aborted) { failure = error; recordFailure(error); } });
   return { received, abort, task, ready: () => { if (failure) throw failure; return ready; }, check: () => { if (failure) throw failure; } };
 }
 
 async function run() {
   try {
+    enter("setup-users");
     // Supported Better Auth API creates real signed session cookies; never forge cookies or log credentials.
     for (let i = 0; i < 21; i++) {
       const signup = await auth.api.signUpEmail({
@@ -92,14 +116,17 @@ async function run() {
         body: { name: "HTTP load fixture", email: `${randomUUID()}@example.test`, password: randomUUID() }, returnHeaders: true,
       });
       ids.push(signup.response.user.id);
+      progress.users++;
       const cookie = signup.headers.get("set-cookie")?.split(";")[0];
       assert.ok(cookie);
       cookies.push(cookie);
     }
+    enter("setup-community");
     const created = await createCommunity(ids[0], "HTTP SSE isolated fixture");
     communityId = created.communityId;
     await db.insert(member).values(ids.slice(1, 20).map((userId) => ({ userId, communityId: created.communityId })));
     for (let offset = 0; offset < 3000; offset += 500) await db.insert(message).values(Array.from({ length: 500 }, (_, i) => ({ channelId: created.channelId, authorId: ids[i % 20], content: `Synthetic history ${offset + i}` })));
+    enter("setup-bots");
     const bots: Awaited<ReturnType<typeof createIntegration>>[] = [];
     for (let i = 0; i < 4; i++) {
       const bot = await createIntegration(ids[0], communityId, { kind: "bot", name: "HTTP writer" });
@@ -108,20 +135,26 @@ async function run() {
       ids.push(row.userId);
       rateKeys.push(hashRateLimitKey(`api:${bot.id}`));
       bots.push(bot);
+      progress.bots++;
     }
+    enter("start-server");
     await cp(".next/static", ".next/standalone/apps/web/.next/static", { recursive: true });
     await cp("public", ".next/standalone/apps/web/public", { recursive: true });
     server = spawn(process.execPath, [".next/standalone/apps/web/server.js"], { env: { ...process.env, PORT: "3300", HOSTNAME: "127.0.0.1" }, stdio: ["ignore", "ignore", "pipe"] });
     let serverStderrBytes = 0;
     server.stderr?.on("data", (chunk: Buffer) => { serverStderrBytes += chunk.length; report.serverStderrBytes = serverStderrBytes; });
-    await until(async () => { assert.equal(server?.exitCode, null); return request("/api/ready").then((r) => r.status === 200).catch(() => false); });
+    await until(async () => { assert.equal(server?.exitCode, null); return request("/api/ready").then((r) => { recordStatus("ready", r.status); return r.status === 200; }).catch(() => false); });
     const readPath = `/api/channels/${created.channelId}/messages`;
+    enter("outsider-denial");
     for (const path of [readPath, `/api/communities/${communityId}/events`]) {
       const denied = await request(path, { headers: { cookie: cookies[20] } });
+      recordStatus(path === readPath ? "outsider-history" : "outsider-sse", denied.status);
       assert.equal(denied.status, 404); await denied.arrayBuffer();
     }
-    for (const cookie of cookies.slice(0, 20)) streams.push(openStream(cookie));
+    enter("open-streams");
+    for (const cookie of cookies.slice(0, 20)) { streams.push(openStream(cookie)); progress.streamsOpened++; }
     await until(() => streams.every((s) => s.ready()));
+    enter("history-reads");
     const reads: number[] = [];
     let next = 0;
     const started = performance.now();
@@ -129,11 +162,13 @@ async function run() {
       while (next++ < 100) {
         const start = performance.now();
         const response = await request(readPath, { headers: { cookie } });
+        recordStatus("history", response.status);
         assert.equal(response.status, 200);
         const page = await response.json();
         assert.equal(page.messages.length, 50); assert.equal(page.hasMore, true);
         assert.ok(page.messages.every((row: { channelId: string }) => row.channelId === created.channelId));
         reads.push(performance.now() - start);
+        progress.reads++;
       }
     }));
     const readDurationMs = performance.now() - started;
@@ -145,23 +180,28 @@ async function run() {
         method: "POST", headers: { authorization: `Bearer ${bots[index % 4].token}`, "content-type": "application/json" },
         body: JSON.stringify({ content: `HTTP synthetic write ${index}` }),
       });
+      recordStatus("write", response.status);
       assert.equal(response.status, 201);
       const result = await response.json();
       assert.equal(typeof result.id, "string");
+      progress.writes++;
       writes.push(performance.now() - start); sent.add(result.id);
       return { id: result.id as string, start };
     }
+    enter("message-fanout");
     for (let i = 0; i < 16; i++) {
       const sentMessage = await send(i);
       await until(() => streams.every((s) => { s.check(); return s.received.has(sentMessage.id); }));
-      for (const s of streams) fanout.push(s.received.get(sentMessage.id)! - sentMessage.start);
+      for (const s of streams) { fanout.push(s.received.get(sentMessage.id)! - sentMessage.start); progress.fanoutReceipts++; }
     }
     assert.ok(streams.every((s) => s.received.size === sent.size));
+    enter("reconnect");
     streams[0].abort.abort(); await streams[0].task;
     const reconnectStart = performance.now();
-    const reconnected = openStream(cookies[0]); streams.push(reconnected);
+    const reconnected = openStream(cookies[0]); streams.push(reconnected); progress.streamsOpened++;
     await until(() => reconnected.ready());
     const reconnectReadyMs = performance.now() - reconnectStart;
+    enter("sentinel");
     const sentinel = await send(16);
     await until(() => { reconnected.check(); return reconnected.received.has(sentinel.id); });
     await until(() => streams.slice(1, 20).every((s) => { s.check(); return s.received.has(sentinel.id); }));
@@ -169,20 +209,25 @@ async function run() {
       writes: summarize(writes), fanoutMs: summarize(fanout), fanoutReceipts: fanout.length, reconnectReadyMs,
       reconnectSentinelMs: reconnected.received.get(sentinel.id)! - sentinel.start, outsiderDenied: true, unexpectedErrors: 0 };
     report.passed = true;
-  } finally {
+  } catch (error) { recordFailure(error); throw error; } finally {
+    enter("close-streams");
     for (const stream of streams) stream.abort.abort();
     await Promise.all(streams.map((s) => s.task));
     try {
+      enter("lease-cleanup");
       if (ids.length) {
         await until(async () => { const [row] = await db.select({ n: count() }).from(streamLease).where(inArray(streamLease.userId, ids)); return row.n === 0; });
         report.streamLeasesAfterAbort = 0;
       }
     } finally {
+      enter("server-cleanup");
       if (server) {
         server.kill("SIGTERM");
         await Promise.race([new Promise<void>((resolve) => server!.once("exit", () => resolve())), delay(5000)]);
         if (server.exitCode === null && server.signalCode === null) { server.kill("SIGKILL"); await new Promise<void>((resolve) => server!.once("exit", () => resolve())); }
       }
+      report.serverExit = { code: server?.exitCode ?? null, signal: server?.signalCode ?? null };
+      enter("fixture-cleanup");
       if (rateKeys.length) await db.delete(applicationRateLimit).where(inArray(applicationRateLimit.key, rateKeys));
       if (communityId) await db.delete(community).where(eq(community.id, communityId));
       if (ids.length) await db.delete(user).where(inArray(user.id, ids));
@@ -190,7 +235,7 @@ async function run() {
     }
   }
 }
-void run().catch(() => { report.passed = false; report.failure = "Harness assertion or bounded operation failed; credentials and payloads omitted."; process.exitCode = 1; }).finally(async () => {
+void run().catch((error: unknown) => { recordFailure(error); report.passed = false; report.failure = "Harness assertion or bounded operation failed; credentials and payloads omitted."; process.exitCode = 1; }).finally(async () => {
   clearTimeout(watchdog);
   await writeFile("http-sse-characterization.json", `${JSON.stringify(report, null, 2)}\n`);
   await db.$client.end();
