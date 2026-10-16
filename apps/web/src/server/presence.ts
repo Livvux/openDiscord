@@ -4,6 +4,7 @@ import { and, eq, gt, inArray, lt, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { member, userPresence } from "@/db/schema";
+import type { PresenceChoice, PresenceStatus } from "@/lib/presence";
 import { requireMember } from "./access";
 import { parse, uuid } from "./validation";
 
@@ -33,17 +34,28 @@ export async function presenceVisible(userId: string): Promise<boolean> {
   return row?.visible ?? false;
 }
 
+
+export async function setPresenceStatus(userId: string, rawChoice: unknown): Promise<void> {
+  const choice = parse(z.enum(["online", "idle", "dnd", "invisible"]), rawChoice);
+  const set = choice === "invisible" ? { visible: false } : { visible: true, status: choice };
+  await db.insert(userPresence).values({ userId, ...set }).onConflictDoUpdate({ target: userPresence.userId, set });
+}
+
+export async function presenceChoice(userId: string): Promise<PresenceChoice> {
+  const [row] = await db.select({ visible: userPresence.visible, status: userPresence.status }).from(userPresence).where(eq(userPresence.userId, userId));
+  return row?.visible ? row.status : "invisible";
+}
+
 /** Members of the community who show their presence and were seen recently. */
-export async function onlineMembers(userId: string, rawCommunityId: unknown): Promise<string[]> {
+export async function onlineMembers(userId: string, rawCommunityId: unknown): Promise<{ id: string; status: PresenceStatus }[]> {
   const communityId = parse(uuid, rawCommunityId);
   await requireMember(db, communityId, userId);
-  const rows = await db
-    .select({ userId: member.userId })
+  return db
+    .select({ id: member.userId, status: userPresence.status })
     .from(member)
     .innerJoin(userPresence, eq(userPresence.userId, member.userId))
     .where(and(eq(member.communityId, communityId), userPresence.visible, gt(userPresence.lastSeenAt, new Date(Date.now() - ONLINE_WINDOW_MS))))
     .limit(1000);
-  return rows.map((r) => r.userId);
 }
 
 // --- Notification level -----------------------------------------------------

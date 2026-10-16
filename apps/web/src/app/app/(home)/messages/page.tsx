@@ -12,5 +12,6 @@ async function Messages({ searchParams }: Pick<PageProps<"/app/messages">, "sear
   const user = await requirePageUser();
   const params = await searchParams;
   const target = typeof params.to === "string" && params.to.length <= 64 && params.to !== user.id ? params.to : undefined;
-  return <PrivateMessages userId={user.id} target={target} />;
+  // Remount per target so a new ?to= selects its conversation (the encryption client is cached).
+  return <PrivateMessages key={target ?? ""} userId={user.id} target={target} />;
 }

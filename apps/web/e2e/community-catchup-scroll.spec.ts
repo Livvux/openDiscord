@@ -121,9 +121,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
       await sendMessage(writer, `History ${index}: ${"A long message keeps this channel scrollable. ".repeat(60)}`.trim());
     }
     reader = await joinAsNewUser(browser, "Scroll Reader", await createInviteLink(writer));
-    await reader.goto("/app");
-    // /app streams a redirect; settle its actual destination before the fresh document below.
-    await expect(reader).toHaveURL(channelUrl);
+    await reader.goto(channelUrl);
     await expect(reader.getByRole("heading", { level: 1, name: "general", exact: true })).toBeVisible();
     await expect(reader.getByRole("log", { name: "Messages in #general" })).toBeVisible();
     reader.on("pageerror", (error) => errors.push(error.message));

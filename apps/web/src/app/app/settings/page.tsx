@@ -13,6 +13,7 @@ import { SignOutButton } from "@/app/app/sign-out-button";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
 import { listBlocked } from "@/server/blocks";
 import { presenceVisible } from "@/server/presence";
+import { getProfile } from "@/server/profile";
 import { pushEnabled, vapidPublicKey } from "@/server/push";
 import { PushSettings } from "@/components/app/settings/push-settings";
 import { PresenceSettings } from "@/components/app/settings/presence-settings";
@@ -49,16 +50,17 @@ function Section({ title, description, children }: { title: string; description?
 
 async function Settings() {
   const user = await requirePageUser();
-  const [owned, has2fa, blocked, showPresence] = await Promise.all([
+  const [owned, has2fa, blocked, showPresence, profile] = await Promise.all([
     ownedCommunityNames(user.id),
     twoFactorEnabled(user.id),
     listBlocked(user.id),
     presenceVisible(user.id),
+    getProfile(user.id),
   ]);
   return (
     <div className="mx-auto max-w-2xl px-6">
-      <Section title="Profile" description="Your display name is visible to members of communities you join. Your email address is not.">
-        <ProfileForm name={user.name} email={user.email} />
+      <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
+        <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />
       </Section>
       <Section title="Email address" description="Changes require a recent sign-in and verification. Your email is never shown to other members.">
         {mailEnabled ? <EmailSettings email={user.email} /> : <p className="text-sm text-muted-foreground">Email changes are unavailable because this instance has not configured email delivery.</p>}
@@ -67,7 +69,7 @@ async function Settings() {
         <NotificationSettings />
         {pushEnabled && vapidPublicKey && <PushSettings publicKey={vapidPublicKey} />}
       </Section>
-      <Section title="Online status" description="Off by default. When on, members of your communities see a dot while you have openDiscord open.">
+      <Section title="Online status" description="Off by default. When on, members of your communities and your friends see a dot while you have openDiscord open. Choose Idle or Do not disturb from the account menu.">
         <PresenceSettings visible={showPresence} />
       </Section>
       <Section title="Blocked people" description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
