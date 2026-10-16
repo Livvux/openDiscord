@@ -298,7 +298,13 @@ separate real browser/media and refresh/reconnect/TOCTOU acceptance before activ
 
 Canonical isolated CI checks wrapper locking/immutable cleanup with fake Docker, CLI pool closure
 and failure handling with SDK-port mocks, and systemd syntax on Linux. After the existing LiveKit
-startup, a CI-only real SDK/DB check creates an exact random room and a live crashed-worker lease,
-proves it survives the first bounded call sweep, expires only that fixture lease, then proves
-exact-room deletion and natural CLI process exit. It does not claim real media, production
-scheduling, actual process-crash timing, or authenticated browser acceptance.
+startup, a CI-only real SDK/DB check creates an exact random room, starts its own actual CLI worker
+through a bounded loopback HTTP proxy and intercepts only that room's public SDK DeleteRoom after
+the durable claim commits. The proxy SIGKILLs only that child, without forwarding deletion or
+returning a fake SDK success. The real room and committed claim survive; normal workers cannot
+steal its unexpired lease while processing eight then one real calls. After the actual 30-second
+lease expires naturally, a normal CLI invocation must delete that exact SFU room through the real
+SDK, settle its claim and exit with its pool closed. No claim lease is shortened in SQL. Owned
+children, proxy connections, fixture rows and exact room are cleaned up under the CI step's
+outer deadline. This proves the isolated process-kill/lease-recovery path, not production timer
+cadence, host/container-daemon failure, real media or authenticated browser acceptance.
