@@ -100,7 +100,7 @@ async function run() {
     communityId = created.communityId;
     await db.insert(member).values(ids.slice(1, 20).map((userId) => ({ userId, communityId: created.communityId })));
     for (let offset = 0; offset < 3000; offset += 500) await db.insert(message).values(Array.from({ length: 500 }, (_, i) => ({ channelId: created.channelId, authorId: ids[i % 20], content: `Synthetic history ${offset + i}` })));
-    const bots = [];
+    const bots: Awaited<ReturnType<typeof createIntegration>>[] = [];
     for (let i = 0; i < 4; i++) {
       const bot = await createIntegration(ids[0], communityId, { kind: "bot", name: "HTTP writer" });
       const row = await db.query.integration.findFirst({ where: eq(integration.id, bot.id) });
