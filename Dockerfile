@@ -1,5 +1,5 @@
 FROM node:25-alpine AS base
-RUN corepack enable
+RUN npm install --global corepack@0.34.5 && corepack enable
 WORKDIR /repo
 
 FROM base AS build
