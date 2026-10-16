@@ -20,7 +20,7 @@ jobs:
           POSTGRES_PASSWORD: native-isolated-ci
           POSTGRES_DB: opendiscord
         ports: ['5432:5432']
-        options: --health-cmd 'pg_isready -U opendiscord' --health-interval 5s --health-retries 10
+        options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
     env:
       DATABASE_URL: postgres://opendiscord:native-isolated-ci@localhost:5432/opendiscord
       BETTER_AUTH_SECRET: native-isolated-ci-secret-not-for-production-2026
