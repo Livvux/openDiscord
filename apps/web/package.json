@@ -25,6 +25,8 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "drizzle-orm": "0.45.4",
+    "emoji-picker-react": "^5.0.0",
+    "emoji-regex": "^10.6.0",
     "livekit-client": "2.22.4",
     "livekit-server-sdk": "2.19.1",
     "lucide-react": "^1.57.0",

@@ -1,0 +1,46 @@
+import { expect, test } from "@playwright/test";
+import { createCommunity, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
+
+test("emoji search, insertion, local images and full reactions", async ({ browser }) => {
+  const page = await newUserPage(browser);
+  await signUp(page, "Emoji Tester");
+  await createCommunity(page, "Emoji Lab");
+  const errors: string[] = [];
+  const externalImages: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.resourceType() === "image" && new URL(request.url()).origin !== new URL(page.url()).origin) externalImages.push(request.url());
+  });
+  const composer = page.getByRole("textbox", { name: "Message #general" });
+  await composer.fill("Hello world");
+  await composer.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(6, 11));
+  await page.getByRole("button", { name: "Choose community emoji or sticker" }).click();
+  const picker = page.getByRole("dialog", { name: "Choose emoji or sticker" });
+  await picker.getByRole("textbox").fill("party popper");
+  await picker.getByRole("gridcell", { name: /party popper/i }).first().click();
+  await expect(composer).toHaveValue("Hello 🎉");
+  await expect(composer).toBeFocused();
+  await composer.press("Enter");
+  const row = page.getByRole("log").getByRole("listitem").filter({ has: page.getByRole("img", { name: "🎉", exact: true }) }).first();
+  await expect(row.getByRole("img", { name: "🎉", exact: true })).toHaveAttribute("src", "/twemoji/17.0.3/svg/1f389.svg");
+  await row.hover();
+  await row.getByRole("button", { name: "Add reaction" }).click();
+  const reactions = page.getByRole("dialog", { name: "Add a reaction", exact: true });
+  await reactions.getByRole("button", { name: "Show all Emojis" }).click();
+  await reactions.getByRole("textbox").fill("rocket");
+  await reactions.getByRole("gridcell", { name: /^rocket$/i }).click();
+  await expect(row.getByRole("button", { name: "🚀 1 reaction, including you" })).toBeVisible();
+  await page.getByRole("button", { name: "Choose community emoji or sticker" }).click();
+  await expect(picker.getByRole("textbox")).toBeFocused();
+  await expectNoA11yViolations(page);
+  const bounds = await picker.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.screenshot({ path: test.info().outputPath("emoji-picker.png") });
+  await page.keyboard.press("Escape");
+  await expect(picker).not.toBeVisible();
+  expect(errors).toEqual([]);
+  expect(externalImages).toEqual([]);
+  await page.context().close();
+});

@@ -63,6 +63,8 @@ describe("reactions", () => {
     await expect(toggleReaction(member, msg.id, "🇩🇪")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "❤️")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "1️⃣")).resolves.toBeUndefined();
+    await expect(toggleReaction(member, msg.id, "👩🏽‍❤️‍💋‍👨🏻")).resolves.toBeUndefined();
+    await expect(toggleReaction(member, msg.id, "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}")).resolves.toBeUndefined();
     for (const bad of ["lol", "<b>", "1", "👍x", "", "😀0000", "👍👍", "🇩"]) await expect(toggleReaction(member, msg.id, bad)).rejects.toThrow();
   });
 
