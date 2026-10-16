@@ -177,7 +177,7 @@ async function run() {
     async function send(index: number) {
       const start = performance.now();
       const response = await request(`/api/v1/channels/${created.channelId}/messages`, {
-        method: "POST", headers: { authorization: `Bearer ${bots[index % 4].token}`, "content-type": "application/json" },
+        method: "POST", headers: { authorization: `Bot ${bots[index % 4].token}`, "content-type": "application/json" },
         body: JSON.stringify({ content: `HTTP synthetic write ${index}` }),
       });
       recordStatus("write", response.status);
