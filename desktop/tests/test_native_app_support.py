@@ -1,4 +1,4 @@
-"""Bounded cleanup and incomplete-download regressions; no app/runtime launch."""
+"""Bounded harness regressions and disposable hosted TLS gateway mechanisms."""
 import io
 import http.server
 import socket
@@ -21,6 +21,20 @@ import native_app_flows as flows
 
 
 class GatewayRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def tls_fixture(self):
+        """Private per-test certificate; never use caller TLS files or global trust."""
+        with tempfile.TemporaryDirectory(prefix='native-gateway-tls-') as directory:
+            certificate = pathlib.Path(directory) / 'gateway.crt'
+            key = pathlib.Path(directory) / 'gateway.key'
+            key.touch(mode=0o600)
+            subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                            '-keyout', str(key), '-out', str(certificate), '-days', '1',
+                            '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost'],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            key.chmod(0o600)
+            yield {'NATIVE_TLS_CERT': str(certificate), 'NATIVE_TLS_KEY': str(key)}
+
     @contextmanager
     def identity(self, change=None):
         with tempfile.TemporaryDirectory() as directory:
@@ -350,16 +364,26 @@ class GatewayRecoveryTests(unittest.TestCase):
           }
           exit 143
         '''
-        result = subprocess.run(['bash', '-c', script], cwd=flows.ROOT.parent, capture_output=True, timeout=5)
-        self.assertEqual(result.returncode, 143)
+        with self.tls_fixture() as tls:
+            result = subprocess.run(['bash', '-c', script], cwd=flows.ROOT.parent,
+                                    env={**os.environ, **tls}, capture_output=True, timeout=5)
+        diagnostic = {'exitcode': result.returncode,
+                      'tls_env_missing': b'NATIVE_TLS_CERT: unbound variable' in result.stderr,
+                      'stderr_present': bool(result.stderr)}
+        self.assertEqual(result.returncode, 143, diagnostic)
         self.assertEqual(result.stdout.decode().splitlines(), ['RESUMED', 'TERM', 'KILL'])
 
     @unittest.skipUnless(os.uname().sysname == 'Linux', 'Hosted Linux pidfd mechanism only')
     def test_hosted_real_linux_pidfd_gateway_blackout_and_restore(self):
         """Actual owned TLS process capability; not a substitute for native DM acceptance."""
-        context = ssl.create_default_context(cafile=os.environ['NATIVE_TLS_CERT'])
+        with self.tls_fixture() as tls:
+            self.assert_real_gateway_blackout_and_restore(tls)
+
+    def assert_real_gateway_blackout_and_restore(self, tls):
+        context = ssl.create_default_context(cafile=tls['NATIVE_TLS_CERT'])
         process = subprocess.Popen(['node', 'desktop/tests/app_proxy.mjs'], cwd=flows.ROOT.parent,
-                                   start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   env={**os.environ, **tls}, start_new_session=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         gateway = None
 
         def health():
