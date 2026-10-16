@@ -1,3 +1,4 @@
+import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { assetText } from "@/lib/community-assets";
@@ -98,7 +99,7 @@ export async function revokeIntegration(userId: string, rawId: unknown): Promise
   const id = parse(uuid, rawId);
   const [row] = await db.select().from(integration).where(and(eq(integration.id, id), isNull(integration.revokedAt)));
   if (!row) throw notFound("Integration not found.");
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx);
     await lockCommunity(tx, row.communityId);
     await requireMember(tx, row.communityId, userId, Permission.ManageCommunity);

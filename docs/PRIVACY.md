@@ -97,3 +97,15 @@ open reports, accounts and messages are not deleted. Batch limits bound each run
 list means more work remains for the next run. New sessions and updates containing device metadata also minimize it; existing raw metadata is scrubbed by maintenance.
 
 Personal export version 8 includes community image upload attribution separately from personal messages, the person's retained public post snapshots (including their send-time display name), and public-channel publication state for communities they currently own, including withdrawn publications. Other authors' snapshots are excluded. Custom image references in personal message exports become readable text. Library ownership remains with the community, independently of the uploader account.
+
+The unreleased generation-bound voice service stores a durable `voice_sfu_room` ownership ledger:
+exact channel/call UUIDs and generation, active/retired status, creation/retirement and maximum app
+JWT expiry timestamps, retry/lease metadata and a small outcome category. It stores no user IDs,
+participant identities, JWTs, enrollment secrets, private keys or encrypted media/control payloads.
+UUID tuples can still be associated with channel/call records while those exist; this is operational
+metadata, not anonymous data. It survives parent deletion to permit safe exact SFU cleanup after
+crashes. Retired ownership is retained indefinitely initially, including beyond app-token expiry,
+because SFU-refreshed tokens and in-flight requests have no proven finite quiescence horizon.
+New generations fail closed at 100000 ledger rows pending operator capacity review. There is no
+expiry-based automatic purge. Full encrypted database backups include ownership; restore and later
+retention changes require the documented SFU recovery consistency gate in SELF-HOSTING/OPERATIONS.
