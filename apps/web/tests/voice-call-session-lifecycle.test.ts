@@ -126,6 +126,23 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     await vi.advanceTimersByTimeAsync(11_000);
     expect(call.getSnapshot().state).toBe("agreed"); expect(call.getSnapshot().fenceRevision).toBe(installed.fenceRevision);
     expect(native.port!.installContext).toHaveBeenCalledTimes(1);
+    const material = { version: 1 as const, purpose: VOICE_CONTROL_EVENT, kind: "material" as const, callId, generation: 1, epochId: proposal.epochId, proposalSequence: proposal.sequence, sender: party, recipient: party, publisher: party, audience: [party], keyId: crypto.randomUUID(), reference: crypto.randomUUID(), transaction: crypto.randomUUID(), material: Buffer.alloc(32, 1).toString("base64") };
+    vi.mocked(native.port!.receiveAgreement).mockResolvedValueOnce([{ kind: "context", contextKind: "context-offer", senderId: memberId, proposal, ref: Object.freeze({ kind: "context-offer" }) }, { kind: "pending-material", ref: Object.freeze({ kind: "pending-material" }) }, { kind: "media", control: material }]);
+    vi.mocked(native.port!.stageOfferedContext).mockRejectedValueOnce(new VoiceContextRejected("Retired voice proposal replay."));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(native.port!.retainPendingMaterial).not.toHaveBeenCalled();
+    expect(call.getSnapshot().state).toBe("ended"); expect(call.getSnapshot().error).toBe("unsupported-media");
+  });
+  it.each([new Error("Voice leader sequence conflict."), new Error("Schema/native binding failure.")])("does not suppress current staging failures: %s", async failure => {
+    call = await CallSession.create({ ...options, fetch: fetcher() });
+    const party = voiceControlParty(snapshot().members[0]), reference = crypto.randomUUID();
+    const proposal = new VoiceContextProposal({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId, generation: 1, epochId: crypto.randomUUID(), sequence: 1, reference, transaction: reference, sender: party, recipient: party, leader: party, audience: [party] });
+    vi.mocked(native.port!.createContextOffer).mockResolvedValue({ ref: Object.freeze({ kind: "context-offer" }), proposal });
+    vi.mocked(native.port!.contextAgreementComplete).mockResolvedValue(true);
+    await call.confirmFullRoster();
+    vi.mocked(native.port!.receiveAgreement).mockResolvedValueOnce([{ kind: "context", contextKind: "context-offer", senderId: memberId, proposal, ref: Object.freeze({ kind: "context-offer" }) }]);
+    vi.mocked(native.port!.stageOfferedContext).mockRejectedValueOnce(failure);
+    await vi.advanceTimersByTimeAsync(1_000); expect(call.getSnapshot().state).toBe("ended");
   });
   it("never overlaps receives and waits at least one second after a complete batch", async () => {
     call = await CallSession.create({ ...options, fetch: fetcher() });

@@ -4,7 +4,7 @@ import { acquireVoiceOwnerGuard, releaseUnusedVoiceOwnerGuard, type VoiceOwnerGu
 import { sameVoiceParty, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 import type { VoiceBinding, VoiceSnapshot } from "./contracts";
 import type { VoiceAgreementEventRef, VoiceOwnerAgreementReceived, VoiceOwnerTransport, VoiceProductOwnerPort, VoiceSasState } from "./crypto-owner";
-import type { VoiceContextProposal } from "./epoch-agreement";
+import { VoiceContextRejected, sameVoiceProposal, type VoiceContextProposal } from "./epoch-agreement";
 import type { VoiceContextControl } from "./context-control";
 
 const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 60_000;
@@ -272,10 +272,13 @@ export class CallSession {
   }
   private newAttempt(start: number): Attempt {
     const attempt = { deadline: start + ATTEMPT_MS, revision: this.selectionRevision, installed: false };
+    this.commitAttempt(attempt);
+    return attempt;
+  }
+  private commitAttempt(attempt: Attempt): void {
     this.attempt = attempt; this.state = "negotiating"; this.emit();
     clearTimeout(this.contextTimer);
     this.contextTimer = setTimeout(() => { if (this.attempt === attempt && !attempt.installed) this.retryRequired(); }, Math.max(0, attempt.deadline - performance.now()));
-    return attempt;
   }
   private retryRequired(): void { this.attempt = undefined; clearTimeout(this.contextTimer); this.state = "retry-required"; this.error = "context-expired"; this.emit(); }
   private control(proposal: VoiceContextProposal, recipient: VoiceControlParty, kind: VoiceContextControl["kind"]): VoiceContextControl {
@@ -314,19 +317,33 @@ export class CallSession {
   private mediaControl(_control: VoiceOwnerControl): never { this.checkCurrent(); throw new VoiceCallSessionError("unsupported-media"); }
   private async process(events: VoiceOwnerAgreementReceived[], start: number): Promise<void> {
     let restart = false;
+    let rejectedProposal: VoiceContextProposal | undefined;
     // Stage every offer before pending material from this same batch. No new receive
     // until every capability below is consumed by the one native Owner.
     for (const event of events) {
       this.checkCurrent();
+      // The Owner validated this whole batch first. Only this rejected proposal
+      // group loses its transient refs; installed-current media still fails below.
+      if (rejectedProposal && ((event.kind === "context" && sameVoiceProposal(event.proposal, rejectedProposal)) || event.kind === "pending-material")) continue;
       if (event.kind === "context-not-ready") { this.localConsentPending = true; if (!this.attempt) this.state = "waiting"; continue; }
       if (event.kind === "context" && event.contextKind === "context-offer") {
         if (!this.attempt) throw new VoiceCallSessionError("not-ready");
-        // A genuine next leader offer may replace an installed exact context under
-        // the still-current local selection. New roster transitions clear selection.
-        const attempt = this.attempt.installed ? this.newAttempt(start) : this.attempt;
-        attempt.deadline = Math.min(attempt.deadline, start + ATTEMPT_MS);
-        this.assertAttempt(attempt); await this.owner!.stageOfferedContext(event.ref); this.assertAttempt(attempt);
-        attempt.ref = event.ref; attempt.proposal = event.proposal;
+        // A prospective replacement has no observable state/timer/ref effects.
+        // The real Owner can reject a genuine lower/retired replay nonfatally.
+        const previous = this.attempt;
+        const attempt: Attempt = { deadline: previous.installed ? start + ATTEMPT_MS : Math.min(previous.deadline, start + ATTEMPT_MS), revision: this.selectionRevision, installed: false, ref: event.ref, proposal: event.proposal };
+        const assertProspective = () => {
+          this.checkCurrent();
+          if (this.attempt !== previous || attempt.revision !== this.selectionRevision || performance.now() >= attempt.deadline) throw new VoiceCallSessionError("context-expired");
+        };
+        assertProspective();
+        try { await this.owner!.stageOfferedContext(event.ref); }
+        catch (error) {
+          if (!(error instanceof VoiceContextRejected)) throw error;
+          rejectedProposal = event.proposal; continue;
+        }
+        // A valid Owner stage already fenced synchronously through onFence.
+        assertProspective(); this.commitAttempt(attempt);
         await this.fanout(attempt, "context-accept");
       } else if (event.kind === "context") {
         if (event.contextKind === "context-restart") restart = (await this.owner!.acceptContextControl(event.ref)) || restart;
