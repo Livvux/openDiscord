@@ -1,8 +1,23 @@
 import type { CallSession } from "../../src/lib/voice/call-session";
+import { assertVoiceBrowserOrigin, createVoiceGrantObserver, strings } from "./voice-media-observer";
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 /** Transparent observations around genuine browser workers; no keys retained or ACK injected. */
 export async function open(channelId: string) {
+  assertVoiceBrowserOrigin(location.origin);
+  // Only the exact disposable CI fixture may load this public verifier bundle.
+  const { TokenVerifier } = await import("livekit-server-sdk");
+  const verifier = new TokenVerifier("devkey", "secret");
+  const NativeFetch = globalThis.fetch;
+  const grants = createVoiceGrantObserver(NativeFetch.bind(globalThis), location.origin, async (token, binding) => {
+    const claims = await verifier.verify(token, 0);
+    // The SDK's declared TrackSource[] models mint input; actual JWT has strings.
+    const sources: unknown = claims.video?.canPublishSources ?? [];
+    if (claims.sub !== binding.identity || claims.video?.room !== binding.room || !strings(sources) || JSON.stringify([...sources].sort()) !== JSON.stringify([...binding.sources].sort()) || typeof claims.exp !== "number" || !Number.isFinite(claims.exp)) throw new Error("Actual signed media binding mismatch.");
+    return { sources, publish: claims.video?.canPublish === true, subscribe: claims.video?.canSubscribe === true, data: claims.video?.canPublishData === true, expiresAtMs: claims.exp * 1000 };
+  });
+  // Install before the production HTTP client/Owner/media runtime is imported.
+  globalThis.fetch = grants.fetch;
   const NativeWorker = globalThis.Worker, NativeConnection = globalThis.RTCPeerConnection;
   const workers: { submitted: Set<string>; ownAck: Set<string>; ackSizes: Map<string, number>; terminated: boolean; count: number }[] = [];
   const connections: RTCPeerConnection[] = [];
@@ -67,6 +82,8 @@ export async function open(channelId: string) {
   const { CallSession } = await import("../../src/lib/voice/call-session");
   const call: CallSession = await CallSession.create({ accountId: session.user.id, sessionId: session.session.id, channelId, consent: true, assertSessionCurrent() { if (!valid) throw new Error("Disposable browser session retired."); } });
   return {
+    grants: grants.snapshot,
+    settleGrants: grants.settle,
     view: () => call.getSnapshot(),
     request: (memberId: string) => call.requestVerification(memberId),
     step: (handle: string, step: "accept" | "start" | "accept-sas" | "confirm") => call.verificationStep(handle, step),
@@ -92,9 +109,11 @@ export async function open(channelId: string) {
     },
     rekey: () => call.confirmFullRoster(),
     async close() {
+      await grants.settle();
       valid = false; await call.close("ci-harness-complete");
       sources.forEach(track => track.stop()); animations.forEach(clearInterval); await Promise.all(contexts.map(context => context.close()));
       globalThis.Worker = NativeWorker; globalThis.RTCPeerConnection = NativeConnection;
+      globalThis.fetch = NativeFetch;
       navigator.mediaDevices.getUserMedia = originalCapture; navigator.mediaDevices.getDisplayMedia = originalDisplay;
     },
   };

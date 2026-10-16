@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Page } from "@playwright/test";
+import { assertDisposableVoiceCi } from "./voice-media-observer";
 
 /** Preserve every nested output path; never follow links or serve a directory. */
 export async function readVoiceMediaAssets(directory: string): Promise<Map<string, Buffer>> {
@@ -24,6 +25,7 @@ export async function readVoiceMediaAssets(directory: string): Promise<Map<strin
 
 /** Isolated CI-only static bundle. No app/proof route or HTTP transport replacement. */
 export async function buildVoiceMediaHarness() {
+  assertDisposableVoiceCi({ ci: process.env.CI, githubActions: process.env.GITHUB_ACTIONS, apiKey: process.env.LIVEKIT_API_KEY, apiSecret: process.env.LIVEKIT_API_SECRET, url: process.env.LIVEKIT_URL, authUrl: process.env.BETTER_AUTH_URL });
   // Playwright loads these Node-only TS helpers as CJS in this package.
   const require = createRequire(join(process.cwd(), "package.json"));
   // Vite is already locked and installed as Vitest's peer. No dependency/lockfile change.

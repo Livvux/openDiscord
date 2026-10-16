@@ -1,8 +1,7 @@
 import { expect, test, type JSHandle, type Page, type Request, type Response } from "@playwright/test";
-import { TokenVerifier } from "livekit-server-sdk";
 import type { MediaHarness } from "./fixtures/voice-media-session";
 import { buildVoiceMediaHarness } from "./fixtures/voice-media-build";
-import { legitimateStartupConflict, observeMediaGrant, type GrantObservation, type MediaEpoch } from "./fixtures/voice-media-observer";
+import { legitimateStartupConflict, type MediaEpoch } from "./fixtures/voice-media-observer";
 import { createCommunity, createInviteLink, joinAsNewUser, newUserPage, signUp } from "./helpers";
 
 type Handle = JSHandle<MediaHarness>;
@@ -47,7 +46,7 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
     const bundle = await buildVoiceMediaHarness();
     const pages: Page[] = [], handles: Handle[] = [];
     const errors: string[] = [], assets = new Set<string>();
-    type TokenRecord = { epoch: MediaEpoch; pageIndex: number; observation?: Promise<GrantObservation> };
+    type TokenRecord = { epoch: MediaEpoch; pageIndex: number; status?: number; protocolFinished: boolean; failure: "none" | "aborted" | "network" };
     type RequestMeta = { startup: boolean; expectedGeneration: number; token?: TokenRecord };
     const requests = new WeakMap<Request, RequestMeta>(), tokens: TokenRecord[] = [];
     const conflicts: { method: string; path: string; action: string; status: number; startup: boolean; expectedGeneration: number }[][] = [[], [], []];
@@ -61,13 +60,17 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
     }));
     async function grantBarrier(phase: MediaEpoch): Promise<void> {
       await expect.poll(() => tokens.filter(record => record.epoch === phase).length, { timeout: 10_000 }).toBe(3);
-      await expect.poll(() => tokens.filter(record => record.epoch === phase).every(record => !!record.observation), { timeout: 10_000 }).toBe(true);
-      const results = await Promise.all(tokens.filter(record => record.epoch === phase).map(record => record.observation!));
-      if (results.length !== 3 || results.some(result => result.errorStage !== "none" || !result.grant)) throw new Error(`Media grant observation failed: ${JSON.stringify({ phase, results, states: await diagnostics() })}`);
-      expect(results.map(result => result.pageIndex).sort()).toEqual([0, 1, 2]);
+      const ordinal = phase === "initial" ? 1 : 2;
+      for (const handle of handles) await expect.poll(() => handle.evaluate(h => h.grants().length), { timeout: 10_000 }).toBe(ordinal);
+      for (const handle of handles) await expect.poll(() => handle.evaluate((h, ordinal) => h.grants()[ordinal - 1]?.settled, ordinal), { timeout: 12_000 }).toBe(true);
+      const results = await Promise.all(handles.map((handle, pageIndex) => handle.evaluate((h, ordinal) => h.grants()[ordinal - 1], ordinal).then(result => ({ ...result, pageIndex }))));
+      if (results.length !== 3 || results.some(result => result.errorStage !== "none" || !result.bodyRead || !result.signatureVerified || !result.grant)) throw new Error(`Media grant observation failed: ${JSON.stringify({ phase, results, protocol: tokens, states: await diagnostics() })}`);
+      expect(tokens.filter(record => record.epoch === phase).map(record => record.pageIndex).sort()).toEqual([0, 1, 2]);
       for (const result of results) {
         if (result.pageIndex === 0) expect(result.grant).toMatchObject({ publish: true, subscribe: true, data: false });
-        else expect(result.grant).toEqual({ sources: [], publish: false, subscribe: true, data: false });
+        else expect(result.grant).toMatchObject({ sources: [], publish: false, subscribe: true, data: false });
+        expect(Number.isFinite(result.grant!.expiresAtMs)).toBe(true);
+        expect(result.grant!.expiresAtMs).toBeLessThanOrEqual(Date.now() + 30_000);
       }
     }
     try {
@@ -101,13 +104,14 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
         const onRequest = (request: Request) => {
           const input = controlRequest(request, origin); if (!input) return;
           const meta: RequestMeta = { startup, expectedGeneration: input.expectedGeneration };
-          if (input.action === "token") { meta.token = { epoch, pageIndex: index }; tokens.push(meta.token); }
+          if (input.action === "token") { meta.token = { epoch, pageIndex: index, protocolFinished: false, failure: "none" }; tokens.push(meta.token); }
           requests.set(request, meta);
         };
         const onFailed = (request: Request) => {
           const token = requests.get(request)?.token;
-          if (token && !token.observation) token.observation = Promise.resolve({ epoch: token.epoch, pageIndex: index, status: 0, finished: false, requestFailure: request.failure()?.errorText === "net::ERR_ABORTED" ? "aborted" : "network", errorStage: "finished" });
+          if (token) token.failure = request.failure()?.errorText === "net::ERR_ABORTED" ? "aborted" : "network";
         };
+        const onFinished = (request: Request) => { const token = requests.get(request)?.token; if (token) token.protocolFinished = true; };
         const onResponse = (response: Response) => {
           const path = new URL(response.url()).pathname;
           if (path.startsWith("/__voice-media-ci/") && response.ok()) assets.add(path);
@@ -117,13 +121,10 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
           if (input.action !== "token") return;
           const token = meta?.token;
           if (!token) { errors.push("untracked-token-request"); return; }
-          token.observation = observeMediaGrant({ epoch: token.epoch, pageIndex: index, status: response.status(), finished: () => response.finished(), failure: () => request.failure(), read: () => response.json(), verify: async token => {
-            const claims = await new TokenVerifier(process.env.LIVEKIT_API_KEY ?? "devkey", process.env.LIVEKIT_API_SECRET ?? "secret").verify(token, 0);
-            return { publish: claims.video?.canPublish === true, subscribe: claims.video?.canSubscribe === true, data: claims.video?.canPublishData === true };
-          } });
+          token.status = response.status();
         };
-        page.on("request", onRequest); page.on("requestfailed", onFailed); page.on("response", onResponse);
-        removeListeners.push(() => { page.off("request", onRequest); page.off("requestfailed", onFailed); page.off("response", onResponse); });
+        page.on("request", onRequest); page.on("requestfailed", onFailed); page.on("requestfinished", onFinished); page.on("response", onResponse);
+        removeListeners.push(() => { page.off("request", onRequest); page.off("requestfailed", onFailed); page.off("requestfinished", onFinished); page.off("response", onResponse); });
         await page.context().grantPermissions(["local-network-access", "microphone", "camera"], { origin: new URL(page.url()).origin });
         await bundle.serve(page);
         handles.push(await page.evaluateHandle(async channelId => {
@@ -161,24 +162,47 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       expect([...assets].some(path => path.endsWith(".wasm"))).toBe(true); expect([...assets].some(path => path.includes("e2ee") && path.endsWith(".mjs"))).toBe(true);
       // Fresh actual proposal/worker; prior listener ACK cannot become new readiness.
       await grantBarrier("initial"); epoch = "rekey";
+      const capturesBeforeRekey = await handles[0].evaluate(async h => (await h.stats()).captureCalls);
       await sorted[0].handle.evaluate(h => h.rekey());
       await grantBarrier("rekey");
       for (const handle of handles) await expect.poll(() => handle.evaluate(h => h.stats()), { timeout: 10_000 }).toMatchObject({ state: "agreed", workerCount: 2, ownAck: true, submitted: 3, keysBeforeOwnAck: 3, liveSources: 0 });
+      expect((await handles[0].evaluate(h => h.stats())).captureCalls).toBe(capturesBeforeRekey);
       for (const handle of handles.slice(1)) expect(await handle.evaluate(h => h.stats())).toMatchObject({ captureCalls: 0, sourceCalls: 0, localSenders: 0 });
+      // Old captures remain stopped until new deliberate current-epoch intent.
+      await owner.getByRole("heading", { level: 2, name: "actual-media" }).click();
+      await expect(async () => handles[0].evaluate(h => h.microphone(true))).toPass({ timeout: 8_000 });
+      await handles[0].evaluate(h => h.camera(true));
+      for (const handle of handles.slice(1)) await expect.poll(() => handle.evaluate(async h => { const stats = await h.stats(); return stats.audioEnergy > 0 && stats.videoFrames > 10 && stats.codecs.includes("audio/opus") && stats.codecs.includes("video/VP8"); }), { timeout: 15_000 }).toBe(true);
+      const beforeExpiry = await Promise.all(handles.slice(1).map(handle => handle.evaluate(h => h.stats())));
+      // Actual browser/SFU time, no fake clock/heartbeat. JWT join TTL is <=30s.
+      await owner.evaluate(() => new Promise(resolve => setTimeout(resolve, 31_000)));
+      for (const handle of handles) {
+        expect(await handle.evaluate(h => h.grants()[1].grant!.expiresAtMs < Date.now())).toBe(true);
+        expect(await handle.evaluate(h => h.stats())).toMatchObject({ state: "agreed", workerCount: 2, ownAck: true, submitted: 3, keysBeforeOwnAck: 3 });
+      }
+      for (const [index, handle] of handles.slice(1).entries()) {
+        const afterExpiry = await handle.evaluate(h => h.stats());
+        expect(afterExpiry.audioEnergy).toBeGreaterThan(beforeExpiry[index].audioEnergy);
+        expect(afterExpiry.videoFrames).toBeGreaterThan(beforeExpiry[index].videoFrames);
+        expect(afterExpiry).toMatchObject({ captureCalls: 0, sourceCalls: 0, localSenders: 0 });
+      }
+      // This current public intent checks the latest authoritative renewed lease.
+      await handles[0].evaluate(h => h.camera(true));
       await owner.screenshot({ path: test.info().outputPath("unactivated-call-control-page.png") });
       await grantBarrier("rekey");
       expect(errors).toEqual([]);
     } catch (error) {
       primaryFailure = true;
-      await test.info().attach("media-state-diagnostic.json", { contentType: "application/json", body: JSON.stringify({ epoch, states: await diagnostics(), tokenRequests: tokens.map(record => ({ epoch: record.epoch, pageIndex: record.pageIndex, observationStarted: !!record.observation })) }) });
+      await test.info().attach("media-state-diagnostic.json", { contentType: "application/json", body: JSON.stringify({ epoch, states: await diagnostics(), tokenRequests: tokens, grants: await Promise.all(handles.map(handle => handle.evaluate(h => h.grants()).catch(() => []))) }) });
       throw error;
     } finally {
-      const observations = await Promise.all(tokens.map(record => record.observation ?? Promise.resolve({ epoch: record.epoch, pageIndex: record.pageIndex, errorStage: "missing-response" })));
+      await Promise.all(handles.map(handle => handle.evaluate(h => h.settleGrants()).catch(() => {})));
+      const observations = await Promise.all(handles.map(handle => handle.evaluate(h => h.grants()).catch(() => [])));
       removeListeners.forEach(remove => remove());
       for (const handle of handles) { await handle.evaluate(h => h.close()).catch(() => {}); await handle.dispose(); }
       for (const page of pages) await page.context().close();
       await bundle.close();
-      if (!primaryFailure) expect(observations.every(result => result.errorStage === "none")).toBe(true);
+      if (!primaryFailure) expect(observations.flat().every(result => result.settled && result.errorStage === "none" && result.signatureVerified && result.bodyRead)).toBe(true);
     }
   });
 });
