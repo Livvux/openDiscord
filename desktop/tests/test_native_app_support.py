@@ -18,6 +18,100 @@ import native_app_flows as flows
 
 
 class NativeSupportTests(unittest.TestCase):
+    def test_save_requires_causal_unique_visible_dialog_and_never_replays_input(self):
+        dialog, foreign = '100001', '100002'
+        cases = [
+            ('preexisting', [[foreign]], False, 'preexisting_dialog', 0, 0, 0),
+            ('hidden_then_visible', [[], [], [dialog], [dialog], [dialog], []], False, 'none', 1, 1, 1),
+            ('multiple', [[], [dialog, foreign]], False, 'ambiguous_dialogs', 1, 0, 0),
+            ('replaced_before_focus', [[], [dialog], [foreign]], False, 'replaced_dialog', 1, 0, 0),
+            ('disappeared_then_same_visible', [[], [dialog], [], [], [dialog], [dialog], []], False, 'none', 1, 1, 1),
+            ('focus_failure', [[], [dialog], [dialog]], True, 'command_failed', 1, 1, 0),
+            ('replaced_during_close', [[], [dialog], [dialog], [foreign]], False, 'replaced_dialog', 1, 1, 1),
+        ]
+        for name, searches, focus_failure, reason, triggers, focuses, confirmations in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                destination = pathlib.Path(directory) / 'private-destination'
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 1
+                trigger = Mock()
+                remaining = iter(searches)
+                commands = []
+
+                def run(args, **kwargs):
+                    commands.append(args)
+                    self.assertTrue(kwargs['capture_output'])
+                    if args[1] == 'search':
+                        self.assertLessEqual(kwargs['timeout'], 1)
+                        values = next(remaining)
+                        return subprocess.CompletedProcess(args, 0 if values else 1,
+                            ('\n'.join(values) + ('\n' if values else '')).encode(), b'')
+                    if args[1] == 'windowfocus' and focus_failure:
+                        raise subprocess.CalledProcessError(1, args, stderr=b'private-error-must-not-escape')
+                    if args[1:] == ['key', 'Return']:
+                        destination.write_bytes(b'completed disposable download')
+                    return subprocess.CompletedProcess(args, 0, b'', b'')
+
+                with patch.dict(flows.metadata, {}, clear=True), \
+                        patch.object(flows.subprocess, 'run', side_effect=run), \
+                        patch.object(flows.time, 'sleep'), patch.object(flows, 'persist'):
+                    if reason == 'none':
+                        client.save(destination, trigger)
+                        self.assertEqual(flows.metadata['save_diagnostic']['phase'], 'complete')
+                    else:
+                        expected = subprocess.CalledProcessError if focus_failure else RuntimeError
+                        with self.assertRaises(expected):
+                            client.save(destination, trigger)
+                    self.assertEqual(flows.metadata['save_diagnostic']['reason'], reason)
+                    serialized = json.dumps(flows.metadata)
+                    for private in [dialog, foreign, str(destination), 'private-error-must-not-escape']:
+                        self.assertNotIn(private, serialized)
+                    if focus_failure:
+                        self.assertEqual(flows.metadata['save_diagnostic']['phase'], 'focus')
+                        self.assertEqual(flows.metadata['save_diagnostic']['exitcode'], 1)
+                self.assertEqual(trigger.call_count, triggers)
+                self.assertEqual(sum(args[1] == 'windowfocus' for args in commands), focuses)
+                self.assertEqual(sum(args[1:] == ['key', 'Return'] for args in commands), confirmations)
+                self.assertEqual(sum(args[1] == 'type' for args in commands), confirmations)
+                if focuses:
+                    focus_index = next(index for index, args in enumerate(commands) if args[1] == 'windowfocus')
+                    self.assertIn('--onlyvisible', commands[focus_index - 1])
+                    self.assertEqual(commands[focus_index][-1], dialog)
+                self.assertNotIn('--onlyvisible', commands[0])
+                self.assertIsNone(next(remaining, None), 'Every expected lifecycle observation must be consumed')
+
+    def test_save_visibility_deadline_is_30_seconds_with_single_trigger_and_no_focus(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 0
+        trigger = Mock()
+        clock = [0.0]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(flows.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, b'', b'')) as run, \
+                patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+                patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
+            with self.assertRaises(TimeoutError):
+                client.save(pathlib.Path(directory) / 'download', trigger)
+        trigger.assert_called_once()
+        self.assertEqual(clock[0], 30)
+        self.assertTrue(all(call.args[0][1] == 'search' for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs['timeout'] <= 1 for call in run.call_args_list))
+        self.assertEqual(run.call_args_list[-1].kwargs['timeout'], .25)
+
+    def test_save_trigger_or_global_deadline_failure_stops_without_focus_or_input(self):
+        for error in [RuntimeError('private-trigger-error'), flows.NativeDeadlineExpired()]:
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 0
+                trigger = Mock(side_effect=error)
+                with patch.object(flows.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, b'', b'')) as run, \
+                        patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
+                    with self.assertRaises(type(error)):
+                        client.save(pathlib.Path(directory) / 'download', trigger)
+                    run.assert_called_once()
+                    trigger.assert_called_once()
+                    self.assertNotIn('private-trigger-error', json.dumps(flows.metadata))
+
     def test_auth_destination_requires_exact_origin_path_and_protected_content(self):
         for path in ['/app', '/app/messages']:
             for url in [

@@ -261,18 +261,106 @@ class Native:
         identifier = self.element(xpath)
         self.command('POST', '/element/' + identifier + '/value', {'text': str(path)})
 
-    def save(self, destination):
-        def dialog():
-            found = subprocess.run(['xdotool', 'search', '--name', '^Save OpenDiscord download$'], capture_output=True, check=False)
-            return found.stdout.decode().splitlines() if found.returncode == 0 else None
-        windows = wait(dialog)
-        subprocess.run(['xdotool', 'windowfocus', '--sync', windows[-1]], check=True, timeout=5)
-        assert not destination.exists()
-        subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True, timeout=5)
-        subprocess.run(['xdotool', 'type', '--clearmodifiers', str(destination)], check=True, timeout=5)
-        subprocess.run(['xdotool', 'key', 'Return'], check=True, timeout=5)
-        wait(lambda: destination.exists() and destination.stat().st_size > 0)
-        wait(lambda: not dialog())
+    def save(self, destination, trigger):
+        state = {'profile': self.profile, 'phase': 'preflight', 'reason': 'none',
+                 'visible_count': 0, 'visibility_checks': 0, 'disappeared_count': 0}
+        metadata['save_diagnostic'] = state
+
+        def reject(reason):
+            state['reason'] = reason
+            raise RuntimeError('Native Save dialog invariant failed')
+
+        def windows(visible=False, timeout=1):
+            args = ['xdotool', 'search'] + (['--onlyvisible'] if visible else [])
+            found = subprocess.run(args + ['--name', '^Save OpenDiscord download$'],
+                                   capture_output=True, check=False, timeout=timeout)
+            if found.returncode == 1 and not found.stdout and not found.stderr:
+                return []
+            if found.returncode != 0:
+                state['exitcode'] = found.returncode
+                reject('search_failed')
+            identifiers = found.stdout.decode('ascii').splitlines()
+            if any(not value.isdecimal() or int(value) <= 0 for value in identifiers):
+                reject('invalid_window_reference')
+            return identifiers
+
+        try:
+            # This dedicated Xvfb display contains only our three idle/serial profiles.
+            # A clean baseline and one UI trigger identify this dialog even with a portal.
+            if windows():
+                reject('preexisting_dialog')
+            assert not destination.exists()
+            state['phase'] = 'trigger'
+            trigger()
+            state['phase'] = 'await_visible_dialog'
+            deadline_at = time.monotonic() + 30
+            candidate = None
+            while True:
+                remaining = deadline_at - time.monotonic()
+                if remaining <= 0:
+                    state['reason'] = 'readiness_deadline'
+                    raise TimeoutError('Native Save readiness deadline exceeded')
+                matches = windows(visible=True, timeout=min(1, remaining))
+                state['visibility_checks'] += 1
+                state['visible_count'] = len(matches)
+                if len(matches) > 1:
+                    reject('ambiguous_dialogs')
+                if matches:
+                    if candidate is not None and matches[0] != candidate:
+                        reject('replaced_dialog')
+                    candidate = matches[0]
+                    remaining = deadline_at - time.monotonic()
+                    if remaining <= 0:
+                        state['reason'] = 'readiness_deadline'
+                        raise TimeoutError('Native Save readiness deadline exceeded')
+                    # Revalidate the same visible window immediately before focusing it.
+                    current = windows(visible=True, timeout=min(1, remaining))
+                    state['visibility_checks'] += 1
+                    state['visible_count'] = len(current)
+                    if len(current) > 1:
+                        reject('ambiguous_dialogs')
+                    if current and current[0] != candidate:
+                        reject('replaced_dialog')
+                    if current:
+                        remaining = deadline_at - time.monotonic()
+                        if remaining <= 0:
+                            state['reason'] = 'readiness_deadline'
+                            raise TimeoutError('Native Save readiness deadline exceeded')
+                        state['phase'] = 'focus'
+                        subprocess.run(['xdotool', 'windowfocus', '--sync', candidate],
+                                       capture_output=True, check=True, timeout=min(5, remaining))
+                        break
+                    state['disappeared_count'] += 1
+                remaining = deadline_at - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(.25, remaining))
+            assert not destination.exists()
+            state['phase'] = 'select_destination'
+            subprocess.run(['xdotool', 'key', 'ctrl+a'], capture_output=True, check=True, timeout=5)
+            state['phase'] = 'type_destination'
+            subprocess.run(['xdotool', 'type', '--clearmodifiers', str(destination)], capture_output=True, check=True, timeout=5)
+            state['phase'] = 'confirm'
+            subprocess.run(['xdotool', 'key', 'Return'], capture_output=True, check=True, timeout=5)
+            state['phase'] = 'await_file'
+            wait(lambda: destination.exists() and destination.stat().st_size > 0)
+            state['phase'] = 'await_closed'
+
+            def closed():
+                current = windows()
+                if any(window != candidate for window in current):
+                    reject('replaced_dialog')
+                return not current
+
+            wait(closed)
+            state['phase'] = 'complete'
+        except subprocess.CalledProcessError as error:
+            state.update(reason='command_failed', exitcode=error.returncode)
+            raise
+        except subprocess.TimeoutExpired:
+            state['reason'] = 'command_timeout'
+            raise
+        finally:
+            persist()
 
 def endpoint_class(path):
     # Never retain raw paths: session/element IDs and URL values are not diagnostics.
@@ -816,16 +904,14 @@ def main():
                 attachment_url = bob.command('GET', '/element/' + identifier + '/attribute/href')
                 status = recovered.async_script('fetch(arguments[0]).then(r=>arguments[arguments.length-1](r.status))', attachment_url)
                 assert status in [401, 403, 404]
-                bob.command('POST', '/element/' + identifier + '/click', {})
                 downloaded = sandbox / 'attachment.txt'
-                bob.save(downloaded)
+                bob.save(downloaded, lambda: bob.command('POST', '/element/' + identifier + '/click', {}))
                 wait(lambda: downloaded.read_bytes() == payload)
                 metadata['attachment'] = {'sha256': hashlib.sha256(payload).hexdigest(), 'bytes': len(payload), 'outsider_status': status}
             with stage('community_export'):
                 alice.click('Community settings', 'a')
-                alice.click('Download community export', 'a')
                 exported = sandbox / 'community.json'
-                alice.save(exported)
+                alice.save(exported, lambda: alice.click('Download community export', 'a'))
                 data = complete_json(exported, export_shape)
                 assert data['format'] == 'opendiscord.community-export'
                 assert len(data['messages']) >= 1
@@ -869,9 +955,8 @@ def main():
                 if not alice.text('Create encrypted recovery backup'):
                     alice.click('Devices and recovery')
                 alice.click('Create encrypted recovery backup')
-                alice.click('Download your private recovery file', 'a')
                 recovery = sandbox / 'recovery.json'
-                alice.save(recovery)
+                alice.save(recovery, lambda: alice.click('Download your private recovery file', 'a'))
                 complete_json(recovery, recovery_shape)
                 recovered.login(email)
                 recovered.click('Devices and recovery')
