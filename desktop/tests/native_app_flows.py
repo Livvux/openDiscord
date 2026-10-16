@@ -12,6 +12,7 @@ import os
 import pathlib
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,11 +26,12 @@ from contextlib import contextmanager
 ORIGIN = 'https://localhost:9443'
 ELEMENT = 'element-6066-11e4-a52e-4f735466cecf'
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROC_ROOT = pathlib.Path('/proc')
 EVIDENCE = ROOT / 'native-app-evidence'
 EVIDENCE.mkdir(exist_ok=True)
 CASES = ['native_profile_capabilities', 'signup_login', 'community_navigation',
          'private_attachment', 'community_export', 'dm_enrollment', 'dm_sas_delivery',
-         'dm_persistence', 'dm_recovery', 'logout', 'runtime_errors']
+         'dm_persistence', 'dm_gateway_recovery', 'dm_recovery', 'logout', 'runtime_errors']
 results = {name: {'status': 'not-run'} for name in CASES}
 metadata = {'sha': os.environ.get('GITHUB_SHA'), 'scope': 'Linux native production app only',
             'console_capture': 'WebDriver console endpoint probed; absence reported explicitly'}
@@ -37,6 +39,109 @@ metadata = {'sha': os.environ.get('GITHUB_SHA'), 'scope': 'Linux native producti
 
 class NativeDeadlineExpired(Exception):
     """Global expiry must never be mistaken for a retryable socket OSError."""
+
+
+class OwnedGateway:
+    """One workflow-owned Node child; signals always use its retained Linux pidfd."""
+    def __init__(self):
+        self.fd = None
+        self.resume_required = False
+        metadata['gateway_recovery'] = {'ownership_valid': False}
+        try:
+            values = [os.environ.get(key, '') for key in
+                      ['NATIVE_APP_PROXY_PID', 'NATIVE_APP_LAUNCHER_PID']]
+            if any(not value.isascii() or not value.isdecimal() or int(value) <= 1 for value in values):
+                raise ValueError('Missing owned gateway identity')
+            self.pid, self.launcher = map(int, values)
+            if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+                raise RuntimeError('Linux pidfd signaling unavailable')
+            self.fd = os.pidfd_open(self.pid, 0)
+            record = self._record()
+            self.start = record[19]
+            directory = PROC_ROOT / str(self.pid)
+            node = shutil.which('node')
+            if (record[0] in {'T', 't', 'Z', 'X'} or int(record[1]) != self.launcher
+                    or int(record[2]) != self.pid or int(record[3]) != self.pid
+                    or node is None or directory.joinpath('exe').resolve() != pathlib.Path(node).resolve()
+                    or directory.joinpath('cwd').resolve() != ROOT.parent
+                    or directory.joinpath('cmdline').read_bytes().split(b'\0') !=
+                        [b'node', b'desktop/tests/app_proxy.mjs', b'']):
+                raise ValueError('Owned gateway identity mismatch')
+            uid = next(line.split()[1:] for line in directory.joinpath('status').read_text().splitlines()
+                       if line.startswith('Uid:'))
+            if uid != [str(os.getuid())] * 4:
+                raise ValueError('Owned gateway UID mismatch')
+            self.stopped()  # Recheck the start identity after all private metadata reads.
+            metadata['gateway_recovery']['ownership_valid'] = True
+        except BaseException:
+            self.close()
+            raise
+
+    def _record(self):
+        value = (PROC_ROOT / str(self.pid) / 'stat').read_text()
+        if int(value.split(' ', 1)[0]) != self.pid:
+            raise ValueError('Owned gateway record mismatch')
+        fields = value.rsplit(') ', 1)[1].split()
+        if len(fields) < 20:
+            raise ValueError('Incomplete owned gateway record')
+        return fields
+
+    def stopped(self):
+        record = self._record()
+        if record[19] != self.start or int(record[1]) != self.launcher or record[0] in {'Z', 'X'}:
+            raise ValueError('Owned gateway identity changed')
+        return record[0] in {'T', 't'}
+
+    def await_state(self, stopped):
+        end = time.monotonic() + 1
+        while True:
+            if self.stopped() is stopped:
+                return
+            if time.monotonic() >= end:
+                raise TimeoutError('Owned gateway state deadline exceeded')
+            time.sleep(.01)
+
+    def resume(self):
+        if self.resume_required:
+            signal.pidfd_send_signal(self.fd, signal.SIGCONT, None, 0)
+            self.await_state(False)
+            self.resume_required = False
+            metadata['gateway_recovery']['resumed'] = True
+
+    @contextmanager
+    def paused(self):
+        if self.stopped():
+            raise ValueError('Owned gateway already stopped')
+        previous = signal.getitimer(signal.ITIMER_REAL)
+        if previous[0] <= 0:
+            raise RuntimeError('Global native deadline is required')
+        started = time.monotonic()
+        handler = signal.signal(signal.SIGALRM, deadline)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, min(8, previous[0]))
+            # Set the obligation first: Python can be interrupted after STOP was applied.
+            self.resume_required = True
+            signal.pidfd_send_signal(self.fd, signal.SIGSTOP, None, 0)
+            self.await_state(True)
+            metadata['gateway_recovery']['stopped_confirmed'] = True
+            yield
+        finally:
+            # Resume precedes any diagnostics, even when a catchable signal interrupted a command.
+            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM, signal.SIGTERM, signal.SIGINT})
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            try:
+                self.resume()
+            finally:
+                elapsed = time.monotonic() - started
+                metadata['gateway_recovery']['paused_seconds'] = round(elapsed, 3)
+                signal.signal(signal.SIGALRM, handler)
+                signal.setitimer(signal.ITIMER_REAL, max(.001, previous[0] - elapsed), previous[1])
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
 
 def persist():
@@ -569,9 +674,11 @@ def dm_delivery_state(client, message, timeout=2):
         private_log_count: logs.length, message_row_count: rows.length,
         log_visible: logs.length === 1 && !!logs[0].getClientRects().length && getComputedStyle(logs[0]).visibility !== 'hidden',
         expected_plaintext_present: rows.some(matches),
+        expected_plaintext_count: rows.filter(matches).length,
         own_plaintext_present: rows.some(row => matches(row) && paragraphs(row)[0]?.textContent.startsWith('You ·')),
         decrypt_error_count: rows.filter(row => paragraphs(row)[1]?.textContent === decryptError).length,
         textarea_count: controls.length, draft_empty: !!textarea && textarea.value === '',
+        draft_matches: !!textarea && textarea.value === expected,
         textarea_enabled: !!textarea && !textarea.disabled,
         send_control_count: buttons.length, send_enabled: buttons.length === 1 && !buttons[0].disabled,
         disabled_control_count: controls.concat(buttons).filter(node => node.disabled).length,
@@ -583,15 +690,127 @@ def dm_delivery_state(client, message, timeout=2):
             if snapshot.get('visibility') in {'visible', 'hidden'} else 'other'}
     for key in ['selection_count', 'target_selection_count', 'private_log_count', 'message_row_count',
                 'decrypt_error_count', 'textarea_count', 'send_control_count', 'disabled_control_count',
-                'verification_count', 'alert_count']:
+                'verification_count', 'alert_count', 'expected_plaintext_count']:
         value = snapshot.get(key)
         if type(value) is int and 0 <= value <= 10000:
             safe[key] = value
     for key in ['at_messages', 'log_visible', 'expected_plaintext_present', 'own_plaintext_present',
-                'draft_empty', 'textarea_enabled', 'send_enabled']:
+                'draft_empty', 'draft_matches', 'textarea_enabled', 'send_enabled']:
         if type(snapshot.get(key)) is bool:
             safe[key] = snapshot[key]
     return safe
+
+
+def gateway_timeout(end):
+    remaining = end - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Gateway recovery phase deadline exceeded')
+    return min(2, remaining)
+
+
+def gateway_probe(client, end):
+    """Public, uncached real request; its abort affects only this diagnostic GET."""
+    timeout = gateway_timeout(end)
+    value = client.command('POST', '/execute/async', {'args': [min(1000, timeout * 500)], 'script': """
+      const milliseconds = arguments[0], done = arguments[arguments.length - 1];
+      const controller = new AbortController();
+      let expired = false;
+      const timer = setTimeout(() => { expired = true; controller.abort(); }, milliseconds);
+      fetch('/sign-in', {method: 'GET', cache: 'no-store', signal: controller.signal})
+        .then(response => done({outcome: 'http_response', status_class: Math.floor(response.status / 100)}),
+          () => done({outcome: expired ? 'deadline' : 'network_error'}))
+        .finally(() => clearTimeout(timer));
+    """}, timeout=timeout)
+    if not isinstance(value, dict) or value.get('outcome') not in {'deadline', 'network_error', 'http_response'}:
+        raise ValueError('Invalid public gateway probe outcome')
+    safe = {'outcome': value['outcome']}
+    if type(value.get('status_class')) is int and 1 <= value['status_class'] <= 5:
+        safe['status_class'] = value['status_class']
+    return safe
+
+
+def gateway_dm_ready(state):
+    return (all(state.get(key) is True for key in ['at_messages', 'log_visible'])
+            and all(state.get(key) == 1 for key in ['selection_count', 'target_selection_count',
+                                                  'private_log_count', 'textarea_count', 'send_control_count'])
+            and state.get('visibility') == 'visible' and state.get('alert_count') == 0
+            and state.get('decrypt_error_count') == 0)
+
+
+def gateway_recovery(alice, bob, gateway, message, previous_message):
+    """One genuine UI send through a confirmed, briefly stopped actual HTTPS gateway."""
+    # Reserve 30s for this stage plus 180s for the measured baseline's later recovery/logout.
+    if signal.getitimer(signal.ITIMER_REAL)[0] < 210:
+        raise TimeoutError('Insufficient remaining native acceptance budget')
+    end = time.monotonic() + 30
+    state = metadata['gateway_recovery']
+
+    def observe(client, expected=message):
+        return dm_delivery_state(client, expected, timeout=gateway_timeout(end))
+
+    def require(condition):
+        if not condition:
+            raise AssertionError('Gateway recovery invariant failed')
+
+    for client in [alice, bob]:
+        current = observe(client)
+        require(gateway_dm_ready(current) and current.get('expected_plaintext_count') == 0
+                and current.get('textarea_enabled') is True)
+    # Resolve real, unique W3C controls while the gateway is still healthy.
+    controls = []
+    for xpath in ['//textarea[@id="private-message"]', '//button[normalize-space(.)="Send encrypted message"]']:
+        values = alice.command('POST', '/elements', {'using': 'xpath', 'value': xpath}, timeout=gateway_timeout(end))
+        require(len(values) == 1)
+        controls.append(values[0][ELEMENT])
+    composer, send = controls
+    alice.command('POST', '/element/' + composer + '/value', {'text': message}, timeout=gateway_timeout(end))
+    before = observe(alice)
+    require(gateway_dm_ready(before) and before.get('draft_matches') is True and before.get('send_enabled') is True)
+    require(alice.command('GET', '/element/' + send + '/enabled', timeout=gateway_timeout(end)) is True)
+    health = gateway_probe(alice, end)
+    state['health_status_class'] = health.get('status_class', 0)
+    require(health == {'outcome': 'http_response', 'status_class': 2})
+
+    with gateway.paused():
+        proof = gateway_probe(alice, end)
+        state['probe_outcome'] = proof['outcome']
+        require(proof['outcome'] == 'deadline')
+        # Exactly one native click, with no replay even if its response is lost.
+        alice.command('POST', '/element/' + send + '/click', {}, timeout=gateway_timeout(end))
+        pending = observe(alice)
+        recipient = observe(bob)
+        state['draft_retained'] = pending.get('draft_matches') is True
+        state['busy'] = pending.get('textarea_enabled') is False and pending.get('send_enabled') is False
+        require(gateway_dm_ready(pending) and gateway_dm_ready(recipient)
+                and state['draft_retained'] and state['busy']
+                and pending.get('disabled_control_count') == 2
+                and pending.get('expected_plaintext_count') == 0
+                and recipient.get('expected_plaintext_count') == 0)
+
+    health = gateway_probe(alice, end)
+    state['health_status_class'] = health.get('status_class', 0)
+    require(health == {'outcome': 'http_response', 'status_class': 2})
+    while True:
+        sender, recipient = observe(alice), observe(bob)
+        require(gateway_dm_ready(sender) and gateway_dm_ready(recipient))
+        require(sender.get('expected_plaintext_count', 0) <= 1 and recipient.get('expected_plaintext_count', 0) <= 1)
+        if (sender.get('expected_plaintext_count') == recipient.get('expected_plaintext_count') == 1
+                and sender.get('own_plaintext_present') is True and sender.get('draft_empty') is True
+                and sender.get('textarea_enabled') is True):
+            state['delivered_once'] = True
+            break
+        time.sleep(min(.25, gateway_timeout(end)))
+    for client in [alice, bob]:
+        previous = observe(client, previous_message)
+        require(gateway_dm_ready(previous) and previous.get('expected_plaintext_count') == 1)
+    safe = alice.command('POST', '/execute/async', {'args': [message], 'script': """
+      const text = arguments[0], done = arguments[arguments.length - 1];
+      fetch('/api/dm', {cache: 'no-store'}).then(r => { if (!r.ok) throw Error(); return r.json(); })
+        .then(async r => { const id = r.conversations[0].id;
+          const response = await fetch('/api/dm?conversation=' + encodeURIComponent(id), {cache: 'no-store'});
+          done(response.ok && !(await response.text()).includes(text)); }).catch(() => done(false));
+    """}, timeout=gateway_timeout(end))
+    require(safe is True)
 
 
 def dm_diagnostics(client, timeout=2):
@@ -708,7 +927,7 @@ def failure_diagnostics(clients, budget=10, *, delivery_message=None):
     """Called inside the existing global diagnostic timer, sharing its total budget."""
     deadline_at = time.monotonic() + budget
     if any(results[name]['status'] == 'failed' for name in [
-            'dm_enrollment', 'dm_sas_delivery', 'dm_persistence', 'dm_recovery', 'logout']):
+            'dm_enrollment', 'dm_sas_delivery', 'dm_persistence', 'dm_gateway_recovery', 'dm_recovery', 'logout']):
         # Keep the failed application command before read-only diagnostics replace it.
         metadata['dm_failed_request'] = dict(metadata.get('last_native_request', {}))
         profile = metadata.get('dm_action', {}).get('profile')
@@ -1113,11 +1332,13 @@ def main():
     metadata['webkit_package'] = subprocess.run(['dpkg-query', '-W', '-f=${Version}', 'libwebkit2gtk-4.1-0'], capture_output=True, text=True, check=True, timeout=5).stdout
     persist()
     clients = []
+    gateway = None
     delivery_message = None
     with tempfile.TemporaryDirectory(prefix='native-app-flows-') as directory:
         sandbox = pathlib.Path(directory)
         try:
             with stage('native_profile_capabilities'):
+                gateway = OwnedGateway()
                 for index in range(3):
                     client = Native(index, sandbox)
                     clients.append(client)
@@ -1244,6 +1465,9 @@ def main():
                 bob.prefix_click('Native Alice')
                 dm_progress(bob.profile, 'await_persisted_message')
                 wait(lambda: bob.text(secret_message), 60)
+            with stage('dm_gateway_recovery'):
+                outage_message = 'Disposable native gateway recovery ' + uuid.uuid4().hex
+                gateway_recovery(alice, bob, gateway, outage_message, secret_message)
             with stage('dm_recovery'):
                 dm_progress(alice.profile, 'check_recovery_controls')
                 if not alice.text('Create encrypted recovery backup'):
@@ -1266,14 +1490,14 @@ def main():
                 summary = recovered.element('//summary[starts-with(normalize-space(.),"View recovered archive")]')
                 recovered.command('POST', '/element/' + summary + '/click', {})
                 dm_progress(recovered.profile, 'await_recovered_message')
-                wait(lambda: recovered.text(secret_message), 60)
+                wait(lambda: recovered.text(secret_message) and recovered.text(outage_message), 60)
                 dm_progress(recovered.profile, 'reload_recovered_archive')
                 recovered.command('POST', '/refresh', {})
                 dm_progress(recovered.profile, 'open_recovered_archive')
                 summary = recovered.element('//summary[starts-with(normalize-space(.),"View recovered archive")]')
                 recovered.command('POST', '/element/' + summary + '/click', {})
                 dm_progress(recovered.profile, 'await_recovered_message')
-                wait(lambda: recovered.text(secret_message), 60)
+                wait(lambda: recovered.text(secret_message) and recovered.text(outage_message), 60)
                 dm_progress(recovered.profile, 'remove_recovery_file')
                 recovery.unlink()
             with stage('logout'):
@@ -1304,7 +1528,17 @@ def main():
         finally:
             primary_error = sys.exception()
             signal.alarm(0)
-            if primary_error is not None:
+            gateway_error = None
+            if gateway is not None:
+                blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM, signal.SIGTERM, signal.SIGINT})
+                try:
+                    gateway.resume()
+                except Exception as error:
+                    gateway_error = type(error).__name__
+                    metadata['gateway_resume_error_type'] = gateway_error
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+            if primary_error is not None and gateway_error is None:
                 signal.setitimer(signal.ITIMER_REAL, 10)
                 try:
                     failure_diagnostics(clients, delivery_message=delivery_message)
@@ -1313,6 +1547,10 @@ def main():
                 finally:
                     signal.setitimer(signal.ITIMER_REAL, 0)
             errors = cleanup_clients(list(reversed(clients)))
+            if gateway is not None:
+                gateway.close()
+            if gateway_error is not None:
+                errors.append('gateway_resume_' + gateway_error)
             metadata['cleanup_errors'] = errors
             persist()
             if errors:

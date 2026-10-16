@@ -65,7 +65,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          gateway_still_owned() {
+            local record
+            local -a fields
+            [ -n "${proxy_pid:-}" ] && [ -n "${proxy_start:-}" ] || return 1
+            IFS= read -r record 2>/dev/null < "/proc/$proxy_pid/stat" || return 1
+            read -ra fields <<< "${record##*) }"
+            [ "${fields[1]:-}" = "$$" ] && [ "${fields[19]:-}" = "$proxy_start" ]
+          }
           cleanup() {
+            trap - EXIT
+            trap '' TERM INT
+            # The captured child is resumed before any termination, including Python failure.
+            if gateway_still_owned; then kill -CONT "$proxy_pid" 2>/dev/null || true; fi
             for pid in "${proxy_pid:-}" "${app_pid:-}"; do
               if [ -n "$pid" ]; then kill -- "-$pid" 2>/dev/null || true; fi
             done
@@ -78,6 +90,8 @@ jobs:
             done
           }
           trap cleanup EXIT
+          trap 'exit 143' TERM
+          trap 'exit 130' INT
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$NATIVE_TLS_KEY" -out "$NATIVE_TLS_CERT" -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost'
           chmod 600 "$NATIVE_TLS_KEY"
           sudo cp "$NATIVE_TLS_CERT" /usr/local/share/ca-certificates/opendiscord-native-app.crt
@@ -89,12 +103,15 @@ jobs:
           app_pid=$!
           setsid node desktop/tests/app_proxy.mjs > /tmp/native-app-proxy.log 2>&1 &
           proxy_pid=$!
+          IFS= read -r proxy_record 2>/dev/null < "/proc/$proxy_pid/stat"
+          read -ra proxy_fields <<< "${proxy_record##*) }"
+          proxy_start=${proxy_fields[19]:-}
           for attempt in $(seq 1 60); do
             if curl --fail --silent --output /dev/null https://localhost:9443/sign-in; then break; fi
             sleep 1
           done
           curl --fail --silent --output /dev/null https://localhost:9443/sign-in
-          xvfb-run -a python3 desktop/tests/native_app_flows.py
+          NATIVE_APP_PROXY_PID="$proxy_pid" NATIVE_APP_LAUNCHER_PID="$$" xvfb-run -a python3 desktop/tests/native_app_flows.py
       - name: Remove ephemeral trust and fixture data
         if: always()
         run: |
