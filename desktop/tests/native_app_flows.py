@@ -5,9 +5,11 @@ Artifacts intentionally contain only step outcomes and sanitized platform metada
 """
 import base64
 import hashlib
+import http.client
 import json
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -241,6 +243,116 @@ DRIVER_SIGNATURES = {
 }
 
 
+# Debug enum names verified against locked hyper-util0.1.19 / hyper1.8.1 sources.
+LEGACY_ERROR_KINDS = ('Canceled', 'ChannelClosed', 'Connect', 'UserUnsupportedRequestMethod',
+                      'UserUnsupportedVersion', 'UserAbsoluteUriRequired', 'SendRequest')
+HYPER_ERROR_KINDS = ('Parse', 'User', 'IncompleteMessage', 'UnexpectedMessage', 'Canceled',
+                     'ChannelClosed', 'Io', 'HeaderTimeout', 'Body', 'BodyWrite', 'Shutdown', 'Http2')
+
+
+def driver_error_categories(data):
+    categories = {'legacy': {kind: 0 for kind in LEGACY_ERROR_KINDS},
+                  'hyper': {kind: 0 for kind in HYPER_ERROR_KINDS}}
+    for line in data.splitlines():
+        if not line.startswith(DRIVER_SIGNATURES['connection_error']):
+            continue
+        for family, pattern in [('legacy', rb'hyper_util::client::legacy::Error\(([A-Za-z]+)[,)]'),
+                                ('hyper', rb'hyper::Error\(([A-Za-z]+)[(,)]')]:
+            for match in re.finditer(pattern, line):
+                name = match.group(1).decode('ascii')
+                if name in categories[family]:
+                    categories[family][name] += 1
+    return categories
+
+
+class ContractDeadline(TimeoutError):
+    pass
+
+
+def transport_contract(clients, budget=20):
+    """Pre-auth read-only diagnostic; never changes/replaces the main transport."""
+    names = ('urllib_tauri', 'urllib_native', 'persistent_tauri')
+    outcomes = {name: {'status': 'not-run'} for name in names}
+    started = time.monotonic()
+    old_remaining, old_interval = signal.getitimer(signal.ITIMER_REAL)
+
+    def deadline(_signal, _frame):
+        raise ContractDeadline('Read-only transport contract deadline')
+
+    old_handler = signal.signal(signal.SIGALRM, deadline)
+    limit = min(budget, old_remaining) if old_remaining > 0 else budget
+    signal.setitimer(signal.ITIMER_REAL, limit)
+    try:
+        for index, name in enumerate(names):
+            client = clients[index]
+            outcome = {'status': 'running', 'commands': []}
+            outcomes[name] = outcome
+            connection = None
+            if name == 'persistent_tauri':
+                connection = http.client.HTTPConnection('127.0.0.1', client.port, timeout=1)
+
+            def request(method, path, body=None):
+                remaining = limit - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise ContractDeadline('Read-only transport contract deadline')
+                timeout = min(1, remaining)
+                encoded = json.dumps(body).encode() if body is not None else None
+                command = {'endpoint': endpoint_class(path), 'method': method}
+                outcome['commands'].append(command)
+                if connection is not None:
+                    connection.timeout = timeout
+                    connection.request(method, path, body=encoded, headers={'Content-Type': 'application/json'})
+                    response = connection.getresponse()
+                else:
+                    port = client.port + 1 if name == 'urllib_native' else client.port
+                    req = urllib.request.Request(f'http://127.0.0.1:{port}' + path, encoded,
+                        {'Content-Type': 'application/json'}, method=method)
+                    response = urllib.request.urlopen(req, timeout=timeout)
+                with response:
+                    command['http_status'] = response.status
+                    if response.status != 200:
+                        raise RuntimeError('Read-only transport contract HTTP failure')
+                    return json.load(response)['value']
+
+            try:
+                request('GET', '/status')
+                prefix = '/session/' + client.session
+                elements = request('POST', prefix + '/elements', {'using': 'css selector', 'value': 'input[type="email"]'})
+                if not isinstance(elements, list) or len(elements) != 1:
+                    raise ValueError('Public email control contract failed')
+                identifier = elements[0][ELEMENT]
+                displayed = request('GET', prefix + '/element/' + identifier + '/displayed')
+                enabled = request('GET', prefix + '/element/' + identifier + '/enabled')
+                if displayed is not True or enabled is not True:
+                    raise ValueError('Public email control contract failed')
+                outcome['status'] = 'passed'
+            except ContractDeadline:
+                outcome['status'] = 'deadline_exceeded'
+                break
+            except urllib.error.HTTPError as error:
+                outcome['status'] = 'failed'
+                outcome['http_status'] = error.code
+                error.close()
+            except Exception as error:
+                outcome['status'] = 'failed'
+                outcome['error_type'] = type(error).__name__
+            finally:
+                if connection is not None:
+                    connection.close()
+    except ContractDeadline:
+        for outcome in outcomes.values():
+            if outcome['status'] == 'running':
+                outcome['status'] = 'deadline_exceeded'
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        elapsed = time.monotonic() - started
+        if old_remaining > 0:
+            signal.setitimer(signal.ITIMER_REAL, max(.001, old_remaining - elapsed), old_interval)
+    return {'scope': 'pre-auth read-only native transport diagnostic; no application-flow acceptance',
+            'variants': outcomes, 'seconds': round(time.monotonic() - started, 2)}
+
+
 class NoProbeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
         return None
@@ -275,6 +387,7 @@ def transport_diagnostics(clients, budget=10):
             data = os.pread(client.log.fileno(), min(size, 65536), max(0, size - 65536))
             entry['driver_log_sampled'] = size > 65536
             entry['driver_signatures'] = {key: data.count(marker) for key, marker in DRIVER_SIGNATURES.items()}
+            entry['driver_error_categories'] = driver_error_categories(data)
         except OSError as error:
             entry['driver_log_error_type'] = type(error).__name__
         entry['intermediary_status'] = probe(f'http://127.0.0.1:{client.port}/status')
@@ -456,6 +569,8 @@ def main():
                     client.script('localStorage.setItem("native-profile",arguments[0]);return true', str(index))
                 assert [c.script('return localStorage.getItem("native-profile")') for c in clients] == ['0', '1', '2']
                 # Probe real application file input after enrollment below; never synthetic inputs.
+            metadata['preauth_transport_contract'] = transport_contract(clients)
+            persist()
             alice, bob, recovered = clients
             with stage('signup_login'):
                 email = alice.signup('Native Alice')

@@ -87,6 +87,69 @@ class NativeSupportTests(unittest.TestCase):
         self.assertNotIn('http', json.dumps(summary))
         self.assertEqual(summary['memory_kib']['MemAvailable'], 123)
 
+    def test_nested_hyper_categories_are_allowlisted_without_log_payload(self):
+        data = (b'Error serving connection: hyper::Error(User(Service), '
+                b'hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage))) private payload\n'
+                b'Error serving connection: hyper::Error(PrivateSecret, private payload)\n')
+        value = flows.driver_error_categories(data)
+        self.assertEqual(value['legacy']['SendRequest'], 1)
+        self.assertEqual(value['hyper']['User'], 1)
+        self.assertEqual(value['hyper']['IncompleteMessage'], 1)
+        self.assertNotIn('private', json.dumps(value).lower())
+        self.assertEqual(sum(value['legacy'].values()) + sum(value['hyper'].values()), 3)
+
+    def test_preauth_contract_stops_failed_variant_without_retry_and_redacts_identifiers(self):
+        calls = []
+        timers = []
+
+        def response(number):
+            values = [{'ready': True}, [{flows.ELEMENT: 'private-element'}], True, True]
+            result = io.BytesIO(json.dumps({'value': values[number]}).encode())
+            result.status = 200
+            return result
+
+        def urlopen(request, timeout):
+            self.assertLessEqual(timeout, 1)
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                raise flows.http.client.RemoteDisconnected('private transport text')
+            return response(len(calls) - 2)
+
+        class Connection:
+            def __init__(self, host, port, timeout):
+                self.number = 0
+                self.timeout = timeout
+
+            def request(self, method, path, body, headers):
+                pass
+
+            def getresponse(self):
+                result = response(self.number)
+                self.number += 1
+                return result
+
+            def close(self):
+                pass
+
+        clients = [types.SimpleNamespace(profile=index, port=4444 + index * 2,
+                   session='private-session') for index in range(3)]
+        with patch.object(flows.urllib.request, 'urlopen', side_effect=urlopen), \
+                patch.object(flows.http.client, 'HTTPConnection', Connection), \
+                patch.object(flows.signal, 'getitimer', return_value=(500, 0)), \
+                patch.object(flows.signal, 'setitimer', side_effect=lambda *args: timers.append(args)), \
+                patch.object(flows.signal, 'signal'), \
+                patch.object(flows.time, 'monotonic', return_value=0):
+            summary = flows.transport_contract(clients)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(summary['variants']['urllib_tauri']['status'], 'failed')
+        self.assertEqual(len(summary['variants']['urllib_tauri']['commands']), 1)
+        self.assertEqual(summary['variants']['urllib_native']['status'], 'passed')
+        self.assertEqual(summary['variants']['persistent_tauri']['status'], 'passed')
+        self.assertNotIn('private', json.dumps(summary).lower())
+        self.assertNotIn('http://', json.dumps(summary))
+        self.assertEqual(timers[0][1], 20)
+        self.assertEqual(timers[-1][1], 500)
+
     def test_console_only_explicit_w3c_unsupported_codes_are_unavailable(self):
         for code, expected in [('unknown command', True), ('unsupported operation', True),
                                ('unknown error', False), ('invalid session id', False)]:
