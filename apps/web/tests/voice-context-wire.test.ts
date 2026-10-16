@@ -8,7 +8,7 @@ import { validateVoiceContextControl, voiceContextControlSchema } from "../src/l
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("S6-A1 eight-party encrypted wire feasibility, no eight-browser/media claim", () => {
-  for (const idKind of ["uuid", "max-ascii", "max-utf8"] as const) for (const kind of ["context-offer", "context-accept", "context-restart", "material"] as const) it(`measures ${idKind} IDs in the entire native ${kind} VoiceCryptoRequest against the unchanged 8192-byte service ceiling`, async () => {
+  for (const idKind of ["uuid", "max-ascii", "max-utf8", "max-json-escaped"] as const) for (const kind of ["context-offer", "context-accept", "context-restart", "material"] as const) it(`measures ${idKind} IDs in the entire native ${kind} VoiceCryptoRequest against the unchanged 8192-byte service ceiling`, async () => {
     const measurements: number[] = [];
     const fixture = await contextWireFixture(async ({ request }) => {
       if (request.kind === "send" && request.eventType === "m.room.encrypted") {
