@@ -8,7 +8,10 @@ test("Voice HTTP uses the real browser session and registered enrollment without
   page.on("console", message => { if (message.type() === "error" && !/Failed to load resource.*\b(403|405)\b/.test(message.text())) consoleErrors.push("unexpected-console-error"); });
   await signUp(page, "Voice Control HTTP");
   await createCommunity(page, "Voice HTTP browser");
-  await page.getByRole("button", { name: "Create channel" }).click();
+  const createChannel = page.getByRole("button", { name: "Create channel", exact: true });
+  if (!await createChannel.isVisible()) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  await expect(createChannel).toBeVisible();
+  await createChannel.click();
   await page.getByLabel("Channel name").fill("control-http");
   await page.getByRole("radio", { name: /Voice/ }).check();
   await page.getByRole("dialog").getByRole("button", { name: "Create channel" }).click();
@@ -35,10 +38,11 @@ test("Voice HTTP uses the real browser session and registered enrollment without
     return { registered: registered.status, joined: joined.status, heartbeat: heartbeat.status, sync: sync.status, empty: sync.body.events.length === 0, denied: denied.status, deniedCode: denied.body.code, left: left.status, caches: [joined.cache, heartbeat.cache, sync.cache, denied.cache, left.cache] };
   }, { anchor, input });
   expect(result).toMatchObject({ registered: 200, joined: 200, heartbeat: 200, sync: 200, empty: true, denied: 403, deniedCode: "forbidden", left: 200, caches: Array(5).fill("private, no-store") });
-  for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]) {
+  for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND"]) {
     const response = await page.context().request.fetch("/api/voice/control", { method });
     expect(response.status()).toBe(405);
-    expect(response.headers()["cache-control"]).toBe("private, no-store");
+    const cacheDirectives = (response.headers()["cache-control"] ?? "").split(",").map(value => value.trim());
+    expect(cacheDirectives).toEqual(expect.arrayContaining(["private", "no-store"]));
     expect(response.headers()["access-control-allow-origin"]).toBeUndefined();
   }
   expect(consoleErrors).toEqual([]);

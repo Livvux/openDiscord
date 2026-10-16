@@ -1,4 +1,5 @@
 import { TokenVerifier } from "livekit-server-sdk";
+import type { VoiceCryptoRequest } from "@/lib/voice/contracts";
 import { createVoiceHttpClient } from "@/lib/voice/http-client";
 import { PublicServicePeer } from "./fixtures/voice-service-peer";
 import { randomUUID } from "node:crypto";
@@ -54,8 +55,15 @@ describe("actual cookie-authenticated Voice route", () => {
     // The adapter only supplies this freshly-created test account's cookie and browser Origin.
     // Auth, registered anchors, native request IDs and the real DB service remain unchanged.
     const client = createVoiceHttpClient({ fetch: async (path, init) => POST(new Request(`${origin}${path}`, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), origin, cookie: a.cookie } })) });
+    const anotherSession = await auth.api.signInEmail({ body: { email: a.actual.email, password: "correct horse battery" }, returnHeaders: true });
+    const ownOtherSessionCookie = (anotherSession.headers.get("set-cookie") ?? "").split(";")[0];
+    await code(await POST(request({ action: "heartbeat", input: binding }, { ...headers, cookie: ownOtherSessionCookie })), 403, "forbidden");
     const current = await client.heartbeat(binding, a.input.enrollmentSecret, new AbortController().signal);
-    const peer = await PublicServicePeer.open({ snapshot: current, transport: ({ binding, request, signal }) => client.crypto(binding, request, a.input.enrollmentSecret, signal) });
+    let originalUpload: VoiceCryptoRequest | undefined;
+    const peer = await PublicServicePeer.open({ snapshot: current, transport: ({ binding, request, signal }) => {
+      if (request.kind === "upload") originalUpload ??= structuredClone(request);
+      return client.crypto(binding, request, a.input.enrollmentSecret, signal);
+    } });
     try { await peer.query(); await peer.sync(); } finally { peer.close(); }
     const grant = await client.token(binding, a.input.enrollmentSecret, new AbortController().signal);
     const claims = await new TokenVerifier(process.env.LIVEKIT_API_KEY!, process.env.LIVEKIT_API_SECRET!).verify(grant.token, 0);
@@ -63,8 +71,17 @@ describe("actual cookie-authenticated Voice route", () => {
     expect(claims.video).toMatchObject({ room: `voice:${current.channelId}:${current.callId}:${current.generation}`, roomJoin: true, canPublishData: false, canPublishSources: ["microphone", "camera", "screen_share", "screen_share_audio"] });
     expect(claims.exp! * 1000).toBeLessThanOrEqual(Date.parse(grant.expiresAt));
     expect(claims.exp! * 1000).toBeGreaterThan(Date.now());
+    if (!originalUpload) throw new Error("Actual native bootstrap did not upload keys.");
+    const originalWork = { action: "crypto", input: { ...binding, request: originalUpload } };
+    expect((await POST(request(originalWork, headers))).status).toBe(200);
+    await revokeDmDevice(a.actual.id, a.anchor.id);
+    await code(await POST(request(originalWork, headers)), 403, "forbidden");
     const left = await POST(request({ action: "leave", input: binding }, headers)); expect(left.status).toBe(200);
     await code(await POST(request({ action: "crypto", input: { ...binding, request: { kind: "sync" } } }, headers)), 403, "forbidden");
+    await db.update(session).set({ expiresAt: new Date(0) }).where(eq(session.id, a.actual.sessionId));
+    await code(await POST(request(originalWork, headers)), 401, "unauthorized");
+    await db.delete(session).where(eq(session.id, a.actual.sessionId));
+    await code(await POST(request(originalWork, headers)), 401, "unauthorized");
   });
   it("rejects exact old crypto/token generation after a genuine roster change and permits authoritative heartbeat", async () => {
     const a = await account(), b = await account();
@@ -85,11 +102,19 @@ describe("actual cookie-authenticated Voice route", () => {
   });
   it("does not replay authority after anchor revocation or session expiry/deletion", async () => {
     const a = await account();
+    const joined = await POST(request({ action: "join", input: a.input }, a.headers)), snapshot = await joined.json();
+    const binding = { callId: snapshot.callId, memberId: snapshot.memberId, joinNonce: snapshot.joinNonce, expectedGeneration: snapshot.generation };
+    const headers = { cookie: a.cookie, "x-voice-member": snapshot.memberId, "x-voice-secret": a.input.enrollmentSecret };
+    const work = { action: "crypto", input: { ...binding, request: { kind: "ack", cursor: "0" } } };
+    expect((await POST(request(work, headers))).status).toBe(200);
     await revokeDmDevice(a.actual.id, a.anchor.id);
+    await code(await POST(request(work, headers)), 403, "forbidden");
     await code(await POST(request({ action: "join", input: a.input }, a.headers)), 403, "forbidden");
     await db.update(session).set({ expiresAt: new Date(0) }).where(eq(session.id, a.actual.sessionId));
+    await code(await POST(request(work, headers)), 401, "unauthorized");
     await code(await POST(request({ action: "join", input: a.input }, a.headers)), 401, "unauthorized");
     await db.delete(session).where(eq(session.id, a.actual.sessionId));
+    await code(await POST(request(work, headers)), 401, "unauthorized");
     await code(await POST(request({ action: "join", input: a.input }, a.headers)), 401, "unauthorized");
   });
   it("bounds actual stream bytes with missing or misleading content length", async () => {

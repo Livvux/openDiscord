@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readVoiceResponse, VoiceHttpError, createVoiceHttpClient } from "@/lib/voice/http-client";
+import { readVoiceResponse, createVoiceHttpClient } from "@/lib/voice/http-client";
 
 describe("bounded voice HTTP transport", () => {
   it("cancels a stream exceeding its real byte budget despite a misleading length", async () => {
@@ -15,7 +15,7 @@ describe("bounded voice HTTP transport", () => {
   it("preserves stable authorization/conflict errors without turning them into success", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ code: "conflict" }), { status: 409, headers: { "Content-Type": "application/json" } }));
     const client = createVoiceHttpClient({ fetch: request });
-    await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toBeInstanceOf(VoiceHttpError);
+    await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "conflict", status: 409 });
     expect(request).toHaveBeenCalledOnce();
   });
   it("does not start a request after cancellation", async () => {
