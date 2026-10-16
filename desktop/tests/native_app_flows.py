@@ -10,11 +10,13 @@ import os
 import pathlib
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import urllib.parse
+import uuid
 from contextlib import contextmanager
 
 ORIGIN = 'https://localhost:9443'
@@ -46,7 +48,9 @@ def stage(name):
         persist()
         raise RuntimeError('Native acceptance failed at ' + name) from None
     else:
-        results[name] = {'status': 'passed', 'seconds': round(time.monotonic() - started, 2)}
+        status = results[name].get('status')
+        results[name] = {**results[name], 'status': status if status == 'unavailable' else 'passed',
+                         'seconds': round(time.monotonic() - started, 2)}
         persist()
 
 
@@ -173,26 +177,93 @@ class Native:
         wait(lambda: destination.exists() and destination.stat().st_size > 0)
         wait(lambda: not dialog())
 
-    def close(self):
+def cleanup_clients(clients, budget=10):
+    """Signal every captured session group before waiting; never call a hung driver."""
+    deadline_at = time.monotonic() + budget
+    errors = []
+    # Each PID is the session/group leader created by our start_new_session Popen.
+    for client in clients:
         try:
-            if self.session:
-                self.command('DELETE', '')
+            os.killpg(client.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            errors.append(type(error).__name__)
+    grace_end = min(deadline_at, time.monotonic() + 3)
+    for client in clients:
+        try:
+            client.process.wait(timeout=max(0, grace_end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+        except OSError as error:
+            errors.append(type(error).__name__)
+    for client in clients:
+        try:
+            os.killpg(client.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            errors.append(type(error).__name__)
+    for client in clients:
+        try:
+            client.process.wait(timeout=max(0, deadline_at - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            errors.append('ProcessReapDeadline')
+        except OSError as error:
+            errors.append(type(error).__name__)
         finally:
-            # Driver exit alone does not prove its WebKit/application children exited.
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            self.process.wait(timeout=5)
-            self.log.close()
+                client.log.close()
+            except OSError as error:
+                errors.append(type(error).__name__)
+    return errors
+
+
+def complete_json(path, valid):
+    """A closed Save dialog is consent, not a completed WebKit download."""
+    def read_complete():
+        try:
+            value = json.loads(path.read_text())
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) and valid(value) else None
+    return wait(read_complete)
+
+
+def recovery_shape(value):
+    keys = {'format', 'version', 'origin', 'userId', 'backupId', 'encryptionInfo'}
+    if set(value) != keys or value['format'] != 'opendiscord.e2ee-recovery' or value['version'] != 2:
+        return False
+    if value['origin'] != ORIGIN or not isinstance(value['userId'], str) or not value['userId']:
+        return False
+    if not isinstance(value['encryptionInfo'], str) or not 0 < len(value['encryptionInfo']) <= 4000:
+        return False
+    try:
+        uuid.UUID(value['backupId'])
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
+
+
+def export_shape(value):
+    return (value.get('format') == 'opendiscord.community-export' and value.get('version') == 2
+            and isinstance(value.get('community'), dict)
+            and value['community'].get('name') == 'Native Acceptance Community'
+            and all(isinstance(value.get(key), list) for key in
+                    ['assets', 'roles', 'categories', 'channels', 'messages'])
+            and len(value['channels']) >= 1 and len(value['messages']) >= 1
+            and all(isinstance(message, dict) and isinstance(message.get('content'), str)
+                    and isinstance(message.get('attachments'), int) for message in value['messages'])
+            and isinstance(value.get('exportedAt'), str) and isinstance(value.get('truncated'), bool))
+
+
+def unsupported_command(error):
+    # Keep only the W3C identifier; messages/stacks can contain private DOM or files.
+    try:
+        value = json.loads(error.read()).get('value')
+    except (ValueError, OSError):
+        return False
+    return isinstance(value, dict) and value.get('error') in {'unknown command', 'unsupported operation'}
 
 
 def main():
@@ -263,7 +334,7 @@ def main():
                 alice.click('Download community export', 'a')
                 exported = sandbox / 'community.json'
                 alice.save(exported)
-                data = json.loads(exported.read_text())
+                data = complete_json(exported, export_shape)
                 assert data['format'] == 'opendiscord.community-export'
                 assert len(data['messages']) >= 1
             with stage('dm_enrollment'):
@@ -309,6 +380,7 @@ def main():
                 alice.click('Download your private recovery file', 'a')
                 recovery = sandbox / 'recovery.json'
                 alice.save(recovery)
+                complete_json(recovery, recovery_shape)
                 recovered.login(email)
                 recovered.click('Devices and recovery')
                 recovered.upload('//label[starts-with(normalize-space(.),"Open encrypted recovery archive")]//input', recovery)
@@ -332,22 +404,25 @@ def main():
                     try:
                         logs = client.command('POST', '/log', {'type': 'browser'})
                     except urllib.error.HTTPError as error:
-                        assert error.code in [404, 405, 500]
+                        if not unsupported_command(error):
+                            raise RuntimeError('WebDriver console endpoint failed') from None
                         unavailable += 1
                     else:
                         assert not any(entry.get('level') == 'SEVERE' for entry in logs)
                 metadata['console_endpoint_unavailable_profiles'] = unavailable
+                if unavailable:
+                    results['runtime_errors']['status'] = 'unavailable'
         finally:
-            errors = []
-            for client in reversed(clients):
-                try:
-                    client.close()
-                except Exception as error:
-                    errors.append(type(error).__name__)
+            primary_error = sys.exception()
+            signal.alarm(0)
+            errors = cleanup_clients(list(reversed(clients)))
             metadata['cleanup_errors'] = errors
             persist()
             if errors:
-                raise RuntimeError('Owned native process cleanup failed')
+                if primary_error is not None:
+                    primary_error.add_note('Owned native cleanup errors: ' + ', '.join(errors))
+                else:
+                    raise RuntimeError('Owned native process cleanup failed')
 
 
 def deadline(_signal, _frame):

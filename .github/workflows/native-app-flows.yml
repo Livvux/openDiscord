@@ -40,6 +40,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install Linux native dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
+      - name: Isolated TLS proxy transport regressions
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$NATIVE_TLS_KEY" -out "$NATIVE_TLS_CERT" -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost'
+          chmod 600 "$NATIVE_TLS_KEY"
+          node --test desktop/tests/app_proxy.test.mjs
+          python3 -m unittest discover -s desktop/tests -p 'test_native_app_support.py'
       - run: pnpm db:migrate
       - run: pnpm build
       - name: Build unchanged native client and driver
