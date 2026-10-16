@@ -55,6 +55,7 @@ export class VoiceCryptoOwner {
   private stopped = false;
   private transitioning = false;
   private revision = 0;
+  private mediaRevision = 0;
   private epochId: string | undefined;
   private get controlAudience(): readonly VoiceControlParty[] { return this.installedProposal?.audience ?? this.audience; }
   private installedProposal?: VoiceContextProposal;
@@ -210,7 +211,7 @@ export class VoiceCryptoOwner {
     }
     return voiceCryptoSchema.parse({ kind, body, ...(id ? { requestId, nativeRequestId: id } : {}) });
   }
-  private async output(request: NativeRequest, retire = false, allowTransition = false): Promise<void> {
+  private async output(request: NativeRequest, retire = false, allowTransition = false, mediaRevision?: number): Promise<void> {
     const prepared = await this.serial(async () => {
       const entry = await this.observe(request, allowTransition);
       if (entry?.state === "completed") return undefined;
@@ -224,6 +225,12 @@ export class VoiceCryptoOwner {
     if (prepared.attempt.promise) return prepared.attempt.promise;
     const run = async () => {
       this.assertCurrent(allowTransition);
+      // No await occurs between this check and dispatch. Already-observed native work
+      // crossing a media fence is completed by the existing real retirement protocol.
+      if (!retire && mediaRevision !== undefined && mediaRevision !== this.mediaRevision) {
+        await this.output(request, true, allowTransition);
+        throw new VoiceGenerationInterrupted();
+      }
       let outcome: { ok: true; result: unknown } | { ok: false; error: unknown };
       try {
         outcome = { ok: true, result: await this.options.transport({ binding: prepared.attempt.binding, request: prepared.attempt.input, signal: this.abort.signal }) };
@@ -334,13 +341,14 @@ export class VoiceCryptoOwner {
   }
   /** Explicit local own-consent intent. Remote selection never calls this method. */
   selectAudience(memberIds: readonly string[], selectionRevision: number): Promise<void> {
+    this.assertCurrent(); this.mediaRevision++; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
+    this.options.onFence("audience-selection-change");
     return this.serial(() => {
       if (memberIds.some(id => id !== this.snapshot.memberId && !this.admitted.has(id))) throw new Error("Explicit current audience admission required.");
       for (const ref of this.transientRefs) this.agreementRefs.delete(ref); this.transientRefs.clear();
       this.agreement.select(memberIds, selectionRevision, true);
       this.selectionRevision = selectionRevision;
       this.offeredContext = undefined; this.localOffer = undefined; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
-      this.options.onFence("audience-selection-change");
     });
   }
   agreementPort(): VoiceAgreementOwnerPort {
@@ -403,6 +411,7 @@ export class VoiceCryptoOwner {
       if (this.localOffer && sameVoiceProposal(this.localOffer.proposal, proposal)) this.localOffer.proposal = proposal;
       this.retireAgreementRefs(proposal);
       if (!this.offeredContext || !sameVoiceProposal(this.offeredContext.proposal, proposal)) {
+        this.mediaRevision++;
         this.offeredContext = { proposal, ref, deadline: cap.deadline }; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
         this.options.onFence("offered-context-change");
       }
@@ -494,7 +503,9 @@ export class VoiceCryptoOwner {
     }).catch(error => { this.stop("audience-transition-failed"); throw error; });
   }
   async sendControl(raw: VoiceOwnerControl): Promise<void> {
+    const mediaRevision = this.mediaRevision;
     const output = await this.serial(async () => {
+      if (mediaRevision !== this.mediaRevision) throw new VoiceGenerationInterrupted();
       if (!this.epochId) throw new Error("Missing admitted voice context.");
       const value = validateVoiceOwnerControl(raw, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
       if (value.sender.memberId !== this.snapshot.memberId || !this.admitted.has(value.recipient.memberId)) throw new Error("Voice control admission mismatch.");
@@ -506,16 +517,19 @@ export class VoiceCryptoOwner {
     });
     if (output.missing) await this.output(output.missing);
     const request = await this.serial(async () => {
+      if (mediaRevision !== this.mediaRevision) throw new VoiceGenerationInterrupted();
       if (!this.epochId) throw new Error("Missing admitted voice context.");
       const value = validateVoiceOwnerControl(output.value, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
       const peer = await this.device(value.recipient);
       if (!peer.isVerified() || !this.admitted.has(value.recipient.memberId)) throw new Error("Unverified native voice recipient.");
+      if (mediaRevision !== this.mediaRevision) throw new VoiceGenerationInterrupted();
       const encrypted = await peer.encryptToDeviceEvent(VOICE_CONTROL_EVENT, encodeVoiceControlWire(value), C.CollectStrategy.onlyTrustedDevices());
       const id = crypto.randomUUID();
       const request = new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [value.recipient.voiceUserId]: { [value.recipient.voiceDeviceId]: JSON.parse(encrypted) } } }));
       await this.observe(request); return request;
     });
-    await this.output(request);
+    await this.output(request, false, false, mediaRevision);
+    await this.serial(() => { if (mediaRevision !== this.mediaRevision) throw new VoiceGenerationInterrupted(); });
   }
   /** Returns authenticated typed data only. No prepared/key-ready/admission side effects. */
   async receive(): Promise<VoiceOwnerControl[]> {
@@ -532,7 +546,7 @@ export class VoiceCryptoOwner {
     this.receiveFlight = { mode: agreementMode, promise }; return promise;
   }
   private async runReceiveBatch(agreementMode: boolean): Promise<VoiceOwnerAgreementReceived[]> {
-    const revision = this.revision;
+    const revision = this.revision, mediaRevision = this.mediaRevision;
     await this.serial(() => this.retireAgreementRefs());
     const rawBatch = await this.exchange({ kind: "sync" });
     const batch = await this.serial(() => {
@@ -588,7 +602,7 @@ export class VoiceCryptoOwner {
           if (isContext) {
             this.agreement.selected(this.selectionRevision);
             value = validateVoiceContextControl(decoded, this.snapshot, this.selectedAudience);
-          } else if (this.epochId && (!temporary || decoded.epochId === this.epochId)) value = validateVoiceOwnerControl(decoded, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
+          } else if (this.epochId && (!temporary || (decoded.epochId === this.epochId && decoded.proposalSequence === this.installedProposal?.sequence))) value = validateVoiceOwnerControl(decoded, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
           else {
             pending = temporary ?? this.offeredContext;
             if (!agreementMode || !pending || decoded.kind !== "material" || this.now() >= pending.deadline) throw new Error("Missing exact offered voice context.");
@@ -626,8 +640,10 @@ export class VoiceCryptoOwner {
     });
     await this.exchange({ kind: "ack", cursor: batch.cursor });
     await this.flush();
-    if (revision !== this.revision) throw new VoiceGenerationInterrupted();
-    return controls;
+    return this.serial(() => {
+      if (revision !== this.revision || (mediaRevision !== this.mediaRevision && controls.some(value => value.kind === "media"))) throw new VoiceGenerationInterrupted();
+      return controls;
+    });
   }
   transition(next: VoiceSnapshot): Promise<void> {
     this.assertCurrent();
