@@ -35,6 +35,10 @@ metadata = {'sha': os.environ.get('GITHUB_SHA'), 'scope': 'Linux native producti
             'console_capture': 'WebDriver console endpoint probed; absence reported explicitly'}
 
 
+class NativeDeadlineExpired(Exception):
+    """Global expiry must never be mistaken for a retryable socket OSError."""
+
+
 def persist():
     (EVIDENCE / 'results.json').write_text(json.dumps({'steps': results, 'metadata': metadata}, indent=2))
 
@@ -111,8 +115,44 @@ class Native:
             self.connection.close()
             raise
 
+    def wait_startup_ready(self, timeout=30):
+        if self.session is not None:
+            raise RuntimeError('Startup readiness is only valid before a session')
+        deadline_at = time.monotonic() + timeout
+        attempts = 0
+        while True:
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                break
+            attempts += 1
+            state = {'attempts': attempts, 'state': 'checking'}
+            metadata.setdefault('startup_readiness', {})[str(self.profile)] = state
+            try:
+                value = self.request('GET', '/status', timeout=min(1, remaining))
+            except urllib.error.HTTPError:
+                raise
+            except urllib.error.URLError as error:
+                if not isinstance(error.reason, (ConnectionRefusedError, ConnectionResetError,
+                                                  ConnectionAbortedError, TimeoutError)):
+                    raise
+                state.update(state='transient_network_error', error_type=type(error.reason).__name__)
+            except (http.client.RemoteDisconnected, ConnectionRefusedError, ConnectionResetError,
+                    ConnectionAbortedError, TimeoutError) as error:
+                state.update(state='transient_network_error', error_type=type(error).__name__)
+            else:
+                if not isinstance(value, dict) or not isinstance(value.get('ready'), bool):
+                    raise ValueError('Invalid native driver startup status')
+                if value['ready'] is True:
+                    state['state'] = 'ready'
+                    return
+                state['state'] = 'not_ready'
+            remaining = deadline_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.25, remaining))
+        raise TimeoutError('Native driver startup readiness deadline exceeded')
+
     def start(self):
-        wait(lambda: self.request('GET', '/status'))
+        self.wait_startup_ready()
         value = self.request('POST', '/session', {'capabilities': {'alwaysMatch': {
             'tauri:options': {'application': str(ROOT / 'target/debug/opendiscord-desktop')}}}})
         self.session = value['sessionId']
@@ -800,7 +840,7 @@ def main():
 
 
 def deadline(_signal, _frame):
-    raise TimeoutError('Native application-flow deadline exceeded')
+    raise NativeDeadlineExpired('Native application-flow deadline exceeded')
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ import tempfile
 import types
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from contextlib import contextmanager
 
 import native_app_flows as flows
@@ -177,6 +177,89 @@ class NativeSupportTests(unittest.TestCase):
                 self.assertNotIn('http://', json.dumps(summary))
                 self.assertEqual(timers[0][1], 20)
                 self.assertEqual(timers[-1][1], 500 - clock[0])
+
+    def test_startup_only_transient_disconnect_then_false_then_true(self):
+        errors = [flows.http.client.RemoteDisconnected('private'), ConnectionRefusedError(),
+                  ConnectionResetError(), ConnectionAbortedError(), TimeoutError(),
+                  urllib.error.URLError(ConnectionRefusedError())]
+        for error in errors:
+            with self.subTest(error_type=type(error).__name__):
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 0
+                client.session = None
+                client.request = Mock(side_effect=[error, {'ready': False}, {'ready': True}])
+                clock = [0.0]
+                with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(flows.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                    client.wait_startup_ready()
+                self.assertEqual(client.request.call_count, 3)
+                for call in client.request.call_args_list:
+                    self.assertEqual(call.args, ('GET', '/status'))
+                    self.assertLessEqual(call.kwargs['timeout'], 1)
+                self.assertEqual(flows.metadata['startup_readiness']['0']['state'], 'ready')
+
+    def test_startup_deadline_and_postsession_guard(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 0
+        client.session = None
+        client.request = Mock(return_value={'ready': False})
+        clock = [0.0]
+        with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaises(TimeoutError):
+                client.wait_startup_ready(timeout=.5)
+        self.assertEqual(clock[0], .5)
+        self.assertEqual(client.request.call_count, 2)
+        client.session = 'existing-private-session'
+        client.request.reset_mock()
+        with self.assertRaises(RuntimeError):
+            client.wait_startup_ready()
+        client.request.assert_not_called()
+
+    def test_startup_http_schema_and_other_errors_fail_immediately(self):
+        cases = [({'ready': 'yes'}, None, ValueError), ([], None, ValueError),
+                 (None, urllib.error.HTTPError('http://127.0.0.1/status', 500, '', {}, io.BytesIO()), urllib.error.HTTPError),
+                 (None, urllib.error.URLError(PermissionError()), urllib.error.URLError),
+                 (None, flows.http.client.BadStatusLine('private'), flows.http.client.BadStatusLine)]
+        for value, error, expected in cases:
+            with self.subTest(expected=expected.__name__):
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 0
+                client.session = None
+                client.request = Mock(return_value=value, side_effect=error)
+                with patch.object(flows.time, 'sleep') as sleep:
+                    with self.assertRaises(expected):
+                        client.wait_startup_ready()
+                client.request.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_global_deadline_is_not_wrapped_or_consumed_by_request_and_wait(self):
+        self.assertFalse(issubclass(flows.NativeDeadlineExpired, OSError))
+        for operation in ['request', 'getresponse']:
+            with self.subTest(operation=operation):
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 0
+                client.port = 4444
+                client.connection = Mock()
+                client.connection.sock = None
+                getattr(client.connection, operation).side_effect = lambda *args, **kwargs: flows.deadline(signal.SIGALRM, None)
+                with self.assertRaises(flows.NativeDeadlineExpired):
+                    flows.wait(lambda: client.request('GET', '/status'))
+                client.connection.request.assert_called_once()
+                client.connection.close.assert_called_once()
+
+    def test_ordinary_request_network_error_is_sent_once_then_propagates(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 0
+        client.port = 4444
+        client.connection = Mock()
+        client.connection.sock = None
+        client.connection.request.side_effect = ConnectionResetError()
+        with self.assertRaises(urllib.error.URLError):
+            client.request('POST', '/session/unit/element/unit/click', {})
+        client.connection.request.assert_called_once()
+        client.connection.getresponse.assert_not_called()
+        client.connection.close.assert_called_once()
 
     def test_console_only_explicit_w3c_unsupported_codes_are_unavailable(self):
         for code, expected in [('unknown command', True), ('unsupported operation', True),
