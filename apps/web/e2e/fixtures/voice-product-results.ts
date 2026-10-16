@@ -11,15 +11,34 @@ export function classifyVoiceProductConsole(text: string, location: string, page
       else if (url.pathname.startsWith("/_next/static/")) endpoint = "app-script";
     }
   } catch { /* Missing console locations remain unclassified. */ }
-  const code = /^DataChannel error on (?:lossy|reliable):|^Unknown DataChannel error on (?:lossy|reliable)|^publisher data channel '(?:LOSSY|RELIABLE)' closed unexpectedly/.test(text) ? "data-channel"
+  const code = /^DataChannel error on (?:lossy|reliable):/.test(text) ? "data-channel-error"
+    : /^Unknown DataChannel error on (?:lossy|reliable)/.test(text) ? "data-channel-unknown"
+    : /^publisher data channel '(?:LOSSY|RELIABLE)' closed unexpectedly/.test(text) ? "data-channel-closed"
+    : /^error sending signal message/.test(text) ? "signal-send"
+    : /^cannot send signal request before connected, type:/.test(text) ? "signal-unconnected"
+    : /^websocket error/.test(text) ? "signal-socket"
     : /^WebSocket is already in CLOSING or CLOSED state/.test(text) ? "closed-transport"
-      : /^Tried to add a track|^could not find published track/.test(text) ? "missing-track"
-      : /^(?:NotFoundError: )?Failed to execute 'removeChild'/.test(text) ? "dom-removal"
-        : /Minified React error #\d+/.test(text) ? "react"
-          : /^(?:AbortError: )?The play\(\) request was interrupted/.test(text) ? "playback-interrupted"
-            : /^Encryption downgrade refused|^Unadmitted media identity|^Native encryption worker failed|^e2ee worker encountered an error:|^failed to set up transform|^error while encrypting|^DataCryptor decryption failed|^could not re-establish transform/.test(text) ? "worker"
-              : "other";
+    : /^Tried to add a track|^could not find published track/.test(text) ? "missing-track"
+    : /^(?:NotFoundError: )?Failed to execute 'removeChild'/.test(text) ? "dom-removal"
+    : /Minified React error #\d+/.test(text) ? "react"
+    : /^(?:AbortError: )?The play\(\) request was interrupted/.test(text) ? "playback-interrupted"
+    : /^Encryption downgrade refused|^Unadmitted media identity|^Native encryption worker failed|^e2ee worker encountered an error:|^failed to set up transform|^error while encrypting|^DataCryptor decryption failed|^could not re-establish transform/.test(text) ? "worker"
+    : "other";
   return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint, code };
+}
+
+/** Runs in the console argument's realm; returns no message, identifiers or arbitrary properties. */
+export function readVoiceProductConsoleArgument(value: unknown) {
+  const outer = value !== null && typeof value === "object" ? value : {};
+  const inner = "error" in outer && outer.error !== null && typeof outer.error === "object" ? outer.error : outer;
+  const detail = "errorDetail" in inner ? inner.errorDetail : undefined;
+  const cause = "sctpCauseCode" in inner ? inner.sctpCauseCode : undefined;
+  const name = "name" in inner ? inner.name : undefined;
+  return {
+    detail: detail === "sctp-failure" || detail === "data-channel-failure" || detail === "dtls-failure" ? detail : detail === undefined ? "none" : "other",
+    cause: typeof cause === "number" && Number.isInteger(cause) && cause >= 0 && cause <= 65535 ? cause : null,
+    name: typeof name === "string" && ["Error", "RTCError", "TypeError", "InvalidStateError", "NotFoundError", "OperationError", "AbortError"].includes(name) ? name : name === undefined ? "none" : "other",
+  };
 }
 
 export type VoiceProductPhase = "verifying" | "waiting" | "consent-pending" | "negotiating" | "retry-required" | "preparing" | "ready" | "stopped" | "unknown";

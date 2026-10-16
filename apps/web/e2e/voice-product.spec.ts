@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
-import { classifyVoiceProductConsole, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
+import { classifyVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
 import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
@@ -89,7 +89,8 @@ test.describe("genuine Next product encrypted Voice", () => {
     const verifier = new TokenVerifier("devkey", "secret");
     const pages: Page[] = [], names = ["UI Voice Publisher", "UI Voice Listener One", "UI Voice Listener Two"];
     const runtimeErrors: string[] = [];
-    const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean })[] = [];
+    const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean; observed: "pending" | "ok" | "failed"; transport: ReturnType<typeof readVoiceProductConsoleArgument>[] })[] = [];
+    const consoleObservations: Promise<void>[] = [];
     let revocationDenials = 0;
     const workerResponses: { page: number; status: number; javascript: boolean }[] = [];
     const grants: { page: number; sources: string[]; publish: boolean; subscribe: boolean; expiry: number }[] = [];
@@ -119,7 +120,13 @@ test.describe("genuine Next product encrypted Voice", () => {
         const diagnostic = classifyVoiceProductConsole(message.text(), message.location().url, page.url());
         // This test deliberately revokes Connect; the authenticated control endpoint must deny it.
         if (stage === "connect-revocation" && diagnostic.kind === "http-resource" && diagnostic.status === 403 && diagnostic.endpoint === "voice-control") { revocationDenials++; return; }
-        consoleErrors.push({ page: index, revoking: stage === "connect-revocation", ...diagnostic });
+        const entry: (typeof consoleErrors)[number] = { page: index, revoking: stage === "connect-revocation", observed: "pending", transport: [], ...diagnostic };
+        consoleErrors.push(entry);
+        const observation = observeVoiceProductResult(() => Promise.all(message.args().slice(0, 3).map(argument => argument.evaluate(readVoiceProductConsoleArgument))), { timeoutMs: 2000, stage: "diagnostic" });
+        consoleObservations.push(observation.then(result => {
+          entry.observed = result.ok ? "ok" : "failed";
+          if (result.ok) entry.transport.push(...result.value);
+        }));
       });
       const onResponse = (response: Response) => {
         if (!observing) return;
@@ -289,6 +296,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await expect(owner.getByRole("button", { name: "Unmute microphone", exact: true }).first()).toBeVisible();
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
+      await Promise.all(consoleObservations);
       const summary = await Promise.all(pages.map(evidence));
       const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
       expect(attached.ok).toBe(true);
@@ -301,6 +309,7 @@ test.describe("genuine Next product encrypted Voice", () => {
         await expect(page.getByRole("status").filter({ hasText: "Voice stopped" }).first()).toBeVisible({ timeout: 20_000 });
         await expect.poll(async () => (await evidence(page)).allTerminated).toBe(true);
       }
+      await Promise.all(consoleObservations);
       expect(runtimeErrors).toEqual([]); expect(consoleErrors).toEqual([]);
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
@@ -308,6 +317,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       primaryFailure = true; throw error;
     } finally {
       observing = false; stopResponseObservers.forEach(stop => stop());
+      await Promise.all(consoleObservations);
       let cleanupFailed = false;
       await withVoiceProductCleanup(async () => {
         await Promise.all(observation); commitsClosed = true;

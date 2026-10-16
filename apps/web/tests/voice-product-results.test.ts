@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyVoiceProductConsole, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
+import { classifyVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { vi.useFakeTimers(); });
@@ -114,8 +114,8 @@ describe("bounded Voice console diagnostics", () => {
 
 
 it.each([
-  ["DataChannel error on reliable: private detail", "data-channel"],
-  ["Unknown DataChannel error on lossy private detail", "data-channel"],
+  ["DataChannel error on reliable: private detail", "data-channel-error"],
+  ["Unknown DataChannel error on lossy private detail", "data-channel-unknown"],
   ["Tried to add a track for a participant, that's not present. Sid: private", "missing-track"],
   ["NotFoundError: Failed to execute 'removeChild' on 'Node': private", "dom-removal"],
   ["Error: Minified React error #418; private", "react"],
@@ -126,4 +126,13 @@ it.each([
   const result = classifyVoiceProductConsole(text, "", "https://example.test/app");
   expect(result.code).toBe(code);
   expect(JSON.stringify(result)).not.toContain("private");
+});
+
+
+it("retains only public RTC cause enums and bounded numeric codes from console arguments", () => {
+  const result = readVoiceProductConsoleArgument({ error: { name: "OperationError", errorDetail: "sctp-failure", sctpCauseCode: 12, message: "private", token: "private" }, identity: "private" });
+  expect(result).toEqual({ name: "OperationError", detail: "sctp-failure", cause: 12 });
+  expect(JSON.stringify(result)).not.toContain("private");
+  expect(readVoiceProductConsoleArgument({ errorDetail: "private", sctpCauseCode: Infinity, name: "private" })).toEqual({ name: "other", detail: "other", cause: null });
+  expect(readVoiceProductConsoleArgument("private")).toEqual({ name: "none", detail: "none", cause: null });
 });
