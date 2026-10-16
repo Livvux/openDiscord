@@ -11,7 +11,15 @@ export function classifyVoiceProductConsole(text: string, location: string, page
       else if (url.pathname.startsWith("/_next/static/")) endpoint = "app-script";
     }
   } catch { /* Missing console locations remain unclassified. */ }
-  return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint };
+  const code = /^DataChannel error on (?:lossy|reliable):|^Unknown DataChannel error on (?:lossy|reliable)|^publisher data channel '(?:LOSSY|RELIABLE)' closed unexpectedly/.test(text) ? "data-channel"
+    : /^WebSocket is already in CLOSING or CLOSED state/.test(text) ? "closed-transport"
+      : /^Tried to add a track|^could not find published track/.test(text) ? "missing-track"
+      : /^(?:NotFoundError: )?Failed to execute 'removeChild'/.test(text) ? "dom-removal"
+        : /Minified React error #\d+/.test(text) ? "react"
+          : /^(?:AbortError: )?The play\(\) request was interrupted/.test(text) ? "playback-interrupted"
+            : /^Encryption downgrade refused|^Unadmitted media identity|^Native encryption worker failed|^e2ee worker encountered an error:|^failed to set up transform|^error while encrypting|^DataCryptor decryption failed|^could not re-establish transform/.test(text) ? "worker"
+              : "other";
+  return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint, code };
 }
 
 export type VoiceProductPhase = "verifying" | "waiting" | "consent-pending" | "negotiating" | "retry-required" | "preparing" | "ready" | "stopped" | "unknown";

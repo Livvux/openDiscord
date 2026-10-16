@@ -90,6 +90,7 @@ test.describe("genuine Next product encrypted Voice", () => {
     const pages: Page[] = [], names = ["UI Voice Publisher", "UI Voice Listener One", "UI Voice Listener Two"];
     const runtimeErrors: string[] = [];
     const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean })[] = [];
+    let revocationDenials = 0;
     const workerResponses: { page: number; status: number; javascript: boolean }[] = [];
     const grants: { page: number; sources: string[]; publish: boolean; subscribe: boolean; expiry: number }[] = [];
     const observation: Promise<void>[] = [];
@@ -115,7 +116,10 @@ test.describe("genuine Next product encrypted Voice", () => {
         if (message.type() !== "error") return;
         // A genuine generation transition can return409; detailed lower-layer conflict gates remain authoritative.
         if (message.text() === "Failed to load resource: the server responded with a status of 409 (Conflict)" && new URL(message.location().url || page.url()).pathname === "/api/voice/control") return;
-        consoleErrors.push({ page: index, revoking: stage === "connect-revocation", ...classifyVoiceProductConsole(message.text(), message.location().url, page.url()) });
+        const diagnostic = classifyVoiceProductConsole(message.text(), message.location().url, page.url());
+        // This test deliberately revokes Connect; the authenticated control endpoint must deny it.
+        if (stage === "connect-revocation" && diagnostic.kind === "http-resource" && diagnostic.status === 403 && diagnostic.endpoint === "voice-control") { revocationDenials++; return; }
+        consoleErrors.push({ page: index, revoking: stage === "connect-revocation", ...diagnostic });
       });
       const onResponse = (response: Response) => {
         if (!observing) return;
@@ -286,7 +290,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       const summary = await Promise.all(pages.map(evidence));
-      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, consoleDiagnostics: consoleErrors.slice(0, 20) }));
+      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
       expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
@@ -311,7 +315,7 @@ test.describe("genuine Next product encrypted Voice", () => {
           const stats = await evidence(page);
           return { ...stats, workerUrl: undefined, ...await presentation(page), audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, consoleDiagnostics: consoleErrors.slice(0, 20) }));
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;

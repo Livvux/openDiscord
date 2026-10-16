@@ -102,12 +102,28 @@ describe("fixed public Voice phase and reason diagnostics", () => {
 describe("bounded Voice console diagnostics", () => {
   it("keeps only status and a fixed endpoint category, including during permission revocation", () => {
     const result = classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 403 (Forbidden)", "https://example.test/api/voice/control?token=private", "https://example.test/app/private");
-    expect(result).toEqual({ kind: "http-resource", status: 403, endpoint: "voice-control" });
+    expect(result).toEqual({ kind: "http-resource", status: 403, endpoint: "voice-control", code: "other" });
     expect(JSON.stringify(result)).not.toMatch(/private|token|example/);
   });
   it("does not turn unknown messages or foreign/missing locations into allowed errors", () => {
-    expect(classifyVoiceProductConsole("private native error", "", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "other" });
-    expect(classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 409 (Conflict)", "https://foreign.test/api/voice/control", "https://example.test/app")).toEqual({ kind: "http-resource", status: 409, endpoint: "other" });
-    expect(classifyVoiceProductConsole("private error", "https://example.test/_next/static/chunks/private.js", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "app-script" });
+    expect(classifyVoiceProductConsole("private native error", "", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "other", code: "other" });
+    expect(classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 409 (Conflict)", "https://foreign.test/api/voice/control", "https://example.test/app")).toEqual({ kind: "http-resource", status: 409, endpoint: "other", code: "other" });
+    expect(classifyVoiceProductConsole("private error", "https://example.test/_next/static/chunks/private.js", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "app-script", code: "other" });
   });
+});
+
+
+it.each([
+  ["DataChannel error on reliable: private detail", "data-channel"],
+  ["Unknown DataChannel error on lossy private detail", "data-channel"],
+  ["Tried to add a track for a participant, that's not present. Sid: private", "missing-track"],
+  ["NotFoundError: Failed to execute 'removeChild' on 'Node': private", "dom-removal"],
+  ["Error: Minified React error #418; private", "react"],
+  ["AbortError: The play() request was interrupted private", "playback-interrupted"],
+  ["Native encryption worker failed private", "worker"],
+  ["WebSocket is already in CLOSING or CLOSED state.", "closed-transport"],
+])("classifies a public failure prefix without retaining its detail", (text, code) => {
+  const result = classifyVoiceProductConsole(text, "", "https://example.test/app");
+  expect(result.code).toBe(code);
+  expect(JSON.stringify(result)).not.toContain("private");
 });
