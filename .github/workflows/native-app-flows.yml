@@ -1,0 +1,100 @@
+name: Native Linux application flows
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['desktop/**', 'apps/web/**', 'pnpm-lock.yaml', 'package.json', '.github/workflows/native-app-flows.yml']
+permissions:
+  contents: read
+concurrency:
+  group: native-app-flows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux-app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opendiscord
+          POSTGRES_PASSWORD: native-isolated-ci
+          POSTGRES_DB: opendiscord
+        ports: ['5432:5432']
+        options: --health-cmd 'pg_isready -U opendiscord' --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://opendiscord:native-isolated-ci@localhost:5432/opendiscord
+      BETTER_AUTH_SECRET: native-isolated-ci-secret-not-for-production-2026
+      BETTER_AUTH_URL: https://localhost:9443
+      ATTACHMENT_DIR: /tmp/opendiscord-native-app-attachments
+      OPENDISCORD_INSTANCE_URL: https://localhost:9443
+      NATIVE_TLS_CERT: /tmp/opendiscord-native-app.crt
+      NATIVE_TLS_KEY: /tmp/opendiscord-native-app.key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - run: pnpm install --frozen-lockfile
+      - name: Install Linux native dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
+      - run: pnpm db:migrate
+      - run: pnpm build
+      - name: Build unchanged native client and driver
+        working-directory: desktop
+        run: |
+          cargo install tauri-cli --version '^2' --locked
+          cargo tauri icon ../apps/web/public/brand/symbol-flat.svg
+          cargo build --locked
+          cargo install tauri-driver --locked
+      - name: Production app in genuine Linux native WebView
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            for pid in "${proxy_pid:-}" "${app_pid:-}"; do
+              if [ -n "$pid" ]; then kill -- "-$pid" 2>/dev/null || true; fi
+            done
+            sleep 2
+            for pid in "${proxy_pid:-}" "${app_pid:-}"; do
+              if [ -n "$pid" ]; then kill -KILL -- "-$pid" 2>/dev/null || true; fi
+            done
+            for pid in "${proxy_pid:-}" "${app_pid:-}"; do
+              if [ -n "$pid" ]; then wait "$pid" 2>/dev/null || true; fi
+            done
+          }
+          trap cleanup EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$NATIVE_TLS_KEY" -out "$NATIVE_TLS_CERT" -days 1 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost'
+          chmod 600 "$NATIVE_TLS_KEY"
+          sudo cp "$NATIVE_TLS_CERT" /usr/local/share/ca-certificates/opendiscord-native-app.crt
+          sudo update-ca-certificates
+          cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/
+          cp -r apps/web/public apps/web/.next/standalone/apps/web/
+          # Logs can contain disposable private data and are deliberately not artifacts.
+          HOSTNAME=127.0.0.1 PORT=3200 setsid node apps/web/.next/standalone/apps/web/server.js > /tmp/native-app-server.log 2>&1 &
+          app_pid=$!
+          setsid node desktop/tests/app_proxy.mjs > /tmp/native-app-proxy.log 2>&1 &
+          proxy_pid=$!
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --output /dev/null https://localhost:9443/sign-in; then break; fi
+            sleep 1
+          done
+          curl --fail --silent --output /dev/null https://localhost:9443/sign-in
+          xvfb-run -a python3 desktop/tests/native_app_flows.py
+      - name: Remove ephemeral trust and fixture data
+        if: always()
+        run: |
+          sudo rm -f /usr/local/share/ca-certificates/opendiscord-native-app.crt
+          sudo update-ca-certificates
+          rm -f "$NATIVE_TLS_CERT" "$NATIVE_TLS_KEY" /tmp/native-app-server.log /tmp/native-app-proxy.log
+          rm -rf "$ATTACHMENT_DIR"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-linux-app-${{ github.sha }}
+          path: desktop/native-app-evidence/
+          if-no-files-found: warn
+          retention-days: 3

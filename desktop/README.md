@@ -30,3 +30,11 @@ Before public distribution, record OS/version/WebView and acceptance results for
 - Accessibility, keyboard navigation, mobile-width layout and restart recovery.
 
 macOS notarization/Developer ID, Windows signing, store publication, security review, physical-device media/passkey tests and mobile binaries remain separate acceptance gates. Do not infer full app parity from CI or Linux-only runtime QA.
+
+## Isolated Linux application-flow acceptance
+
+`Native Linux application flows` runs the production standalone web app with a fresh PostgreSQL service and private local storage on a disposable hosted Ubuntu runner. A loopback-only TLS proxy exposes `https://localhost:9443`; an ephemeral certificate is trusted only on that runner, then removed. The unchanged native binary is compiled for that origin. There are no TLS bypasses, remote capabilities, embedded WebDriver plugins, crypto mocks or replacement browser pages.
+
+The Python standard-library WebDriver harness starts three independent Tauri/WebKit processes with isolated profiles. It checks Web Locks, IndexedDB, WebAssembly and profile isolation, then actual signup/sign-in, community navigation, native private-file save, community export, two-party DM SAS verification, ciphertext transport, reload persistence and recovery-file import into a clean profile. File upload uses the real application input through WebDriver. Unsupported native-driver capabilities fail the stage; later cases remain `not-run`. Console endpoint unavailability is recorded explicitly and is not evidence of an error-free console.
+
+The flow step is bounded to twelve minutes and the job to forty-five. Artifacts contain incremental case outcomes, platform metadata, attachment digest/size and a disposable community screenshot. No recovery files, SAS values, session material, private message payloads or driver/application logs are uploaded. A failed job proves only its individually passed cases; Windows/macOS, physical devices, signing and full platform parity remain separate gates.
