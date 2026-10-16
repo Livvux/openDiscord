@@ -55,7 +55,7 @@ export class MediaSession {
   private readonly audioRoots = new Set<HTMLElement>();
   private source(source: Track.Source): Source | undefined { return source === Track.Source.Microphone ? "microphone" : source === Track.Source.Camera ? "camera" : source === Track.Source.ScreenShare ? "screen_share" : undefined; }
   private present(): void {
-    if (this.dead) { this.bridge.presentation?.(emptyVoiceMedia("ended")); return; }
+    if (this.dead) return;
     const local = this.room?.localParticipant;
     this.bridge.presentation?.(Object.freeze({ mediaState: this.keyingComplete ? "ready" : "keying", sources: Object.freeze([...this.sources]), microphone: local?.isMicrophoneEnabled === true, camera: local?.isCameraEnabled === true, screenShare: local?.isScreenShareEnabled === true, audioBlocked: this.room?.canPlaybackAudio === false, tiles: Object.freeze([...this.tiles.values()].map(tile => tile.view)) }));
   }
@@ -66,10 +66,11 @@ export class MediaSession {
   }
   private localTracks(): void {
     if (this.dead || !this.room) return;
-    for (const tile of this.tiles.values()) if (tile.view.isLocal) this.removeTrack(tile.track);
-    for (const publication of this.room.localParticipant.trackPublications.values()) {
+    const publications = [...this.room.localParticipant.trackPublications.values()];
+    for (const tile of this.tiles.values()) if (tile.view.isLocal && !publications.some(publication => publication.track === tile.track && !publication.isMuted)) this.removeTrack(tile.track);
+    for (const publication of publications) {
       const source = this.source(publication.source), track = publication.track;
-      if (source && track && !publication.isMuted && publication.kind === Track.Kind.Video) {
+      if (source && track && !publication.isMuted && publication.kind === Track.Kind.Video && ![...this.tiles.values()].some(tile => tile.track === track)) {
         const id = crypto.randomUUID();
         this.tiles.set(id, { track, view: Object.freeze({ id, memberId: this.context.self.memberId, source, kind: "video", isLocal: true }) });
       }
@@ -264,7 +265,7 @@ export class MediaSession {
     if (this.dead) return;
     this.dead = true; clearTimeout(this.timer);
     for (const element of [...this.attachments.keys()]) { this.detach(element); if (element instanceof HTMLAudioElement) element.remove(); }
-    this.tiles.clear(); this.audioRoots.clear(); this.present();
+    this.tiles.clear(); this.audioRoots.clear(); this.bridge.presentation?.(emptyVoiceMedia("ended"));
     this.captures.forEach(track => track.stop());
     this.room?.localParticipant.trackPublications.forEach(publication => publication.track?.stop());
     this.remotes.forEach(track => { track.detach().forEach(element => element.remove()); track.stop(); });

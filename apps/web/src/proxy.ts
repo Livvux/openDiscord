@@ -29,6 +29,7 @@ export const CSP = [
   "img-src 'self' data: blob:",
   "font-src 'self'",
   `connect-src 'self'${liveKitOrigins()}`,
+  "worker-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

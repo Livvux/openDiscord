@@ -123,7 +123,10 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     } catch (error) { if (mine === revision.current && mounted.current) setError(errorText(error)); }
     finally { if (mine === revision.current && mounted.current) { sourceFlights.current.delete(source); setPendingSources([...sourceFlights.current]); } }
   };
-  const mountVideo = useCallback((id: string, element: HTMLVideoElement) => current.current?.mountVideo(id, element) ?? (() => {}), []);
+  const mountVideo = useCallback((id: string, element: HTMLVideoElement) => {
+    try { return current.current?.mountVideo(id, element) ?? (() => {}); }
+    catch { return () => {}; } // A synchronous fence can invalidate a rendered tile before its effect runs.
+  }, []);
   return <VoiceContext.Provider value={{ channel, view, joining, busy, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(call => call.confirmFullRoster()), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
     {children}<div ref={audio} hidden aria-hidden="true" />
   </VoiceContext.Provider>;
