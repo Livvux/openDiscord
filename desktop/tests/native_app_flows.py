@@ -466,6 +466,9 @@ class Native:
         self.click('Sign in')
         auth_progress(self.profile, 'await_login_navigation')
         self.wait_authenticated('/app/messages')
+        # The inbox shell mounts before its persistent crypto bootstrap finishes.
+        auth_progress(self.profile, 'await_encryption_ready')
+        wait(lambda: self.text('Encrypted messaging ready.'), 60)
 
     def upload(self, xpath, path):
         identifier = self.element(xpath)
@@ -603,7 +606,7 @@ AUTH_ACTIONS = {
     'open_signup', 'fill_display_name', 'fill_signup_email', 'fill_signup_password',
     'confirm_registration_policy', 'submit_signup', 'await_signup_navigation',
     'open_login', 'fill_login_email', 'fill_login_password', 'submit_login',
-    'await_login_navigation', 'open_account_settings', 'sign_out', 'await_signout_navigation',
+    'await_login_navigation', 'await_encryption_ready', 'open_account_settings', 'sign_out', 'await_signout_navigation',
 }
 
 
@@ -627,7 +630,7 @@ DM_ACTIONS = {
     'select_message_request', 'accept_message_request', 'await_verify_device',
     'locate_encrypted_send', 'assert_unverified_send_disabled', 'start_device_verification',
     'accept_device_verification', 'show_verification_numbers', 'await_verification_numbers',
-    'compare_verification_numbers', 'confirm_verification_numbers', 'fill_encrypted_message',
+    'compare_verification_numbers', 'confirm_verification_numbers', 'await_verification_complete', 'fill_encrypted_message',
     'send_encrypted_message', 'await_encrypted_send_complete', 'await_encrypted_message', 'assert_ciphertext_transport',
     'reload_conversation', 'select_conversation', 'await_persisted_message',
     'check_recovery_controls', 'open_recovery_controls', 'create_recovery_backup',
@@ -688,6 +691,12 @@ def dm_delivery_state(client, message, timeout=2):
       const textarea = controls.length === 1 ? controls[0] : null;
       const buttons = textarea ? Array.from(textarea.form.querySelectorAll('button[type="submit"]')).filter(node => node.textContent.trim() === 'Send encrypted message') : [];
       const decryptError = 'Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.';
+      const failures = rows.map(row => paragraphs(row)[1]).filter(node => node?.textContent === decryptError);
+      const stageCount = stage => failures.filter(node => node.getAttribute('data-dm-failure-stage') === stage).length;
+      const codeCount = code => failures.filter(node => node.getAttribute('data-dm-failure-code') === code).length;
+      const shieldFailures = failures.filter(node => node.getAttribute('data-dm-failure-stage') === 'shield');
+      const shieldColorCount = color => shieldFailures.filter(node => node.getAttribute('data-dm-shield-color') === color).length;
+      const shieldCodeCount = code => shieldFailures.filter(node => node.getAttribute('data-dm-shield-code') === code).length;
       return {
         at_messages: location.origin === origin && location.pathname === '/app/messages',
         visibility: document.visibilityState,
@@ -699,6 +708,35 @@ def dm_delivery_state(client, message, timeout=2):
         expected_plaintext_count: rows.filter(matches).length,
         own_plaintext_present: rows.some(row => matches(row) && paragraphs(row)[0]?.textContent.startsWith('You ·')),
         decrypt_error_count: rows.filter(row => paragraphs(row)[1]?.textContent === decryptError).length,
+        failure_envelope_count: stageCount('envelope'),
+        failure_sdk_decrypt_count: stageCount('sdk_decrypt'),
+        failure_shield_count: stageCount('shield'),
+        failure_sender_binding_count: stageCount('sender_binding'),
+        failure_device_trust_count: stageCount('device_trust'),
+        failure_plaintext_schema_count: stageCount('plaintext_schema'),
+        failure_message_binding_count: stageCount('message_binding'),
+        failure_history_schema_count: stageCount('history_schema'),
+        failure_replay_storage_count: stageCount('replay_storage'),
+        failure_missing_room_key_count: codeCount('MissingRoomKey'),
+        failure_unknown_message_index_count: codeCount('UnknownMessageIndex'),
+        failure_mismatched_identity_keys_count: codeCount('MismatchedIdentityKeys'),
+        failure_unknown_sender_device_count: codeCount('UnknownSenderDevice'),
+        failure_unsigned_sender_device_count: codeCount('UnsignedSenderDevice'),
+        failure_sender_identity_verification_violation_count: codeCount('SenderIdentityVerificationViolation'),
+        failure_unable_to_decrypt_count: codeCount('UnableToDecrypt'),
+        failure_mismatched_sender_count: codeCount('MismatchedSender'),
+        failure_unknown_code_count: codeCount('unknown'),
+        failure_shield_color_red_count: shieldColorCount('Red'),
+        failure_shield_color_grey_count: shieldColorCount('Grey'),
+        failure_shield_color_none_count: shieldColorCount('None'),
+        failure_shield_color_unknown_count: shieldColorCount('unknown'),
+        failure_shield_authenticity_not_guaranteed_count: shieldCodeCount('AuthenticityNotGuaranteed'),
+        failure_shield_unknown_device_count: shieldCodeCount('UnknownDevice'),
+        failure_shield_unsigned_device_count: shieldCodeCount('UnsignedDevice'),
+        failure_shield_unverified_identity_count: shieldCodeCount('UnverifiedIdentity'),
+        failure_shield_verification_violation_count: shieldCodeCount('VerificationViolation'),
+        failure_shield_mismatched_sender_count: shieldCodeCount('MismatchedSender'),
+        failure_shield_unknown_code_count: shieldCodeCount('unknown'),
         textarea_count: controls.length, draft_empty: !!textarea && textarea.value === '',
         draft_matches: !!textarea && textarea.value === expected,
         textarea_enabled: !!textarea && !textarea.disabled,
@@ -712,7 +750,20 @@ def dm_delivery_state(client, message, timeout=2):
             if snapshot.get('visibility') in {'visible', 'hidden'} else 'other'}
     for key in ['selection_count', 'target_selection_count', 'private_log_count', 'message_row_count',
                 'decrypt_error_count', 'textarea_count', 'send_control_count', 'disabled_control_count',
-                'verification_count', 'alert_count', 'expected_plaintext_count']:
+                'verification_count', 'alert_count', 'expected_plaintext_count',
+                'failure_envelope_count', 'failure_sdk_decrypt_count', 'failure_shield_count',
+                'failure_sender_binding_count', 'failure_device_trust_count', 'failure_plaintext_schema_count',
+                'failure_message_binding_count', 'failure_history_schema_count', 'failure_replay_storage_count',
+                'failure_missing_room_key_count', 'failure_unknown_message_index_count',
+                'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
+                'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count',
+                'failure_shield_color_red_count', 'failure_shield_color_grey_count',
+                'failure_shield_color_none_count', 'failure_shield_color_unknown_count',
+                'failure_shield_authenticity_not_guaranteed_count', 'failure_shield_unknown_device_count',
+                'failure_shield_unsigned_device_count', 'failure_shield_unverified_identity_count',
+                'failure_shield_verification_violation_count', 'failure_shield_mismatched_sender_count',
+                'failure_shield_unknown_code_count']:
         value = snapshot.get(key)
         if type(value) is int and 0 <= value <= 10000:
             safe[key] = value
@@ -1475,6 +1526,10 @@ def main():
                 alice.click('The numbers match')
                 dm_progress(bob.profile, 'confirm_verification_numbers')
                 bob.click('The numbers match')
+                # Confirmation sends protocol messages; each SDK still has to consume them.
+                for client in [alice, bob]:
+                    dm_progress(client.profile, 'await_verification_complete')
+                    wait(lambda: client.text('Verification complete.'), 60)
                 send_and_receive_dm(alice, bob, secret_message)
                 dm_progress(alice.profile, 'assert_ciphertext_transport')
                 safe_transport = alice.async_script('''const done=arguments[arguments.length-1], text=arguments[0];

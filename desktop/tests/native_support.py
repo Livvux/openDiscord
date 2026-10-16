@@ -107,11 +107,13 @@ def native_save_dialog(destination, trigger, wait_for, diagnostic, *, cancel=Fal
         diagnostic['phase'] = 'await_visible_dialog'
         wait_for(ready, 'Native Save dialog readiness deadline exceeded')
         absent()
-        diagnostic['phase'] = 'select_destination'
-        subprocess.run(['xdotool', 'key', 'ctrl+a'], capture_output=True, check=True, timeout=bounded(5))
-        diagnostic['phase'] = 'type_destination'
-        subprocess.run(['xdotool', 'type', '--clearmodifiers', str(destination)],
-                       capture_output=True, check=True, timeout=bounded(5))
+        if not cancel:
+            diagnostic['phase'] = 'select_destination'
+            subprocess.run(['xdotool', 'key', 'ctrl+a'], capture_output=True, check=True, timeout=bounded(5))
+            diagnostic['phase'] = 'type_destination'
+            subprocess.run(['xdotool', 'type', '--clearmodifiers', str(destination)],
+                           capture_output=True, check=True, timeout=bounded(5))
+        # Cancel the untouched chooser; path completion can consume Escape after typing.
         absent()
         diagnostic['phase'] = 'cancel' if cancel else 'confirm'
         subprocess.run(['xdotool', 'key', 'Escape' if cancel else 'Return'],

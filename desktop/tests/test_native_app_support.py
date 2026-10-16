@@ -526,6 +526,39 @@ class NativeSupportTests(unittest.TestCase):
                     self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
                     self.assertEqual(client.command.call_args.kwargs, {'timeout': .25})
 
+    def test_dm_failure_classification_retains_only_fixed_bounded_counts(self):
+        keys = ['failure_envelope_count', 'failure_sdk_decrypt_count', 'failure_shield_count',
+                'failure_sender_binding_count', 'failure_device_trust_count', 'failure_plaintext_schema_count',
+                'failure_message_binding_count', 'failure_history_schema_count', 'failure_replay_storage_count',
+                'failure_missing_room_key_count', 'failure_unknown_message_index_count',
+                'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
+                'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count',
+                'failure_shield_color_red_count', 'failure_shield_color_grey_count',
+                'failure_shield_color_none_count', 'failure_shield_color_unknown_count',
+                'failure_shield_authenticity_not_guaranteed_count', 'failure_shield_unknown_device_count',
+                'failure_shield_unsigned_device_count', 'failure_shield_unverified_identity_count',
+                'failure_shield_verification_violation_count', 'failure_shield_mismatched_sender_count',
+                'failure_shield_unknown_code_count']
+        private = 'private message SAS JWT key draft native payload'
+        for profile in [0, 1]:
+            for value in [0, 1, 10000, -1, 10001, True, private, {'code': private}]:
+                with self.subTest(profile=profile, value_type=type(value).__name__):
+                    snapshot = {key: value for key in keys}
+                    snapshot.update({'visibility': 'visible', 'decrypt_error_count': 1,
+                                     'failure_arbitrary_count': 1, 'data-dm-failure-code': private,
+                                     'data-dm-shield-color': private, 'data-dm-shield-code': private,
+                                     'shield_color': private, 'shield_code': private, 'shield_message': private,
+                                     'failure_shield_arbitrary_count': 1,
+                                     'stage': private, 'code': private, 'error': private, 'payload': private})
+                    client = types.SimpleNamespace(profile=profile, command=Mock(return_value=snapshot))
+                    result = flows.dm_delivery_state(client, private)
+                    expected = {'profile': profile, 'visibility': 'visible', 'decrypt_error_count': 1}
+                    if type(value) is int and 0 <= value <= 10000:
+                        expected.update({key: value for key in keys})
+                    self.assertEqual(result, expected)
+                    self.assertNotIn(private, json.dumps(result))
+
     def test_both_dm_peer_diagnostics_share_budget_preserve_failure_and_are_failure_only(self):
         clients = [types.SimpleNamespace(profile=index) for index in range(3)]
         for budget, fail_first in [(10, False), (3, False), (10, True)]:
@@ -1018,11 +1051,17 @@ class NativeSupportTests(unittest.TestCase):
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': False},
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': True},
         ])
+        def encryption_ready(_text):
+            self.assertEqual(client.command.call_count, 3)
+            return client.text.call_count == 2
+        client.text = Mock(side_effect=encryption_ready)
         with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
             client.login('disposable@example.test')
         client.click.assert_called_once_with('Sign in')
         client.goto.assert_called_once_with('/sign-in?next=/app/messages')
         self.assertEqual(client.command.call_count, 3)
+        self.assertEqual(client.text.call_count, 2)
+        client.text.assert_called_with('Encrypted messaging ready.')
         for call in client.command.call_args_list:
             self.assertEqual(call.args[:2], ('POST', '/execute/sync'))
             self.assertLessEqual(call.kwargs['timeout'], 2)

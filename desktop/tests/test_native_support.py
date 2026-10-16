@@ -72,9 +72,10 @@ class NativeSupportTests(unittest.TestCase):
                 self.assertTrue(all('--onlyvisible' in command for command in commands[1:6]))
                 self.assertEqual(sum(command[1] == 'windowfocus' for command in commands), 1)
                 self.assertEqual([command for command in commands if command[1] == 'type'],
-                                 [['xdotool', 'type', '--clearmodifiers', str(destination)]])
+                                 [] if cancel else [['xdotool', 'type', '--clearmodifiers', str(destination)]])
                 self.assertEqual([command for command in commands if command[1] == 'key'],
-                                 [['xdotool', 'key', 'ctrl+a'], ['xdotool', 'key', 'Escape' if cancel else 'Return']])
+                                 [['xdotool', 'key', 'Escape']] if cancel else
+                                 [['xdotool', 'key', 'ctrl+a'], ['xdotool', 'key', 'Return']])
                 self.assertNotIn('73123', json.dumps(diagnostic))
                 self.assertNotIn('private-target', json.dumps(diagnostic))
 
