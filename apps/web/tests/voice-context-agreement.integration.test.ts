@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceContextControl } from "@/lib/voice/context-control";
-import type { VoiceAgreementEventRef, VoiceOwnerAgreementReceived } from "@/lib/voice/crypto-owner";
+import { VoiceGenerationInterrupted, type VoiceAgreementEventRef, type VoiceOwnerAgreementReceived } from "@/lib/voice/crypto-owner";
 import { VoiceContextRejected } from "@/lib/voice/epoch-agreement";
 import { encodeVoiceControlWire } from "@/lib/voice/control-wire";
 import type { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
@@ -21,6 +22,14 @@ function context(values: VoiceOwnerAgreementReceived[], kind: VoiceContextContro
 async function acceptEvents(endpoint: AgreementEndpoint) {
   const events = await endpoint.owner.receiveAgreement();
   for (const event of events) { if (event.kind !== "context" || event.contextKind !== "context-accept") throw new Error("Expected only native authenticated accepts."); await endpoint.owner.acceptContextControl(event.ref); }
+}
+
+function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+async function agreePair(a: AgreementEndpoint, b: AgreementEndpoint, local: Awaited<ReturnType<AgreementEndpoint["owner"]["createContextOffer"]>>) {
+  await a.owner.stageOfferedContext(local.ref); await a.owner.sendContextControl(control(local.proposal, a, b, "context-offer"));
+  const remote = context(await b.owner.receiveAgreement(), "context-offer"); await b.owner.stageOfferedContext(remote.ref);
+  await a.owner.sendContextControl(control(local.proposal, a, b, "context-accept")); await b.owner.sendContextControl(control(remote.proposal, b, a, "context-accept"));
+  await acceptEvents(a); await acceptEvents(b); await a.owner.installContext(local.ref); await b.owner.installContext(remote.ref);
 }
 
 describe("unreachable in-band context agreement over three actual PostgreSQL native Owners", () => {
@@ -102,8 +111,18 @@ describe("unreachable in-band context agreement over three actual PostgreSQL nat
     }
     const first = offer(1); await agree(first);
     await new Promise(resolve => setTimeout(resolve, 1_010));
-    const second = { ...offer(2), epochId: first.epochId }; await agree(second);
+    const second = { ...offer(2), epochId: first.epochId };
     const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: second.callId, generation: second.generation, epochId: second.epochId, proposalSequence: second.sequence, audience, sender: self(b), recipient: self(a), publisher: self(b), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 23).toString("base64") };
+    const beforeBatch = a.fence.mock.calls.length;
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(second));
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material));
+    const offeredBatch = await a.owner.receiveAgreement(), staged = context(offeredBatch, "context-offer");
+    expect(offeredBatch.map(e => e.kind)).toEqual(["context", "pending-material"]); expect(a.fence.mock.calls).toHaveLength(beforeBatch);
+    await a.owner.stageOfferedContext(staged.ref);
+    for (const event of offeredBatch) if (event.kind === "pending-material") await a.owner.retainPendingMaterial(event.ref);
+    expect(await a.owner.contextAgreementComplete(staged.ref)).toBe(false);
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire({ ...second, kind: "context-accept", transaction: randomUUID() })); await acceptEvents(a);
+    expect(await a.owner.installContext(staged.ref)).toEqual([material]);
     await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material)); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
     const fences = a.fence.mock.calls.length;
     await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(first)); await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material));
@@ -119,6 +138,56 @@ describe("unreachable in-band context agreement over three actual PostgreSQL nat
       await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(payload)); await expect(a.owner.receiveAgreement()).rejects.toThrow(/proposal sequence/);
     }
     expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure");
+  }, 60_000);
+
+  it.each(["selection", "stage"] as const)("holds actual ACK and refuses stale media after %s fence", async kind => {
+    const endpoints = await agreementServiceFixture(2); await verifyAgreementPeers(endpoints[0], endpoints[1]);
+    const [a, b] = endpoints.sort((x, y) => x.snapshot.memberId.localeCompare(y.snapshot.memberId)), ids = endpoints.map(e => e.snapshot.memberId);
+    await a.owner.selectAudience(ids, 1); await b.owner.selectAudience(ids, 1);
+    const first = await a.owner.createContextOffer(); await agreePair(a, b, first);
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: first.proposal.callId, generation: first.proposal.generation, epochId: first.proposal.epochId, proposalSequence: first.proposal.sequence, sender: self(b), recipient: self(a), publisher: self(b), audience: [...first.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 29).toString("base64") };
+    await b.owner.sendControl(material); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+    await new Promise(resolve => setTimeout(resolve, 1_010)); const next = await a.owner.createContextOffer();
+    const entered = gate(), release = gate(); let held = false;
+    a.after = async input => { if (input.request.kind === "ack" && !held) { held = true; entered.resolve(); await release.promise; } };
+    await b.owner.sendControl(material); const receiving = a.owner.receiveAgreement(); await entered.promise;
+    try {
+      const fences = a.fence.mock.calls.length;
+      if (kind === "selection") { const selected = a.owner.selectAudience(ids, 2); expect(a.fence.mock.calls.length).toBeGreaterThan(fences); await selected; }
+      else await a.owner.stageOfferedContext(next.ref);
+      release.resolve(); await expect(receiving).rejects.toBeInstanceOf(VoiceGenerationInterrupted);
+      expect(a.fence).not.toHaveBeenCalledWith("native-or-schema-failure"); expect(a.fence).not.toHaveBeenCalledWith("transport-or-schema-failure");
+      a.after = undefined;
+      let fresh = next;
+      if (kind === "selection") { await new Promise(resolve => setTimeout(resolve, 1_010)); fresh = await a.owner.createContextOffer(); expect(fresh.proposal.sequence).toBe(3); }
+      await agreePair(a, b, fresh);
+      const current = { ...material, epochId: fresh.proposal.epochId, proposalSequence: fresh.proposal.sequence };
+      await b.owner.sendControl(current); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: current }]);
+    } finally { release.resolve(); a.after = undefined; }
+  }, 60_000);
+
+  it.each(["predispatch", "current-transport-failure"] as const)("settles genuine observed native work safely across %s media fence", async kind => {
+    const endpoints = await agreementServiceFixture(2); await verifyAgreementPeers(endpoints[0], endpoints[1]);
+    const [a, b] = endpoints.sort((x, y) => x.snapshot.memberId.localeCompare(y.snapshot.memberId)), ids = endpoints.map(e => e.snapshot.memberId);
+    await a.owner.selectAudience(ids, 1); await b.owner.selectAudience(ids, 1); const local = await a.owner.createContextOffer(); await agreePair(a, b, local);
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: local.proposal.callId, generation: local.proposal.generation, epochId: local.proposal.epochId, proposalSequence: local.proposal.sequence, sender: self(a), recipient: self(b), publisher: self(a), audience: [...local.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 31).toString("base64") };
+    await a.owner.sendControl(material); expect(await b.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+    if (kind === "predispatch") {
+      const sent = a.calls.filter(c => c.request.kind === "send").length, retired = a.calls.filter(c => c.request.kind === "retire").length;
+      const encrypt = C.Device.prototype.encryptToDeviceEvent; let selection: Promise<void> | undefined;
+      vi.spyOn(C.Device.prototype, "encryptToDeviceEvent").mockImplementation(async function(this: C.Device, ...args) {
+        const result = await encrypt.apply(this, args); selection = a.owner.selectAudience(ids, 2); return result;
+      });
+      await expect(a.owner.sendControl(material)).rejects.toBeInstanceOf(VoiceGenerationInterrupted); await selection;
+      expect(a.calls.filter(c => c.request.kind === "send")).toHaveLength(sent); expect(a.calls.filter(c => c.request.kind === "retire")).toHaveLength(retired + 1);
+      expect(a.fence).not.toHaveBeenCalledWith("transport-or-completion-failure");
+    } else {
+      const entered = gate(), release = gate(); let held = false;
+      a.after = async input => { if (input.request.kind === "send" && !held) { held = true; entered.resolve(); await release.promise; throw new Error("Current media transport failed after real service commit."); } };
+      const sending = a.owner.sendControl(material); await entered.promise;
+      try { await a.owner.selectAudience(ids, 2); release.resolve(); await expect(sending).rejects.toThrow(/Current media transport failed/); expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure"); }
+      finally { release.resolve(); a.after = undefined; }
+    }
   }, 60_000);
 
 });

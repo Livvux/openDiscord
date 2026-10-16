@@ -64,7 +64,7 @@ describe("pure bounded voice epoch agreement (no native-authentication claim)", 
     const reference = randomUUID(), fresh = { ...f.offer, sequence: 2, epochId: randomUUID(), reference, transaction: reference };
     const proposal = f.ledger.stage(fresh, 1, 1_000, 11_000);
     expect(f.ledger.complete(proposal, 1, 1_001)).toBe(false); expect(f.ledger.complete(old, 1, 1_001)).toBe(false);
-    expect(() => f.ledger.material(f.material(1), 1, 1_002)).toThrow(/Stale/);
+    expect(() => f.ledger.material(f.material(1), 1, 1_002)).toThrow(/proposal sequence/);
   });
   it("flood is bounded at eight transitions and duplicate offers never refresh deadline", () => {
     const f = fixture();
