@@ -20,7 +20,7 @@ export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" 
 type VoiceSasView = Readonly<Omit<VoiceSasState, "emojiIndices"> & { emojiIndices: readonly number[] | null }>;
 export type VoiceCallView = Readonly<{
   state: VoiceCallState; roster: readonly Readonly<VoiceSnapshot["members"][number]>[];
-  generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
+  fenceRevision: number; generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
   localConsentPending: boolean; error?: string;
 }>;
 export type VoiceCallOptions = {
@@ -49,6 +49,7 @@ export class CallSession {
   private sas: VoiceSasState[] = [];
   private localConsentPending = false;
   private selectionRevision = 0;
+  private fenceRevision = 0;
   private attempt?: Attempt;
   private stopped = false;
   private cleanup?: Promise<void>;
@@ -64,7 +65,7 @@ export class CallSession {
   private transitionFlight?: Promise<void>;
   private lastPollStart = -Infinity;
   private actionFlight?: Promise<void>;
-  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false });
+  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false });
   private readonly resume = () => { try { this.checkCurrent(); } catch { /* checkCurrent closes synchronously */ } };
   private constructor(private readonly options: VoiceCallOptions) { this.http = createVoiceHttpClient({ fetch: options.fetch }); }
 
@@ -99,7 +100,7 @@ export class CallSession {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private emit(): void {
     const snapshot = this.authority?.snapshot;
-    this.view = Object.freeze({ state: this.state, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
+    this.view = Object.freeze({ state: this.state, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
     for (const listener of this.listeners) { try { listener(); } catch { /* Render observers cannot alter native control lifetime. */ } }
   }
   private assertAlive(): void {
@@ -160,10 +161,17 @@ export class CallSession {
     });
   }
   private ownerFence(reason: string): void {
-    if (["audience-selection-change", "generation-transition", "offered-context-change", "audience-context-change"].includes(reason)) { this.emit(); return; }
+    this.fenceRevision++;
+    if (["audience-selection-change", "offered-context-change", "audience-context-change"].includes(reason)) {
+      // Invalidate observable agreement synchronously, but preserve the live
+      // capability/attempt needed to finish this exact selection/stage/drain.
+      if (!this.stopped && this.state !== "retry-required") this.state = "negotiating";
+      this.emit(); return;
+    }
+    if (reason === "generation-transition") { if (!this.stopped) this.state = "waiting"; this.emit(); return; }
     if (!this.stopped) { this.error = "control-failed"; void this.close(reason); }
   }
-  private fence(): void { this.attempt = undefined; clearTimeout(this.contextTimer); this.localConsentPending = false; if (!this.stopped) this.state = "waiting"; this.emit(); }
+  private fence(): void { this.fenceRevision++; this.attempt = undefined; clearTimeout(this.contextTimer); this.localConsentPending = false; if (!this.stopped) this.state = "waiting"; this.emit(); }
   private async reconcile(grant: Grant): Promise<void> {
     this.checkCurrent();
     const old = this.authority!.snapshot;
@@ -264,7 +272,7 @@ export class CallSession {
   }
   private newAttempt(start: number): Attempt {
     const attempt = { deadline: start + ATTEMPT_MS, revision: this.selectionRevision, installed: false };
-    this.attempt = attempt;
+    this.attempt = attempt; this.state = "negotiating"; this.emit();
     clearTimeout(this.contextTimer);
     this.contextTimer = setTimeout(() => { if (this.attempt === attempt && !attempt.installed) this.retryRequired(); }, Math.max(0, attempt.deadline - performance.now()));
     return attempt;
@@ -381,7 +389,7 @@ export class CallSession {
   }
   close(reason = "left"): Promise<void> {
     if (this.cleanup) return this.cleanup;
-    this.stopped = true; this.state = "ended"; this.attempt = undefined;
+    this.stopped = true; this.fenceRevision++; this.state = "ended"; this.attempt = undefined;
     this.lifetime.abort();
     clearTimeout(this.pollTimer); clearTimeout(this.heartbeatTimer); clearTimeout(this.contextTimer); clearTimeout(this.leaseTimer);
     if (typeof window !== "undefined") window.removeEventListener?.("pageshow", this.resume);
