@@ -63,9 +63,15 @@ describe("reactions", () => {
     await expect(toggleReaction(member, msg.id, "🇩🇪")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "❤️")).resolves.toBeUndefined();
     await expect(toggleReaction(member, msg.id, "1️⃣")).resolves.toBeUndefined();
-    await expect(toggleReaction(member, msg.id, "👩🏽‍❤️‍💋‍👨🏻")).resolves.toBeUndefined();
-    await expect(toggleReaction(member, msg.id, "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}")).resolves.toBeUndefined();
     for (const bad of ["lol", "<b>", "1", "👍x", "", "😀0000", "👍👍", "🇩"]) await expect(toggleReaction(member, msg.id, bad)).rejects.toThrow();
+  });
+
+  it("accepts mixed-tone sequences and subdivision flags", async () => {
+    const actor = await users.create("Emoji Sequences");
+    await acceptInvite(actor, await createInvite(owner, communityId, { expiresInHours: 24, maxUses: 1 }));
+    const msg = await sendMessage(actor, generalId, "long sequences");
+    await expect(toggleReaction(actor, msg.id, "👩🏽‍❤️‍💋‍👨🏻")).resolves.toBeUndefined();
+    await expect(toggleReaction(actor, msg.id, "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}")).resolves.toBeUndefined();
   });
 
   it("caps distinct emojis per message", async () => {

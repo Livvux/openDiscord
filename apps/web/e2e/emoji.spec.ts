@@ -28,7 +28,7 @@ test("emoji search, insertion, local images and full reactions", async ({ browse
   const reactions = page.getByRole("dialog", { name: "Add a reaction", exact: true });
   await reactions.getByRole("button", { name: "Show all Emojis" }).click();
   await reactions.getByRole("textbox").fill("rocket");
-  await reactions.getByRole("gridcell", { name: /^rocket$/i }).click();
+  await reactions.getByRole("gridcell", { name: /^rockets?$/i }).click();
   await expect(row.getByRole("button", { name: "🚀 1 reaction, including you" })).toBeVisible();
   await page.getByRole("button", { name: "Choose community emoji or sticker" }).click();
   await expect(picker.getByRole("textbox")).toBeFocused();
