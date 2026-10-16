@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { GITHUB_URL } from "@/lib/site";
 import { AppMockup } from "./app-mockup";
 import { InstallPanel } from "./install-panel";
@@ -49,6 +50,20 @@ export function Hero() {
               Self-host it
             </a>
           </div>
+          <a
+            href="https://www.producthunt.com/products/opendiscord?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-opendiscord"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-6 inline-block rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-mint"
+          >
+            <Image
+              alt="openDiscord - Open Source Communication Platform | Product Hunt"
+              width={250}
+              height={54}
+              src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1282282&theme=light&t=1792138859188"
+              unoptimized
+            />
+          </a>
         </div>
         <div className="animate-rise [animation-delay:320ms]">
           <InstallPanel />
