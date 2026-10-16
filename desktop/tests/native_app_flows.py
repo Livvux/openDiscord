@@ -81,11 +81,11 @@ class Native:
             env={**os.environ, 'HOME': str(self.home), 'XDG_CONFIG_HOME': str(self.home / '.config'),
                  'XDG_DATA_HOME': str(self.home / '.local/share'), 'XDG_CACHE_HOME': str(self.home / '.cache')})
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, *, timeout=40):
         request = urllib.request.Request(f'http://127.0.0.1:{self.port}' + path,
             json.dumps(body).encode() if body is not None else None,
             {'Content-Type': 'application/json'}, method=method)
-        with urllib.request.urlopen(request, timeout=40) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)['value']
 
     def start(self):
@@ -96,8 +96,8 @@ class Native:
         self.command('POST', '/timeouts', {'script': 60000, 'pageLoad': 60000, 'implicit': 0})
         self.goto('/sign-in')
 
-    def command(self, method, path, body=None):
-        return self.request(method, '/session/' + self.session + path, body)
+    def command(self, method, path, body=None, *, timeout=40):
+        return self.request(method, '/session/' + self.session + path, body, timeout=timeout)
 
     def script(self, script, *args):
         return self.command('POST', '/execute/sync', {'script': script, 'args': list(args)})
@@ -138,8 +138,8 @@ class Native:
     def text(self, text):
         return self.script('return document.body.innerText.includes(arguments[0])', text)
 
-    def screenshot(self, name):
-        (EVIDENCE / (name + '.png')).write_bytes(base64.b64decode(self.command('GET', '/screenshot')))
+    def screenshot(self, name, *, timeout=40):
+        (EVIDENCE / (name + '.png')).write_bytes(base64.b64decode(self.command('GET', '/screenshot', timeout=timeout)))
 
     def signup(self, name):
         email = name.lower().replace(' ', '-') + '@example.test'
@@ -176,6 +176,59 @@ class Native:
         subprocess.run(['xdotool', 'key', 'Return'], check=True, timeout=5)
         wait(lambda: destination.exists() and destination.stat().st_size > 0)
         wait(lambda: not dialog())
+
+COMMUNITY_ACTIONS = {
+    'open_home', 'open_create_dialog', 'fill_community_name', 'submit_create',
+    'await_general', 'read_community_path', 'open_invite_dialog', 'create_invite',
+    'read_invite', 'open_member_invite', 'accept_invite', 'await_member_general',
+    'return_owner_channel', 'capture_community',
+}
+
+
+def community_progress(action):
+    if action not in COMMUNITY_ACTIONS:
+        raise ValueError('Diagnostic action is not allowlisted')
+    metadata['community_action'] = action
+    persist()
+
+
+@contextmanager
+def diagnose_community(owner, member):
+    """Only early community UI: fixed counts and route classes, never DOM/value dumps."""
+    try:
+        yield
+    except BaseException:
+        client = member if metadata.get('community_action') in {
+            'open_member_invite', 'accept_invite', 'await_member_general',
+        } else owner
+        try:
+            snapshot = client.command('POST', '/execute/sync', {'args': [], 'script': """
+              const visible = node => !!(node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+              const buttons = Array.from(document.querySelectorAll('button'));
+              const count = text => {
+                const nodes = buttons.filter(node => node.getAttribute('aria-label') === text || node.textContent.trim() === text);
+                return {matched: nodes.length, visible: nodes.filter(visible).length};
+              };
+              return {
+                route: location.pathname === '/app' ? 'app' : location.pathname.startsWith('/app/c/') ? 'community' : location.pathname === '/sign-in' ? 'sign-in' : location.pathname.startsWith('/invite/') ? 'invite' : 'other',
+                controls: {
+                  create_community: count('Create a community'), create: count('Create'),
+                  invite_people: count('Invite people'), create_invite: count('Create invite link'),
+                  accept_invite: count('Accept invite')
+                },
+                name_labels: Array.from(document.querySelectorAll('label')).filter(node => node.textContent.trim() === 'Name').length,
+                safe_screenshot: location.pathname.startsWith('/app') && !document.querySelector('input[type=password], #invite-link')
+              };
+            """}, timeout=2)
+            # Keys and values above are fixed classes/counts; do not add DOM or URL values.
+            metadata['community_diagnostic'] = snapshot
+            if snapshot['safe_screenshot']:
+                client.screenshot('early-community-failure', timeout=3)
+        except Exception as error:
+            metadata['community_diagnostic_error_type'] = type(error).__name__
+        persist()
+        raise
+
 
 def cleanup_clients(clients, budget=10):
     """Signal every captured session group before waiting; never call a hung driver."""
@@ -294,20 +347,34 @@ def main():
                 alice.click('Sign out')
                 wait(lambda: '/sign-in' in alice.command('GET', '/url'))
                 alice.login(email)
-            with stage('community_navigation'):
+            with stage('community_navigation'), diagnose_community(alice, bob):
+                community_progress('open_home')
                 alice.goto('/app')
+                community_progress('open_create_dialog')
                 alice.click('Create a community')
+                community_progress('fill_community_name')
                 alice.fill('Name', 'Native Acceptance Community')
+                community_progress('submit_create')
                 alice.click('Create')
+                community_progress('await_general')
                 wait(lambda: alice.text('general'))
+                community_progress('read_community_path')
                 community_path = urllib.parse.urlsplit(alice.command('GET', '/url')).path
+                community_progress('open_invite_dialog')
                 alice.click('Invite people')
+                community_progress('create_invite')
                 alice.click('Create invite link')
+                community_progress('read_invite')
                 invite = wait(lambda: alice.script('return document.querySelector("input[readonly]")?.value'))
+                community_progress('open_member_invite')
                 bob.goto(urllib.parse.urlsplit(invite).path)
+                community_progress('accept_invite')
                 bob.click('Accept invite')
+                community_progress('await_member_general')
                 wait(lambda: bob.text('general'))
+                community_progress('return_owner_channel')
                 alice.goto(community_path)
+                community_progress('capture_community')
                 alice.screenshot('community')
             with stage('private_attachment'):
                 payload = b'Native private attachment acceptance\n'

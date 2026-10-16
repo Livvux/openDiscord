@@ -36,7 +36,12 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: desktop }
+        with:
+          workspaces: desktop
+          cache-on-failure: true
+          # Default environment/toolchain/Cargo hashes remain active; isolate native origin/inputs.
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENDISCORD_INSTANCE_URL
+          key: ubuntu2404-native-https-localhost-9443-${{ hashFiles('desktop/src/**', 'desktop/build.rs', 'desktop/Cargo.toml', 'desktop/Cargo.lock', 'desktop/tauri.conf.json', 'desktop/Info.plist', 'desktop/assets/**', 'apps/web/public/brand/symbol-flat.svg') }}
       - run: pnpm install --frozen-lockfile
       - name: Install Linux native dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
