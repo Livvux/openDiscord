@@ -39,7 +39,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - name: Call and presentation regression checks
-        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
+        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
       - name: Build genuine Next product including worker assets
         run: pnpm build
       - name: Start pinned SFU with generation-only room creation

@@ -1,12 +1,17 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
+import { observeVoiceProductResult, withVoiceProductCleanup, type VoiceProductObservationStage } from "./fixtures/voice-product-results";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
 
 const participant = (page: Page, name: string) => page.getByRole("listitem", { name: `Voice participant ${name}`, exact: true });
 const audience = (page: Page) => page.getByRole("region", { name: "Full Voice audience", exact: true });
-const evidence = (page: Page) => page.evaluate(() => window.__voiceProductEvidence.snapshot());
+const evidence = async (page: Page) => {
+  const result = await observeVoiceProductResult(() => page.evaluate(() => window.__voiceProductEvidence.snapshot()), { timeoutMs: 2000, stage: "diagnostic" });
+  if (!result.ok) throw new Error(`Voice product diagnostic ${result.reason}.`);
+  return result.value;
+};
 async function explicitJoin(page: Page) {
   await page.getByRole("button", { name: "Join voice", exact: true }).click();
   await expect(page.getByRole("region", { name: "Voice join consent" })).toBeVisible();
@@ -67,7 +72,9 @@ test.describe("genuine Next product encrypted Voice", () => {
     const grants: { page: number; sources: string[]; publish: boolean; subscribe: boolean; expiry: number }[] = [];
     const observation: Promise<void>[] = [];
     const memberIds = new Map<Page, string>();
-    let observationFailed = false;
+    let observationFailed = false, observing = true, commitsClosed = false, primaryFailure = false;
+    const stopResponseObservers: (() => void)[] = [];
+    const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed" }[] = [];
     let stage = "signup";
     const attach = async (page: Page, index: number) => {
       await page.addInitScript(installVoiceProductObserver);
@@ -79,30 +86,41 @@ test.describe("genuine Next product encrypted Voice", () => {
         if (message.text() === "Failed to load resource: the server responded with a status of 409 (Conflict)" && new URL(message.location().url || page.url()).pathname === "/api/voice/control") return;
         consoleErrors.push("console-error");
       });
-      page.on("response", response => {
+      const onResponse = (response: Response) => {
+        if (!observing) return;
         const request = response.request();
         if (request.resourceType() === "script" && /e2ee|worker/i.test(new URL(response.url()).pathname)) workerResponses.push({ page: index, status: response.status(), javascript: /javascript|ecmascript/.test(response.headers()["content-type"] ?? "") });
         if (request.method() !== "POST" || new URL(request.url()).pathname !== "/api/voice/control") return;
         const body: unknown = request.postDataJSON();
         if (!body || typeof body !== "object" || !("action" in body)) return;
         if (body.action === "join") {
-          const work = response.json().then((snapshot: unknown) => {
+          const work = observeVoiceProductResult(async checkpoint => {
+            if (response.status() !== 200) throw new Error("Product join response failed.");
+            const snapshot: unknown = await response.json(); checkpoint("result");
             if (!snapshot || typeof snapshot !== "object" || !("memberId" in snapshot) || typeof snapshot.memberId !== "string") throw new Error("Missing canonical product member.");
-            memberIds.set(page, snapshot.memberId);
-          }).catch(() => { observationFailed = true; });
+            return snapshot.memberId;
+          }).then(result => {
+            if (!result.ok) { observationFailed = true; observationFailures.push({ page: index, action: "join", stage: result.stage, reason: result.reason }); }
+            else if (!commitsClosed) memberIds.set(page, result.value);
+          });
           observation.push(work); return;
         }
         if (body.action !== "token") return;
-        const work = (async () => {
+        const work = observeVoiceProductResult(async checkpoint => {
           if (response.status() !== 200) throw new Error("Product token grant failed.");
-          const raw: unknown = await response.json();
+          const raw: unknown = await response.json(); checkpoint("verify");
           if (!raw || typeof raw !== "object" || !("token" in raw) || typeof raw.token !== "string" || !("sources" in raw) || !strings(raw.sources) || !("participantIdentity" in raw) || !("roomName" in raw)) throw new Error("Invalid product token response.");
-          const claims = await verifier.verify(raw.token, 0), sources: unknown = claims.video?.canPublishSources ?? [];
+          const claims = await verifier.verify(raw.token, 0); checkpoint("result");
+          const sources: unknown = claims.video?.canPublishSources ?? [];
           if (claims.sub !== raw.participantIdentity || claims.video?.room !== raw.roomName || !strings(sources) || JSON.stringify(sources) !== JSON.stringify(raw.sources) || typeof claims.exp !== "number") throw new Error("Actual product grant binding mismatch.");
-          grants.push({ page: index, sources, publish: claims.video?.canPublish === true, subscribe: claims.video?.canSubscribe === true, expiry: claims.exp * 1000 });
-        })().catch(() => { observationFailed = true; });
+          return Object.freeze({ page: index, sources: [...sources], publish: claims.video?.canPublish === true, subscribe: claims.video?.canSubscribe === true, expiry: claims.exp * 1000 });
+        }).then(result => {
+          if (!result.ok) { observationFailed = true; observationFailures.push({ page: index, action: "token", stage: result.stage, reason: result.reason }); }
+          else if (!commitsClosed) grants.push(result.value);
+        });
         observation.push(work);
-      });
+      };
+      page.on("response", onResponse); stopResponseObservers.push(() => page.off("response", onResponse));
     };
     try {
       const owner = await newUserPage(browser); pages.push(owner); await attach(owner, 0);
@@ -192,7 +210,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await expectNoA11yViolations(pages[1]);
       await pages[1].setViewportSize({ width: 390, height: 844 });
       expect(await pages[1].evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await pages[1].screenshot({ path: testInfo.outputPath("product-voice-mobile.png") });
+      await pages[1].screenshot({ path: testInfo.outputPath("product-voice-mobile.png"), mask: [audience(pages[1])] });
       await pages[1].setViewportSize({ width: 1280, height: 900 });
       await pages[1].getByRole("link", { name: "general", exact: true }).click();
       await expect(pages[1].getByRole("region", { name: "Voice connection" })).toContainText("Encrypted voice ready");
@@ -213,7 +231,10 @@ test.describe("genuine Next product encrypted Voice", () => {
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       const summary = await Promise.all(pages.map(evidence));
-      await testInfo.attach("voice-product-evidence", { body: JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrors, consoleErrors }), contentType: "application/json" });
+      const attached = await observeVoiceProductResult(async () => {
+        await testInfo.attach("voice-product-evidence", { body: JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrors, consoleErrors }), contentType: "application/json" });
+      }, { timeoutMs: 2000, stage: "diagnostic" });
+      expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
       await owner.getByRole("button", { name: "Channel settings" }).click();
@@ -226,11 +247,26 @@ test.describe("genuine Next product encrypted Voice", () => {
       expect(runtimeErrors).toEqual([]); expect(consoleErrors).toEqual([]);
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
+    } catch (error) {
+      primaryFailure = true; throw error;
     } finally {
-      await Promise.all(observation);
-      const states = await Promise.all(pages.map(async page => evidence(page).then(stats => ({ ...stats, workerUrl: undefined }), () => ({ unavailable: true }))));
-      await testInfo.attach("voice-product-evidence-final", { body: JSON.stringify({ stage, observationFailed, states, grantCount: grants.length, runtimeErrors, consoleErrors }), contentType: "application/json" });
-      await Promise.all(pages.map(page => page.context().close()));
+      observing = false; stopResponseObservers.forEach(stop => stop());
+      let cleanupFailed = false;
+      await withVoiceProductCleanup(async () => {
+        await Promise.all(observation); commitsClosed = true;
+        const diagnostics = await Promise.all(pages.map(page => observeVoiceProductResult(async () => {
+          const stats = await evidence(page); return { ...stats, workerUrl: undefined };
+        }, { timeoutMs: 2000, stage: "diagnostic" })));
+        const attachment = await observeVoiceProductResult(async () => {
+          await testInfo.attach("voice-product-evidence-final", { body: JSON.stringify({ stage, observationFailed, observationFailures, diagnostics, grantCount: grants.length, runtimeErrors, consoleErrors }), contentType: "application/json" });
+        }, { timeoutMs: 2000, stage: "diagnostic" });
+        if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
+      }, async () => {
+        commitsClosed = true;
+        const closed = await Promise.all(pages.map(page => observeVoiceProductResult(() => page.context().close(), { timeoutMs: 2000, stage: "cleanup" })));
+        if (closed.some(result => !result.ok)) cleanupFailed = true;
+      });
+      if (!primaryFailure && (observationFailed || cleanupFailed)) throw new Error("Voice product observation or cleanup failed; see bounded diagnostic stages.");
     }
   });
 });

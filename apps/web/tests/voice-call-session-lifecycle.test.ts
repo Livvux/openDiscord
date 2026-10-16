@@ -4,14 +4,18 @@ import type { VoiceOwnerOptions, VoiceProductOwnerPort } from "@/lib/voice/crypt
 import { VoiceContextProposal, VoiceContextRejected } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty, type VoiceOwnerControl } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
-import type { InstalledVoiceMediaContext, VoiceMediaBridge } from "@/lib/voice/media-session";
+import type { InstalledVoiceMediaContext, VoiceMediaBridge, VoiceMediaView } from "@/lib/voice/media-session";
 
 const native = vi.hoisted(() => ({ options: undefined as VoiceOwnerOptions | undefined, port: undefined as VoiceProductOwnerPort | undefined }));
 const mediaEffects = vi.hoisted(() => ({ consume: vi.fn<(control: VoiceOwnerControl) => Promise<void>>(async () => {}), fence: vi.fn(), contexts: [] as InstalledVoiceMediaContext[], bridges: [] as VoiceMediaBridge[] }));
 // Control adapter ordering only. Real worker/media acceptance is in the browser suite.
 vi.mock("@/lib/voice/media-session", () => ({ MediaSession: class {
-  constructor(context: InstalledVoiceMediaContext, bridge: VoiceMediaBridge) { mediaEffects.contexts.push(context); mediaEffects.bridges.push(bridge); }
-  start() {} consume = mediaEffects.consume; fence = mediaEffects.fence;
+  constructor(context: InstalledVoiceMediaContext, private readonly bridge: VoiceMediaBridge) { mediaEffects.contexts.push(context); mediaEffects.bridges.push(bridge); }
+  start() {} consume = mediaEffects.consume;
+  fence() {
+    mediaEffects.fence();
+    this.bridge.presentation?.(Object.freeze({ mediaState: "ended", sources: Object.freeze([]), microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: Object.freeze([]) }));
+  }
 } }));
 vi.mock("@/lib/voice/crypto-owner", () => ({ createVoiceProductOwner: async (options: VoiceOwnerOptions) => { native.options = options; return native.port; }, VoiceGenerationInterrupted: class extends Error {} }));
 const callId = crypto.randomUUID(), memberId = crypto.randomUUID(), channelId = crypto.randomUUID();
@@ -98,13 +102,33 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
   it("private media handoff omits Owner/ref/secret, freezes exact installed context and fences before render observers", async () => {
     call = await CallSession.create({ ...options, fetch: fetcher() }); const proposal = await installCurrent();
     const context = mediaEffects.contexts[0], bridge = mediaEffects.bridges[0];
-    expect(Object.keys(bridge).sort()).toEqual(["current", "fatal", "send", "token"]);
+    expect(Object.keys(bridge).sort()).toEqual(["current", "fatal", "presentation", "send", "token"]);
+    const presentation: VoiceMediaView = Object.freeze({ mediaState: "ready", sources: Object.freeze(["camera"] as const), microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: Object.freeze([Object.freeze({ id: "opaque-tile", memberId, source: "camera" as const, kind: "video" as const, isLocal: true })]) });
+    bridge.presentation!(presentation);
+    const rendered = call.getSnapshot().media;
+    expect(rendered).toBe(presentation);
+    expect(Object.keys(rendered).sort()).toEqual(["audioBlocked", "camera", "mediaState", "microphone", "screenShare", "sources", "tiles"]);
+    expect(Object.keys(rendered.tiles[0]).sort()).toEqual(["id", "isLocal", "kind", "memberId", "source"]);
+    expect(Object.isFrozen(rendered)).toBe(true); expect(Object.isFrozen(rendered.sources)).toBe(true);
+    expect(Object.isFrozen(rendered.tiles)).toBe(true); expect(Object.isFrozen(rendered.tiles[0])).toBe(true);
+    expect(JSON.stringify(rendered)).not.toMatch(/owner|secret|token|CryptoKey|material|keyId|reference|participantIdentity/);
     expect(context).not.toHaveProperty("owner"); expect(context).not.toHaveProperty("secret"); expect(context).not.toHaveProperty("ref");
     expect(context).toMatchObject({ epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, deadline: 10000 });
     expect(Object.isFrozen(context)).toBe(true); expect(Object.isFrozen(context.snapshot.members)).toBe(true);
-    call.subscribe(() => { expect(mediaEffects.fence).toHaveBeenCalled(); throw new Error("Broken render observer."); });
-    native.options!.onFence("generation-transition");
-    expect(() => bridge.current()).toThrow();
+    const seen: { fenced: boolean; media: VoiceMediaView }[] = [];
+    const unsubscribe = call.subscribe(() => {
+      seen.push({ fenced: mediaEffects.fence.mock.calls.length > 0, media: call!.getSnapshot().media });
+      throw new Error("Broken render observer.");
+    });
+    try {
+      native.options!.onFence("generation-transition"); expect(() => bridge.current()).toThrow();
+      expect(seen.length).toBeGreaterThan(0);
+      for (const observed of seen) {
+        expect(observed.fenced).toBe(true);
+        expect(observed.media).toEqual({ mediaState: "ended", sources: [], tiles: [], microphone: false, camera: false, screenShare: false, audioBlocked: false });
+        expect(Object.isFrozen(observed.media)).toBe(true);
+      }
+    } finally { unsubscribe(); }
   });
   it("token409 follows discovery policy; same-generation is fatal and newer generation cannot retry the old bridge", async () => {
     let newer = false;
