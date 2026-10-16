@@ -4,7 +4,7 @@ import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
 import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
-import { decryptionDiagnostic, type DecryptionDiagnostic, type DecryptionStage } from "./decryption-diagnostics";
+import { decryptionDiagnostic, publicShieldCode, publicShieldColor, type DecryptionDiagnostic, type DecryptionStage, type ShieldDiagnostic } from "./decryption-diagnostics";
 
 type SDK = typeof Matrix;
 type Outgoing = Matrix.KeysUploadRequest | Matrix.KeysQueryRequest | Matrix.KeysClaimRequest | Matrix.ToDeviceRequest | Matrix.SignatureUploadRequest | Matrix.RoomMessageRequest | Matrix.KeysBackupRequest;
@@ -268,13 +268,17 @@ export class PrivateMessaging {
       for (const envelope of envelopes) {
         const base = { id: envelope.id, own: envelope.senderId === this.userId, createdAt: envelope.createdAt, senderId: envelope.senderId };
         let stage: DecryptionStage = "envelope";
+        let shieldDiagnostic: ShieldDiagnostic | undefined;
         try {
           if (envelope.conversationId !== conversation || ![this.userId, peer].includes(envelope.senderId)) throw new Error("Unexpected message sender.");
           const event = { type: "m.room.encrypted", event_id: `$${envelope.id}`, sender: matrixUser(envelope.senderId), origin_server_ts: new Date(envelope.createdAt).getTime(), content: envelope.content };
           stage = "sdk_decrypt";
           const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
           stage = "shield";
-          if (decrypted.shieldState(true).color !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
+          const shield = decrypted.shieldState(true);
+          const shieldColor = shield.color;
+          shieldDiagnostic = { shieldColor: publicShieldColor(shieldColor, this.C), shieldCode: publicShieldCode(shield.code, this.C) };
+          if (shieldColor !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
           stage = "sender_binding";
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           stage = "device_trust";
@@ -293,7 +297,7 @@ export class PrivateMessaging {
             this.verifiedHistory.set(envelope.id, verified);
             historyChanged = true;
           }
-        } catch (error: unknown) { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.", diagnostic: decryptionDiagnostic(stage, error, this.C) }); }
+        } catch (error: unknown) { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.", diagnostic: decryptionDiagnostic(stage, error, this.C, shieldDiagnostic) }); }
       }
       if (historyChanged) {
         this.verifiedHistory = new Map(boundedHistory([...this.verifiedHistory.values()]).map((entry) => [entry.envelope.id, entry]));

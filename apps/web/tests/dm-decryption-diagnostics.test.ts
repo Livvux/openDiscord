@@ -3,7 +3,7 @@ import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrivateMessaging } from "@/lib/dm/client";
 import { matrixUser, type DirectEnvelope } from "@/lib/dm/contracts";
-import { decryptionDiagnostic, publicDecryptionCode, type DecryptionStage } from "@/lib/dm/decryption-diagnostics";
+import { decryptionDiagnostic, publicDecryptionCode, publicShieldCode, publicShieldColor, type DecryptionStage } from "@/lib/dm/decryption-diagnostics";
 
 const fixtures = vi.hoisted(() => ({ initialize: vi.fn(), openHistory: vi.fn() }));
 vi.mock("@matrix-org/matrix-sdk-crypto-wasm", async (importOriginal) => {
@@ -35,6 +35,16 @@ describe("bounded public SDK classification", () => {
       expect(decryptionDiagnostic("sdk_decrypt", new Error("private error"), C)).toEqual({ stage: "sdk_decrypt", code: "unknown" });
     } finally { error.free(); }
   });
+
+  it("maps only public shield colors and reasons with fixed missing/future fallbacks", () => {
+    for (const color of ["Red", "Grey", "None"] as const) expect(publicShieldColor(C.ShieldColor[color], C)).toBe(color);
+    const codes = ["AuthenticityNotGuaranteed", "UnknownDevice", "UnsignedDevice", "UnverifiedIdentity", "VerificationViolation", "MismatchedSender"] as const;
+    for (const code of codes) expect(publicShieldCode(C.ShieldStateCode[code], C)).toBe(code);
+    for (const unknown of [undefined, Number.MAX_SAFE_INTEGER]) {
+      expect(publicShieldColor(unknown, C)).toBe("unknown");
+      expect(publicShieldCode(unknown, C)).toBe("unknown");
+    }
+  });
 });
 
 describe("per-message processing failure boundaries", () => {
@@ -43,9 +53,12 @@ describe("per-message processing failure boundaries", () => {
   const user = "recipient", peer = "sender";
   const device = randomUUID(), conversation = randomUUID(), transaction = randomUUID();
   const plain = { msgtype: "m.text", body: "fixture plaintext", conversation, transaction };
+  function shieldFixture(color: C.ShieldColor = C.ShieldColor.None, code?: C.ShieldStateCode) {
+    return { color, code, get message(): never { throw new Error("Shield descriptions must not be read"); } };
+  }
   function decryptedFixture() {
     return { sender: new C.UserId(matrixUser(peer)), senderDevice: new C.DeviceId(device), event: JSON.stringify({ content: plain }),
-      shieldState: vi.fn(() => ({ color: C.ShieldColor.None })) };
+      shieldState: vi.fn(() => shieldFixture()) };
   }
   let decrypted: ReturnType<typeof decryptedFixture>;
   const machine = {
@@ -82,7 +95,7 @@ describe("per-message processing failure boundaries", () => {
     switch (stage) {
       case "envelope": envelope.conversationId = randomUUID(); break;
       case "sdk_decrypt": machine.decryptRoomEvent.mockRejectedValueOnce(new Error("private SDK exception")); break;
-      case "shield": decrypted.shieldState.mockReturnValueOnce({ color: C.ShieldColor.Red }); break;
+      case "shield": decrypted.shieldState.mockReturnValueOnce(shieldFixture(C.ShieldColor.Red)); break;
       case "sender_binding": decrypted.senderDevice = new C.DeviceId(randomUUID()); break;
       case "device_trust": machine.getDevice.mockResolvedValueOnce({ isVerified: () => false }); break;
       case "plaintext_schema": decrypted.event = "private invalid JSON"; break;
@@ -93,10 +106,46 @@ describe("per-message processing failure boundaries", () => {
     const [row] = await client.decrypt([envelope], conversation, peer);
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
-    expect(row.diagnostic).toEqual({ stage, code: "unknown" });
-    expect(Object.keys(row.diagnostic ?? {}).sort()).toEqual(["code", "stage"]);
+    expect(row.diagnostic).toEqual(stage === "shield" ? { stage, code: "unknown", shieldColor: "Red", shieldCode: "unknown" } : { stage, code: "unknown" });
+    expect(Object.keys(row.diagnostic ?? {}).sort()).toEqual(stage === "shield" ? ["code", "shieldCode", "shieldColor", "stage"] : ["code", "stage"]);
     expect(history.put).not.toHaveBeenCalled();
     if (stage !== "replay_storage") expect(history.acceptEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([C.ShieldColor.Red, C.ShieldColor.Grey])("preserves strict shield rejection for public color %s without reading descriptions", async (color) => {
+    decrypted.shieldState.mockReturnValueOnce(shieldFixture(color, C.ShieldStateCode.UnverifiedIdentity));
+    const [row] = await client.decrypt([envelope], conversation, peer);
+    expect(row.body).toBeNull();
+    expect(row.error).toBe(genericError);
+    expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: publicShieldColor(color, C), shieldCode: "UnverifiedIdentity" });
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(machine.getDevice).not.toHaveBeenCalled();
+    expect(history.acceptEvent).not.toHaveBeenCalled();
+  });
+
+  it("retains fixed unknown shield values if acquisition throws and keeps SDK codes separate", async () => {
+    const error = C.MegolmDecryptionError.unable_to_decrypt("private shield acquisition exception");
+    try {
+      decrypted.shieldState.mockImplementationOnce(() => { throw error; });
+      const [row] = await client.decrypt([envelope], conversation, peer);
+      expect(row.body).toBeNull();
+      expect(row.error).toBe(genericError);
+      expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
+      expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+      expect(machine.getDevice).not.toHaveBeenCalled();
+      expect(history.acceptEvent).not.toHaveBeenCalled();
+    } finally { error.free(); }
+  });
+
+  it("rejects future shield values while exposing only fixed unknown classifications", async () => {
+    decrypted.shieldState.mockReturnValueOnce(shieldFixture(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
+    const [row] = await client.decrypt([envelope], conversation, peer);
+    expect(row.body).toBeNull();
+    expect(row.error).toBe(genericError);
+    expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(machine.getDevice).not.toHaveBeenCalled();
+    expect(history.acceptEvent).not.toHaveBeenCalled();
   });
 
   it("retains a real SDK error category while keeping the visible error generic", async () => {
@@ -116,7 +165,7 @@ describe("per-message processing failure boundaries", () => {
     expect(row).not.toHaveProperty("diagnostic");
     expect(row).not.toHaveProperty("error");
     expect(machine.decryptRoomEvent.mock.calls[0][2].sender_device_trust_requirement).toBe(C.TrustRequirement.CrossSigned);
-    expect(decrypted.shieldState).toHaveBeenCalledWith(true);
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
     expect(machine.getDevice).toHaveBeenCalledWith(decrypted.sender, decrypted.senderDevice);
     expect(history.acceptEvent).toHaveBeenCalledWith(envelope);
     expect(history.put).toHaveBeenCalledOnce();

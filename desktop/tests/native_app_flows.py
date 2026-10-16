@@ -691,6 +691,9 @@ def dm_delivery_state(client, message, timeout=2):
       const failures = rows.map(row => paragraphs(row)[1]).filter(node => node?.textContent === decryptError);
       const stageCount = stage => failures.filter(node => node.getAttribute('data-dm-failure-stage') === stage).length;
       const codeCount = code => failures.filter(node => node.getAttribute('data-dm-failure-code') === code).length;
+      const shieldFailures = failures.filter(node => node.getAttribute('data-dm-failure-stage') === 'shield');
+      const shieldColorCount = color => shieldFailures.filter(node => node.getAttribute('data-dm-shield-color') === color).length;
+      const shieldCodeCount = code => shieldFailures.filter(node => node.getAttribute('data-dm-shield-code') === code).length;
       return {
         at_messages: location.origin === origin && location.pathname === '/app/messages',
         visibility: document.visibilityState,
@@ -720,6 +723,17 @@ def dm_delivery_state(client, message, timeout=2):
         failure_unable_to_decrypt_count: codeCount('UnableToDecrypt'),
         failure_mismatched_sender_count: codeCount('MismatchedSender'),
         failure_unknown_code_count: codeCount('unknown'),
+        failure_shield_color_red_count: shieldColorCount('Red'),
+        failure_shield_color_grey_count: shieldColorCount('Grey'),
+        failure_shield_color_none_count: shieldColorCount('None'),
+        failure_shield_color_unknown_count: shieldColorCount('unknown'),
+        failure_shield_authenticity_not_guaranteed_count: shieldCodeCount('AuthenticityNotGuaranteed'),
+        failure_shield_unknown_device_count: shieldCodeCount('UnknownDevice'),
+        failure_shield_unsigned_device_count: shieldCodeCount('UnsignedDevice'),
+        failure_shield_unverified_identity_count: shieldCodeCount('UnverifiedIdentity'),
+        failure_shield_verification_violation_count: shieldCodeCount('VerificationViolation'),
+        failure_shield_mismatched_sender_count: shieldCodeCount('MismatchedSender'),
+        failure_shield_unknown_code_count: shieldCodeCount('unknown'),
         textarea_count: controls.length, draft_empty: !!textarea && textarea.value === '',
         draft_matches: !!textarea && textarea.value === expected,
         textarea_enabled: !!textarea && !textarea.disabled,
@@ -740,7 +754,13 @@ def dm_delivery_state(client, message, timeout=2):
                 'failure_missing_room_key_count', 'failure_unknown_message_index_count',
                 'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
                 'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
-                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count']:
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count',
+                'failure_shield_color_red_count', 'failure_shield_color_grey_count',
+                'failure_shield_color_none_count', 'failure_shield_color_unknown_count',
+                'failure_shield_authenticity_not_guaranteed_count', 'failure_shield_unknown_device_count',
+                'failure_shield_unsigned_device_count', 'failure_shield_unverified_identity_count',
+                'failure_shield_verification_violation_count', 'failure_shield_mismatched_sender_count',
+                'failure_shield_unknown_code_count']:
         value = snapshot.get(key)
         if type(value) is int and 0 <= value <= 10000:
             safe[key] = value

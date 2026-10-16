@@ -533,7 +533,13 @@ class NativeSupportTests(unittest.TestCase):
                 'failure_missing_room_key_count', 'failure_unknown_message_index_count',
                 'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
                 'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
-                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count']
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count',
+                'failure_shield_color_red_count', 'failure_shield_color_grey_count',
+                'failure_shield_color_none_count', 'failure_shield_color_unknown_count',
+                'failure_shield_authenticity_not_guaranteed_count', 'failure_shield_unknown_device_count',
+                'failure_shield_unsigned_device_count', 'failure_shield_unverified_identity_count',
+                'failure_shield_verification_violation_count', 'failure_shield_mismatched_sender_count',
+                'failure_shield_unknown_code_count']
         private = 'private message SAS JWT key draft native payload'
         for profile in [0, 1]:
             for value in [0, 1, 10000, -1, 10001, True, private, {'code': private}]:
@@ -541,6 +547,9 @@ class NativeSupportTests(unittest.TestCase):
                     snapshot = {key: value for key in keys}
                     snapshot.update({'visibility': 'visible', 'decrypt_error_count': 1,
                                      'failure_arbitrary_count': 1, 'data-dm-failure-code': private,
+                                     'data-dm-shield-color': private, 'data-dm-shield-code': private,
+                                     'shield_color': private, 'shield_code': private, 'shield_message': private,
+                                     'failure_shield_arbitrary_count': 1,
                                      'stage': private, 'code': private, 'error': private, 'payload': private})
                     client = types.SimpleNamespace(profile=profile, command=Mock(return_value=snapshot))
                     result = flows.dm_delivery_state(client, private)
