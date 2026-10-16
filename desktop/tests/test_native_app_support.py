@@ -18,6 +18,169 @@ import native_app_flows as flows
 
 
 class NativeSupportTests(unittest.TestCase):
+    def test_enabled_inputs_wait_without_writes_then_send_once_or_fail_without_replay(self):
+        for operation in ['fill', 'upload']:
+            for outcome in ['ready', 'disabled', 'write_failure']:
+                with self.subTest(operation=operation, outcome=outcome):
+                    client = flows.Native.__new__(flows.Native)
+                    client.element = Mock(return_value='control')
+                    clock = [0.0]
+                    events = []
+
+                    def command(method, path, body=None):
+                        events.append((method, path, body))
+                        if path.endswith('/enabled'):
+                            self.assertEqual(method, 'GET')
+                            if outcome == 'disabled':
+                                clock[0] += 10
+                                return False
+                            return len(events) >= 3
+                        self.assertEqual((method, path), ('POST', '/element/control/value'))
+                        self.assertEqual(len(events), 4)
+                        if outcome == 'write_failure':
+                            raise flows.http.client.RemoteDisconnected()
+
+                    client.command = command
+                    with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                            patch.object(flows.time, 'sleep'):
+                        def act():
+                            if operation == 'fill':
+                                client.fill('Encrypted message', 'test-message')
+                            else:
+                                client.upload('//input[@type="file"]', pathlib.Path('/temporary/recovery.json'))
+                        if outcome == 'ready':
+                            act()
+                        else:
+                            with self.assertRaises(TimeoutError if outcome == 'disabled' else flows.http.client.RemoteDisconnected):
+                                act()
+                    writes = [event for event in events if event[0] == 'POST']
+                    self.assertEqual(len(writes), 0 if outcome == 'disabled' else 1)
+                    client.element.assert_called_once()
+                    if outcome == 'disabled':
+                        self.assertEqual(clock[0], 30)
+
+    def test_sender_commit_excludes_pending_and_requires_unique_visible_uuid(self):
+        message_id = '018f1234-1234-7000-8000-123456789abc'
+        for outcome in ['committed', 'pending', 'ambiguous', 'invalid_id', 'hidden']:
+            with self.subTest(outcome=outcome):
+                client = flows.Native.__new__(flows.Native)
+                clock = [0.0]
+                lookups = [0]
+                events = []
+
+                def command(method, path, body=None):
+                    events.append((method, path))
+                    if path == '/elements':
+                        lookups[0] += 1
+                        self.assertEqual(body, {'using': 'xpath', 'value':
+                            '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'})
+                        # Actual PendingItem has no data-message-id, so is absent from this result.
+                        if outcome == 'pending' or (outcome == 'committed' and lookups[0] == 1):
+                            clock[0] += 10
+                            return []
+                        return [{flows.ELEMENT: 'row'}] * (2 if outcome == 'ambiguous' else 1)
+                    if path == '/element/row/attribute/data-message-id':
+                        return 'pending-local-row' if outcome == 'invalid_id' else message_id
+                    self.assertEqual((method, path), ('GET', '/element/row/displayed'))
+                    if outcome == 'hidden':
+                        clock[0] += 10
+                        return False
+                    return True
+
+                client.command = command
+                with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(flows.time, 'sleep'):
+                    if outcome == 'committed':
+                        self.assertEqual(client.wait_sent_community_message(), message_id)
+                        self.assertEqual(lookups[0], 2)
+                    else:
+                        with self.assertRaises(TimeoutError if outcome in ['pending', 'hidden'] else ValueError):
+                            client.wait_sent_community_message()
+                self.assertTrue(all(method == 'GET' or path == '/elements' for method, path in events))
+                if outcome in ['pending', 'hidden']:
+                    self.assertEqual(clock[0], 30)
+
+    def test_dm_entry_requires_sender_commit_and_channel_readiness_before_pointer_link(self):
+        message_id = '018f1234-1234-7000-8000-123456789abc'
+        path = '/app/c/' + message_id + '/' + message_id
+        for outcome in ['ready', 'uncommitted', 'ambiguous', 'wrong_document']:
+            with self.subTest(outcome=outcome):
+                alice, bob = Mock(profile=0), Mock(profile=1)
+                bob.element.return_value = 'composer'
+                bob.wait_sent_community_message.return_value = message_id
+                if outcome in ['uncommitted', 'ambiguous']:
+                    bob.wait_sent_community_message.side_effect = TimeoutError() if outcome == 'uncommitted' else ValueError()
+                if outcome == 'wrong_document':
+                    alice.wait_channel.side_effect = TimeoutError()
+                sequence = Mock()
+                for name, method in [('send', bob.click), ('commit', bob.wait_sent_community_message),
+                                     ('navigate', alice.goto), ('channel', alice.wait_channel),
+                                     ('link', alice.open_private_message)]:
+                    sequence.attach_mock(method, name)
+                with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
+                    if outcome == 'ready':
+                        flows.open_dm_from_community(alice, bob, path)
+                    else:
+                        with self.assertRaises((TimeoutError, ValueError)):
+                            flows.open_dm_from_community(alice, bob, path)
+                    bob.click.assert_called_once_with('Send message')
+                    if outcome in ['uncommitted', 'ambiguous']:
+                        alice.goto.assert_not_called()
+                        self.assertEqual(flows.metadata['dm_action'], {'profile': 1, 'action': 'await_sender_message_commit'})
+                    else:
+                        alice.goto.assert_called_once_with(path)
+                        alice.wait_channel.assert_called_once_with(path)
+                    if outcome != 'ready':
+                        alice.open_private_message.assert_not_called()
+                    else:
+                        alice.open_private_message.assert_called_once_with(message_id)
+                        self.assertEqual([call[0] for call in sequence.mock_calls],
+                                         ['send', 'commit', 'navigate', 'channel', 'link'])
+
+    def test_channel_destination_rejects_wrong_route_settings_and_missing_or_ambiguous_content(self):
+        community = '018f1234-1234-7000-8000-123456789abc'
+        channel = '018f1234-1234-7000-8000-123456789abd'
+        path = '/app/c/' + community + '/' + channel
+        snapshot = {'url': flows.ORIGIN + path, 'channel_log_count': 1, 'composer_count': 1}
+        self.assertTrue(flows.channel_destination_reached(snapshot, path))
+        for changes in [{'url': 'https://other.invalid' + path}, {'url': flows.ORIGIN + path + '/extra'},
+                        {'url': flows.ORIGIN + '/app/c/' + community + '/settings'},
+                        {'url': flows.ORIGIN + '/app/c/' + community + '/' + community},
+                        {'channel_log_count': 0}, {'channel_log_count': 2},
+                        {'composer_count': 0}, {'composer_count': 2}]:
+            with self.subTest(changes=changes):
+                self.assertFalse(flows.channel_destination_reached({**snapshot, **changes}, path))
+        settings = '/app/c/' + community + '/settings'
+        self.assertFalse(flows.channel_destination_reached({**snapshot, 'url': flows.ORIGIN + settings}, settings))
+
+    def test_channel_readiness_uses_same_document_snapshot_and_existing_30_second_budget(self):
+        identifier = '018f1234-1234-7000-8000-123456789abc'
+        path = '/app/c/' + identifier + '/' + identifier
+        for ready in [False, True]:
+            with self.subTest(ready=ready):
+                client = flows.Native.__new__(flows.Native)
+                clock = [0.0]
+                calls = []
+
+                def command(method, endpoint, body, *, timeout):
+                    calls.append((method, endpoint))
+                    self.assertEqual((method, endpoint), ('POST', '/execute/sync'))
+                    self.assertLessEqual(timeout, 2)
+                    clock[0] += 10
+                    return {'url': flows.ORIGIN + path, 'channel_log_count': 1,
+                            'composer_count': 1 if ready and len(calls) == 2 else 0}
+
+                client.command = command
+                with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(flows.time, 'sleep'):
+                    if ready:
+                        client.wait_channel(path)
+                        self.assertEqual(len(calls), 2)
+                    else:
+                        with self.assertRaises(TimeoutError):
+                            client.wait_channel(path)
+                        self.assertEqual(clock[0], 30)
+
     def test_dm_real_pointer_reveals_only_the_uniquely_scoped_message_link(self):
         for failure in [None, 'ambiguous_message', 'ambiguous_link', 'unsupported', 'disconnected']:
             with self.subTest(failure=failure):
@@ -32,7 +195,7 @@ class NativeSupportTests(unittest.TestCase):
                     if (method, path) == ('POST', '/elements'):
                         # A global author-link lookup would also select an unrelated message.
                         self.assertEqual(body, {'using': 'xpath', 'value':
-                            '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'})
+                            '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]][@data-message-id="018f1234-1234-7000-8000-123456789abc"]'})
                         return [{flows.ELEMENT: 'message'}] * (2 if failure == 'ambiguous_message' else 1)
                     if (method, path) == ('GET', '/element/message/displayed'):
                         return True
@@ -66,9 +229,9 @@ class NativeSupportTests(unittest.TestCase):
                 with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
                     if failure:
                         with self.assertRaises((ValueError, urllib.error.HTTPError, flows.http.client.RemoteDisconnected)):
-                            client.open_private_message()
+                            client.open_private_message("018f1234-1234-7000-8000-123456789abc")
                     else:
-                        client.open_private_message()
+                        client.open_private_message("018f1234-1234-7000-8000-123456789abc")
                     self.assertEqual(sum(path == '/actions' for _, path, _ in events),
                                      0 if failure == 'ambiguous_message' else 1)
                     self.assertEqual(sum(path.endswith('/click') for _, path, _ in events), 0 if failure else 1)
@@ -102,7 +265,7 @@ class NativeSupportTests(unittest.TestCase):
                 patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
                 patch.object(flows.time, 'sleep'):
             with self.assertRaises(TimeoutError):
-                client.open_private_message()
+                client.open_private_message("018f1234-1234-7000-8000-123456789abc")
             self.assertEqual(clock[0], 30)
             self.assertEqual(events.count('/actions'), 1)
             self.assertEqual(flows.metadata['dm_action']['action'], 'await_private_message_link_visible')
@@ -128,6 +291,18 @@ class NativeSupportTests(unittest.TestCase):
         client.command.assert_called_once()
         self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
         self.assertEqual(client.command.call_args.kwargs['timeout'], .5)
+
+    def test_dm_diagnostic_retains_only_fixed_route_kinds_and_bounded_sender_counts(self):
+        private = 'private-route-or-message-id'
+        for route in ['channel', 'community-settings', private]:
+            client = types.SimpleNamespace(profile=1, command=Mock(return_value={
+                'route': route, 'pending_count': 1, 'channel_log_count': 1, 'composer_count': 1,
+                'alert_count': 10001, 'message_id': private, 'pending_text': private,
+            }))
+            result = flows.dm_diagnostics(client)
+            self.assertEqual(result, {'profile': 1, 'route': route if route != private else 'other',
+                                     'pending_count': 1, 'channel_log_count': 1, 'composer_count': 1})
+            self.assertNotIn(private, json.dumps(result))
 
     def test_dm_failure_observation_shares_auth_transport_budget_and_never_runs_on_success(self):
         client = types.SimpleNamespace(profile=2)

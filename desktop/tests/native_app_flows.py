@@ -196,7 +196,39 @@ class Native:
         wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/click', {})
 
-    def open_private_message(self):
+    def wait_sent_community_message(self):
+        def committed():
+            values = self.command('POST', '/elements', {'using': 'xpath', 'value': DM_MESSAGE_XPATH})
+            if len(values) > 1:
+                raise ValueError('Ambiguous sent community message')
+            if not values:
+                return None
+            element = values[0][ELEMENT]
+            identifier = self.command('GET', '/element/' + element + '/attribute/data-message-id')
+            # PendingItem has no data-message-id; only a persisted MessageItem qualifies.
+            identifier = str(uuid.UUID(identifier))
+            return identifier if self.command('GET', '/element/' + element + '/displayed') else None
+        return wait(committed)
+
+    def wait_channel(self, path):
+        deadline_at = time.monotonic() + 30
+        while (remaining := deadline_at - time.monotonic()) > 0:
+            snapshot = self.command('POST', '/execute/sync', {'args': [DM_COMPOSER_XPATH], 'script': """
+              const visible = node => !!(node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+              const composers = document.evaluate(arguments[0], document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+              let composerCount = 0;
+              for (let i = 0; i < composers.snapshotLength; i++) if (visible(composers.snapshotItem(i))) composerCount++;
+              return {url: location.href, composer_count: composerCount,
+                channel_log_count: Array.from(document.querySelectorAll('[role="log"][aria-label^="Messages in #"]')).filter(visible).length};
+            """}, timeout=min(2, remaining))
+            if channel_destination_reached(snapshot, path):
+                return
+            remaining = deadline_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.25, remaining))
+        raise TimeoutError('Channel destination deadline exceeded')
+
+    def open_private_message(self, message_id):
         def unique(path, xpath):
             def find():
                 values = self.command('POST', path, {'using': 'xpath', 'value': xpath})
@@ -206,7 +238,8 @@ class Native:
             return wait(find)
 
         dm_progress(self.profile, 'locate_community_message')
-        message = unique('/elements', DM_MESSAGE_XPATH)
+        message_id = str(uuid.UUID(message_id))
+        message = unique('/elements', DM_MESSAGE_XPATH + f'[@data-message-id="{message_id}"]')
         wait(lambda: self.command('GET', '/element/' + message + '/displayed'))
         dm_progress(self.profile, 'hover_community_message')
         # WebKitGTK resolves this element origin into a real mouse move.
@@ -234,6 +267,7 @@ class Native:
         identifier = self.element(f'//*[self::input or self::textarea][@id=//label[normalize-space(.)={json.dumps(label)}]/@for]'
             f' | //label[starts-with(normalize-space(.),{json.dumps(label)})]//input'
             f' | //textarea[@aria-label={json.dumps(label)}]')
+        wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/value', {'text': value})
 
     def text(self, text):
@@ -293,6 +327,7 @@ class Native:
 
     def upload(self, xpath, path):
         identifier = self.element(xpath)
+        wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/value', {'text': str(path)})
 
     def save(self, destination, trigger):
@@ -439,9 +474,11 @@ def auth_progress(profile, action):
 
 DM_MESSAGE_XPATH = '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'
 DM_LINK_XPATH = './/a[@aria-label="Message Native Bob privately"]'
+DM_COMPOSER_XPATH = '//textarea[@id=//label[starts-with(normalize-space(.),"Message #")]/@for]'
 DM_ACTIONS = {
     'open_member_channel', 'locate_community_composer', 'fill_community_message',
-    'send_community_message', 'open_owner_channel', 'locate_community_message',
+    'send_community_message', 'await_sender_message_commit', 'open_owner_channel',
+    'await_owner_channel', 'locate_community_message',
     'hover_community_message', 'locate_private_message_link',
     'await_private_message_link_visible', 'await_private_message_link_enabled',
     'click_private_message_link', 'send_message_request', 'open_member_inbox',
@@ -466,9 +503,27 @@ def dm_progress(profile, action):
     persist()
 
 
+def open_dm_from_community(alice, bob, community_path):
+    dm_progress(bob.profile, 'open_member_channel')
+    bob.goto(community_path)
+    dm_progress(bob.profile, 'locate_community_composer')
+    composer = bob.element(DM_COMPOSER_XPATH)
+    dm_progress(bob.profile, 'fill_community_message')
+    bob.command('POST', '/element/' + composer + '/value', {'text': 'Native community greeting'})
+    dm_progress(bob.profile, 'send_community_message')
+    bob.click('Send message')
+    dm_progress(bob.profile, 'await_sender_message_commit')
+    message_id = bob.wait_sent_community_message()
+    dm_progress(alice.profile, 'open_owner_channel')
+    alice.goto(community_path)
+    dm_progress(alice.profile, 'await_owner_channel')
+    alice.wait_channel(community_path)
+    alice.open_private_message(message_id)
+
+
 def dm_diagnostics(client, timeout=2):
     """One failure-only read: no DOM, text, identifiers or private SDK state returned."""
-    snapshot = client.command('POST', '/execute/sync', {'args': [DM_MESSAGE_XPATH, DM_LINK_XPATH], 'script': """
+    snapshot = client.command('POST', '/execute/sync', {'args': [DM_MESSAGE_XPATH, DM_LINK_XPATH, DM_COMPOSER_XPATH], 'script': """
       const matches = (xpath, root) => {
         const result = document.evaluate(xpath, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
         return Array.from({length: result.snapshotLength}, (_, i) => result.snapshotItem(i));
@@ -482,8 +537,13 @@ def dm_diagnostics(client, timeout=2):
         }
         return false;
       };
-      const summary = {route: routes[location.pathname] || (/^\\/app\\/c\\/[^/]+\\/[^/]+$/.test(location.pathname) ? 'community' : 'other'),
+      const route = routes[location.pathname] || (/^\\/app\\/c\\/[^/]+\\/settings$/.test(location.pathname) ? 'community-settings'
+        : /^\\/app\\/c\\/[^/]+\\/[^/]+$/.test(location.pathname) ? 'channel' : 'other');
+      const summary = {route,
         message_count: messages.length, link_count: links.length,
+        pending_count: document.querySelectorAll('[role="log"] li[aria-label="Sending"]').length,
+        channel_log_count: document.querySelectorAll('[role="log"][aria-label^="Messages in #"]').length,
+        composer_count: matches(arguments[2], document).length,
         verification_count: document.querySelectorAll('[data-verification-code]').length,
         alert_count: document.querySelectorAll('[role="alert"]').length};
       if (messages.length === 1) summary.message_hovered = messages[0].matches(':hover');
@@ -494,9 +554,10 @@ def dm_diagnostics(client, timeout=2):
       return summary;
     """}, timeout=timeout)
     safe = {'profile': client.profile, 'route': snapshot.get('route') if snapshot.get('route') in {
-        'sign-in', 'messages', 'settings', 'community', 'other',
+        'sign-in', 'messages', 'settings', 'community-settings', 'channel', 'other',
     } else 'other'}
-    for key in ['message_count', 'link_count', 'verification_count', 'alert_count']:
+    for key in ['message_count', 'link_count', 'pending_count', 'channel_log_count',
+                'composer_count', 'verification_count', 'alert_count']:
         value = snapshot.get(key)
         if type(value) is int and 0 <= value <= 10000:
             safe[key] = value
@@ -514,6 +575,19 @@ def at_app_path(url, path):
 
 def auth_destination_reached(snapshot, path):
     return snapshot['protected_content'] is True and at_app_path(snapshot['url'], path)
+
+
+def channel_destination_reached(snapshot, path):
+    parts = path.split('/')
+    if len(parts) != 5 or parts[:3] != ['', 'app', 'c']:
+        return False
+    try:
+        uuid.UUID(parts[3])
+        uuid.UUID(parts[4])
+    except ValueError:
+        return False
+    return (at_app_path(snapshot['url'], path)
+            and snapshot['channel_log_count'] == 1 and snapshot['composer_count'] == 1)
 
 
 def auth_diagnostics(client, timeout=2):
@@ -1036,17 +1110,7 @@ def main():
                 assert len(data['messages']) >= 1
             with stage('dm_enrollment'):
                 # Post a community message from Bob, then use the actual private-message link.
-                dm_progress(bob.profile, 'open_member_channel')
-                bob.goto(community_path)
-                dm_progress(bob.profile, 'locate_community_composer')
-                composer = bob.element('//textarea[@id=//label[starts-with(normalize-space(.),"Message #")]/@for]')
-                dm_progress(bob.profile, 'fill_community_message')
-                bob.command('POST', '/element/' + composer + '/value', {'text': 'Native community greeting'})
-                dm_progress(bob.profile, 'send_community_message')
-                bob.click('Send message')
-                dm_progress(alice.profile, 'open_owner_channel')
-                alice.goto(community_path)
-                alice.open_private_message()
+                open_dm_from_community(alice, bob, community_path)
                 dm_progress(alice.profile, 'send_message_request')
                 alice.click('Send message request')
                 dm_progress(bob.profile, 'open_member_inbox')
