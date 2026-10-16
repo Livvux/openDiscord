@@ -526,6 +526,30 @@ class NativeSupportTests(unittest.TestCase):
                     self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
                     self.assertEqual(client.command.call_args.kwargs, {'timeout': .25})
 
+    def test_dm_failure_classification_retains_only_fixed_bounded_counts(self):
+        keys = ['failure_envelope_count', 'failure_sdk_decrypt_count', 'failure_shield_count',
+                'failure_sender_binding_count', 'failure_device_trust_count', 'failure_plaintext_schema_count',
+                'failure_message_binding_count', 'failure_history_schema_count', 'failure_replay_storage_count',
+                'failure_missing_room_key_count', 'failure_unknown_message_index_count',
+                'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
+                'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count']
+        private = 'private message SAS JWT key draft native payload'
+        for profile in [0, 1]:
+            for value in [0, 1, 10000, -1, 10001, True, private, {'code': private}]:
+                with self.subTest(profile=profile, value_type=type(value).__name__):
+                    snapshot = {key: value for key in keys}
+                    snapshot.update({'visibility': 'visible', 'decrypt_error_count': 1,
+                                     'failure_arbitrary_count': 1, 'data-dm-failure-code': private,
+                                     'stage': private, 'code': private, 'error': private, 'payload': private})
+                    client = types.SimpleNamespace(profile=profile, command=Mock(return_value=snapshot))
+                    result = flows.dm_delivery_state(client, private)
+                    expected = {'profile': profile, 'visibility': 'visible', 'decrypt_error_count': 1}
+                    if type(value) is int and 0 <= value <= 10000:
+                        expected.update({key: value for key in keys})
+                    self.assertEqual(result, expected)
+                    self.assertNotIn(private, json.dumps(result))
+
     def test_both_dm_peer_diagnostics_share_budget_preserve_failure_and_are_failure_only(self):
         clients = [types.SimpleNamespace(profile=index) for index in range(3)]
         for budget, fail_first in [(10, False), (3, False), (10, True)]:

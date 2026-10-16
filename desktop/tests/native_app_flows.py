@@ -688,6 +688,9 @@ def dm_delivery_state(client, message, timeout=2):
       const textarea = controls.length === 1 ? controls[0] : null;
       const buttons = textarea ? Array.from(textarea.form.querySelectorAll('button[type="submit"]')).filter(node => node.textContent.trim() === 'Send encrypted message') : [];
       const decryptError = 'Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.';
+      const failures = rows.map(row => paragraphs(row)[1]).filter(node => node?.textContent === decryptError);
+      const stageCount = stage => failures.filter(node => node.getAttribute('data-dm-failure-stage') === stage).length;
+      const codeCount = code => failures.filter(node => node.getAttribute('data-dm-failure-code') === code).length;
       return {
         at_messages: location.origin === origin && location.pathname === '/app/messages',
         visibility: document.visibilityState,
@@ -699,6 +702,24 @@ def dm_delivery_state(client, message, timeout=2):
         expected_plaintext_count: rows.filter(matches).length,
         own_plaintext_present: rows.some(row => matches(row) && paragraphs(row)[0]?.textContent.startsWith('You ·')),
         decrypt_error_count: rows.filter(row => paragraphs(row)[1]?.textContent === decryptError).length,
+        failure_envelope_count: stageCount('envelope'),
+        failure_sdk_decrypt_count: stageCount('sdk_decrypt'),
+        failure_shield_count: stageCount('shield'),
+        failure_sender_binding_count: stageCount('sender_binding'),
+        failure_device_trust_count: stageCount('device_trust'),
+        failure_plaintext_schema_count: stageCount('plaintext_schema'),
+        failure_message_binding_count: stageCount('message_binding'),
+        failure_history_schema_count: stageCount('history_schema'),
+        failure_replay_storage_count: stageCount('replay_storage'),
+        failure_missing_room_key_count: codeCount('MissingRoomKey'),
+        failure_unknown_message_index_count: codeCount('UnknownMessageIndex'),
+        failure_mismatched_identity_keys_count: codeCount('MismatchedIdentityKeys'),
+        failure_unknown_sender_device_count: codeCount('UnknownSenderDevice'),
+        failure_unsigned_sender_device_count: codeCount('UnsignedSenderDevice'),
+        failure_sender_identity_verification_violation_count: codeCount('SenderIdentityVerificationViolation'),
+        failure_unable_to_decrypt_count: codeCount('UnableToDecrypt'),
+        failure_mismatched_sender_count: codeCount('MismatchedSender'),
+        failure_unknown_code_count: codeCount('unknown'),
         textarea_count: controls.length, draft_empty: !!textarea && textarea.value === '',
         draft_matches: !!textarea && textarea.value === expected,
         textarea_enabled: !!textarea && !textarea.disabled,
@@ -712,7 +733,14 @@ def dm_delivery_state(client, message, timeout=2):
             if snapshot.get('visibility') in {'visible', 'hidden'} else 'other'}
     for key in ['selection_count', 'target_selection_count', 'private_log_count', 'message_row_count',
                 'decrypt_error_count', 'textarea_count', 'send_control_count', 'disabled_control_count',
-                'verification_count', 'alert_count', 'expected_plaintext_count']:
+                'verification_count', 'alert_count', 'expected_plaintext_count',
+                'failure_envelope_count', 'failure_sdk_decrypt_count', 'failure_shield_count',
+                'failure_sender_binding_count', 'failure_device_trust_count', 'failure_plaintext_schema_count',
+                'failure_message_binding_count', 'failure_history_schema_count', 'failure_replay_storage_count',
+                'failure_missing_room_key_count', 'failure_unknown_message_index_count',
+                'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
+                'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count']:
         value = snapshot.get(key)
         if type(value) is int and 0 <= value <= 10000:
             safe[key] = value
