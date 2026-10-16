@@ -69,6 +69,7 @@ export class EpochAgreement {
     this.budget(this.candidate, { allocated: [...allocated], lastIssue: now });
     this.allocated.set(leader.memberId, sequence); this.lastIssue = now; return sequence;
   }
+  hasSelection(revision: number): boolean { return revision === this.selectionRevision && this.partyTable.length > 0 && this.consent; }
   table(revision: number): readonly VoiceRetainedParty[] { this.assertSelection(revision); return this.partyTable; }
   selected(revision: number): readonly VoiceControlParty[] { this.assertSelection(revision); return this.audience; }
   private assertSelection(revision: number): void { if (revision !== this.selectionRevision || !this.audience.length || !this.consent) throw new Error("Explicit current voice audience consent required."); }

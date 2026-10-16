@@ -8,7 +8,7 @@ import { validateVoiceContextControl, type VoiceContextControl } from "./context
 import { EpochAgreement, VoiceContextRejected, VOICE_AGREEMENT_LIMITS, sameVoiceProposal, voiceContextProposal, voiceProposalPayload, type VoiceContextProposal } from "./epoch-agreement";
 
 export type VoiceAgreementEventRef = Readonly<{ kind: "context-offer" | "context-accept" | "context-restart" | "pending-material" }>;
-export type VoiceOwnerAgreementReceived = { kind: "context"; contextKind: VoiceContextControl["kind"]; proposal: VoiceContextProposal; senderId: string; ref: VoiceAgreementEventRef } | { kind: "pending-material"; ref: VoiceAgreementEventRef } | { kind: "media"; control: VoiceOwnerControl };
+export type VoiceOwnerAgreementReceived = { kind: "context-not-ready"; contextKind: VoiceContextControl["kind"]; senderId: string; reason: "local-consent-pending" } | { kind: "context"; contextKind: VoiceContextControl["kind"]; proposal: VoiceContextProposal; senderId: string; ref: VoiceAgreementEventRef } | { kind: "pending-material"; ref: VoiceAgreementEventRef } | { kind: "media"; control: VoiceOwnerControl };
 type AgreementCapability = { detail: { kind: VoiceContextControl["kind"] | "material"; senderId: string; recipientId: string; transaction: string; keyId?: string; material?: string; reference: string }; proposal: VoiceContextProposal; revision: number; selectionRevision: number; deadline: number };
 export type VoiceAgreementOwnerPort = Pick<VoiceCryptoOwner, "selectAudience" | "createContextOffer" | "sendContextControl" | "receiveAgreement" | "stageOfferedContext" | "acceptContextControl" | "retainPendingMaterial" | "installContext" | "contextAgreementComplete" | "sendControl" | "close">;
 
@@ -575,6 +575,7 @@ export class VoiceCryptoOwner {
       let batchProposal: VoiceContextProposal | undefined;
       let pendingCount = 0, pendingBytes = 0;
       const thinSlots = new Map<string, string>();
+      const notReadySenders = new Set<string>();
       for (const item of processed) {
         if (item instanceof C.PlainTextToDeviceEvent) {
           const event = envelopeSchema.parse(JSON.parse(item.rawEvent));
@@ -600,8 +601,8 @@ export class VoiceCryptoOwner {
           let value: VoiceContextControl | VoiceOwnerControl;
           let pending: { proposal: VoiceContextProposal; deadline: number } | undefined;
           if (isContext) {
-            this.agreement.selected(this.selectionRevision);
-            value = validateVoiceContextControl(decoded, this.snapshot, this.selectedAudience);
+            // Authenticate the entire proposed binding before checking local consent.
+            value = validateVoiceContextControl(decoded, this.snapshot, decoded.audience);
           } else if (this.epochId && (!temporary || (decoded.epochId === this.epochId && decoded.proposalSequence === this.installedProposal?.sequence))) value = validateVoiceOwnerControl(decoded, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
           else {
             pending = temporary ?? this.offeredContext;
@@ -609,9 +610,22 @@ export class VoiceCryptoOwner {
             value = validateVoiceOwnerControl(decoded, this.snapshot, pending.proposal.epochId, pending.proposal.audience, pending.proposal.sequence);
           }
           const peer = value.sender;
-          if (!this.admitted.has(peer.memberId) || value.recipient.memberId !== this.snapshot.memberId || !sameVoiceParty(value.recipient, voiceControlParty(this.peer(this.snapshot.memberId))) || event.sender !== peer.voiceUserId || item.encryptionInfo.sender.toString() !== peer.voiceUserId || item.encryptionInfo.senderDevice?.toString() !== peer.voiceDeviceId || !(await this.device(peer)).isVerified()) throw new Error("Voice control sender/admission mismatch.");
+          if (value.recipient.memberId !== this.snapshot.memberId || !sameVoiceParty(value.recipient, voiceControlParty(this.peer(this.snapshot.memberId))) || event.sender !== peer.voiceUserId || item.encryptionInfo.sender.toString() !== peer.voiceUserId || item.encryptionInfo.senderDevice?.toString() !== peer.voiceDeviceId || !(await this.device(peer)).isVerified()) throw new Error("Voice control sender/admission mismatch.");
           if (event.recipient !== this.snapshot.voiceUserId || event.recipient_keys.ed25519 !== this.machine.identityKeys.ed25519.toBase64() || event.sender_device_keys.user_id !== peer.voiceUserId || event.sender_device_keys.device_id !== peer.voiceDeviceId || event.keys.ed25519 !== event.sender_device_keys.keys[`ed25519:${peer.voiceDeviceId}`]) throw new Error("Voice Olm envelope mismatch.");
+          if (!isContext && !this.admitted.has(peer.memberId)) throw new Error("Voice control sender/admission mismatch.");
           if (value.kind === "context-offer" || value.kind === "context-accept" || value.kind === "context-restart") {
+            const selected = this.agreement.hasSelection(this.selectionRevision);
+            if (selected) validateVoiceContextControl(value, this.snapshot, this.selectedAudience);
+            if (!selected || value.audience.some(party => party.memberId !== this.snapshot.memberId && !this.admitted.has(party.memberId))) {
+              // One thin local result per sender; no capability, proposal, ledger or
+              // admission authority. Real ACK/flush lets the common SAS mailbox progress.
+              if (!notReadySenders.has(peer.memberId)) {
+                if (notReadySenders.size >= VOICE_AGREEMENT_LIMITS.slots) throw new Error("Voice context not-ready result bound.");
+                notReadySenders.add(peer.memberId);
+                accepted.push({ kind: "context-not-ready", contextKind: value.kind, senderId: peer.memberId, reason: "local-consent-pending" });
+              }
+              continue;
+            }
             const normalized = voiceContextProposal(value, this.agreement.table(this.selectionRevision)), deadline = this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs;
             if (batchProposal && !sameVoiceProposal(batchProposal, normalized)) throw new Error("Multiple voice proposals in receive batch.");
             const proposal = batchProposal ??= normalized;
