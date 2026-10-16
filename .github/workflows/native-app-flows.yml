@@ -41,8 +41,15 @@ jobs:
           cache-on-failure: true
           # Default environment/toolchain/Cargo hashes remain active; isolate native origin/inputs.
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENDISCORD_INSTANCE_URL
-          key: ubuntu2404-native-https-localhost-9443-${{ hashFiles('desktop/src/**', 'desktop/build.rs', 'desktop/Cargo.toml', 'desktop/Cargo.lock', 'desktop/tauri.conf.json', 'desktop/Info.plist', 'desktop/assets/**', 'apps/web/public/brand/symbol-flat.svg') }}
+          key: ubuntu2404-native-https-localhost-9443
       - run: pnpm install --frozen-lockfile
+      - name: Restore Next.js compiler cache
+        uses: actions/cache@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - name: Install Linux native dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
       - name: Isolated TLS proxy transport regressions
@@ -89,7 +96,7 @@ jobs:
           app_pid=$!
           setsid node desktop/tests/app_proxy.mjs > /tmp/native-app-proxy.log 2>&1 &
           proxy_pid=$!
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if curl --fail --silent --output /dev/null https://localhost:9443/sign-in; then break; fi
             sleep 1
           done

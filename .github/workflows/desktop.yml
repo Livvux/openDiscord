@@ -34,6 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+          cache-on-failure: true
       - name: Install Tauri bundler
         run: cargo install tauri-cli --version '^2' --locked
       - name: Generate native icons from existing brand
