@@ -178,13 +178,20 @@ class Native:
             if self.session:
                 self.command('DELETE', '')
         finally:
-            if self.process.poll() is None:
+            # Driver exit alone does not prove its WebKit/application children exited.
+            try:
                 os.killpg(self.process.pid, signal.SIGTERM)
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                    self.process.wait(timeout=5)
+            except ProcessLookupError:
+                pass
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            self.process.wait(timeout=5)
             self.log.close()
 
 
