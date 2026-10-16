@@ -151,6 +151,8 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await signUp(charlie, "Private Charlie");
   await charlie.goto(invite);
   await charlie.getByRole("button", { name: "Accept invite", exact: true }).click();
+  await expect(charlie).toHaveURL(/\/app\/c\/[0-9a-f-]+(?:\/|$)/);
+  await expect(charlie.getByRole("heading", { level: 1, name: "general", exact: true })).toBeVisible();
   const charlieId = (await charlie.request.get("/api/auth/get-session").then((response) => response.json())).user.id as string;
   const secondConversation = await alice.evaluate(async (target) => {
     const response = await fetch("/api/dm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "request", target }) });
