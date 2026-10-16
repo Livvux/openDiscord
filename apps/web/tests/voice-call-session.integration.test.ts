@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as nativeFactory from "@/lib/voice/crypto-owner";
 import type { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty } from "@/lib/voice/owner-control";
-import { callHttpFixture, cleanupCallUsers, closeCalls, startCall, until, verifyCalls } from "./fixtures/voice-call-http";
+import { callHttpFixture, cleanupCallUsers, closeCalls, observeCallPort, startCall, until, verifyCalls } from "./fixtures/voice-call-http";
 
 afterEach(closeCalls);
 afterAll(cleanupCallUsers);
@@ -12,7 +12,7 @@ describe("unactivated CallSession with actual cookie HTTP / PostgreSQL / public 
     const issued = new Map<string, { port: nativeFactory.VoiceProductOwnerPort; proposal?: VoiceContextProposal }>();
     const create = nativeFactory.createVoiceProductOwner;
     vi.spyOn(nativeFactory, "createVoiceProductOwner").mockImplementation(async options => {
-      const port = await create(options), observed: { port: nativeFactory.VoiceProductOwnerPort; proposal?: VoiceContextProposal } = { port };
+      const port = observeCallPort(options.accountId, await create(options)), observed: { port: nativeFactory.VoiceProductOwnerPort; proposal?: VoiceContextProposal } = { port };
       issued.set(options.accountId, observed);
       // Observe genuine public return values only; native methods/results are unchanged.
       return Object.freeze({ ...port, createContextOffer: async () => { const offer = await port.createContextOffer(); observed.proposal = offer.proposal; return offer; } });
@@ -51,7 +51,7 @@ describe("unactivated CallSession with actual cookie HTTP / PostgreSQL / public 
     const issued = new Map<string, { port: nativeFactory.VoiceProductOwnerPort; proposals: VoiceContextProposal[] }>();
     const create = nativeFactory.createVoiceProductOwner;
     vi.spyOn(nativeFactory, "createVoiceProductOwner").mockImplementation(async options => {
-      const port = await create(options), observed = { port, proposals: [] as VoiceContextProposal[] };
+      const port = observeCallPort(options.accountId, await create(options)), observed = { port, proposals: [] as VoiceContextProposal[] };
       issued.set(options.accountId, observed);
       return Object.freeze({ ...port, createContextOffer: async () => { const offer = await port.createContextOffer(); observed.proposals.push(offer.proposal); return offer; } });
     });
