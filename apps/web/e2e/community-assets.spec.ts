@@ -17,12 +17,14 @@ test.describe("private community images", () => {
     const channelUrl = page.url();
     const communityId = /\/c\/([^/]+)/.exec(channelUrl)![1];
     await page.goto(`/app/c/${communityId}/settings`);
+    const imageLibrary = page.getByRole("region", { name: "Emoji and stickers", exact: true });
+    await expect(imageLibrary).toBeVisible();
     for (const kind of ["emoji", "sticker"]) {
-      await page.getByLabel("Image name", { exact: true }).fill(`test_${kind}`);
-      await page.getByLabel("Image kind", { exact: true }).selectOption(kind);
-      await page.getByLabel("Static image", { exact: true }).setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
+      await imageLibrary.getByLabel("Image name", { exact: true }).fill(`test_${kind}`);
+      await imageLibrary.getByLabel("Image kind", { exact: true }).selectOption(kind);
+      await imageLibrary.getByLabel("Static image", { exact: true }).setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
       const response = page.waitForResponse((response) => response.url().includes(`/communities/${communityId}/assets?`) && response.request().method() === "POST");
-      await page.getByRole("button", { name: "Upload community image" }).click();
+      await imageLibrary.getByRole("button", { name: "Upload community image" }).click();
       expect((await response).status()).toBe(201);
       await expect(page.getByRole("button", { name: `Delete test_${kind}`, exact: true })).toBeVisible();
     }
