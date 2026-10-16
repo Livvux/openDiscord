@@ -84,7 +84,7 @@ jobs:
               raise SystemExit('No native bundle files built')
           pathlib.Path('SHA256SUMS').write_text('\n'.join(lines) + '\n')
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-unsigned-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
       - name: Preserve Linux runtime diagnostics on failure
         if: failure() && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-linux-diagnostics-${{ github.sha }}
           path: desktop/native-evidence/

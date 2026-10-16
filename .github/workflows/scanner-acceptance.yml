@@ -66,7 +66,7 @@ jobs:
         run: |
           docker rm -f "$SCANNER_CONTAINER" >/dev/null 2>&1 || true
           if [[ "${ATTACHMENT_DIR:-}" == /tmp/opendiscord-scanner-* ]]; then rm -rf -- "$ATTACHMENT_DIR"; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: real-scanner-acceptance

@@ -51,7 +51,7 @@ jobs:
         env:
           OPENDISCORD_ISOLATED_LOAD: "1"
         run: pnpm --filter web exec tsx scripts/characterize-load.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: load-characterization
           path: apps/web/load-characterization.json
@@ -69,7 +69,7 @@ jobs:
           BETTER_AUTH_URL: http://localhost:3300
           OPENDISCORD_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: pnpm --filter web exec tsx scripts/characterize-http-sse.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: http-sse-characterization
@@ -85,7 +85,7 @@ jobs:
         if: always() && steps.livekit.outcome == 'success'
         # Deliberately omit participant, SDP, ICE credential and token logs.
         run: docker logs opendiscord-ci-livekit 2>&1 | sed -n '/starting LiveKit server/p'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         # A failed initial attempt must survive a successful retry on disposable CI accounts.
         if: always()
         with:
@@ -96,7 +96,7 @@ jobs:
             apps/web/test-results/**/signup-diagnostics.json
           retention-days: 3
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: browser-screenshots
