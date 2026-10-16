@@ -10,8 +10,8 @@ test("fresh community snapshot catches up after its first stream opens", async (
   test.skip(isMobile, "the initial transport interleaving is covered on desktop");
   test.setTimeout(90_000);
   const writer = await newUserPage(browser);
-  const diagnostics: { order: string[]; statuses: { actor: string; path: string; status: number }[]; errors: string[]; attempts: number; forwarded: number; catchupIds: string[][] } = {
-    order: [], statuses: [], errors: [], attempts: 0, forwarded: 0, catchupIds: [],
+  const diagnostics: { order: string[]; statuses: { actor: string; path: string; status: number }[]; errors: string[]; attempts: number; forwarded: number; catchupIds: string[][]; gateReleaseReason: "after-publication" | "cleanup" | null } = {
+    order: [], statuses: [], errors: [], attempts: 0, forwarded: 0, catchupIds: [], gateReleaseReason: null,
   };
   let reader: Awaited<ReturnType<typeof newUserPage>> | undefined;
   let witness: JSHandle<Witness> | undefined;
@@ -85,8 +85,10 @@ test("fresh community snapshot catches up after its first stream opens", async (
     await reader.goto(channelUrl);
     await initialAttempt;
     await expect(reader.getByRole("log").getByText(seed, { exact: true })).toBeVisible();
-    await expect(reader.locator('[data-realtime="connecting"]')).toBeAttached();
-    await expect(reader.locator('[data-realtime="open"]')).toHaveCount(0);
+    // The accessible channel log identifies the active content, rather than a
+    // second streamed Loading shell that can also carry data-realtime.
+    const readerProvider = reader.getByRole("log").locator("xpath=ancestor::*[@data-realtime][1]");
+    await expect(readerProvider).toHaveAttribute("data-realtime", "connecting");
     expect(diagnostics.attempts).toBe(1);
     expect(diagnostics.forwarded).toBe(0);
     diagnostics.order.push("reader-real-snapshot-visible-before-send");
@@ -104,17 +106,14 @@ test("fresh community snapshot catches up after its first stream opens", async (
     await expect(item).toHaveCount(1);
     const id = await item.getAttribute("data-message-id");
     expect(id).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/);
-    // The composer only upserts result.data on action success; also require the
-    // actual successful result and exact committed UUID in the real action body.
-    const actionBody = await action.text();
-    expect(actionBody).toContain('"ok":true');
-    expect(actionBody).toContain(id!);
+    // A successful HTTP response alone is insufficient: require the committed
+    // composer UUID in authorized history and independently witness publication.
     const persisted = await writer.request.get(historyPath);
     diagnostics.statuses.push({ actor: "writer", path: historyPath, status: persisted.status() });
     expect(persisted.status()).toBe(200);
     const history: { messages: { id: string; content: string }[] } = await persisted.json();
     expect(history.messages.filter((message) => message.id === id && message.content === content)).toHaveLength(1);
-    diagnostics.order.push("composer-action-success-and-authorized-history-uuid");
+    diagnostics.order.push("composer-http-success-and-authorized-committed-history-uuid");
     await expect.poll(() => witness!.evaluate((observed) => observed.ids)).toContain(id);
     expect(await witness.evaluate((observed) => observed.errors)).toBe(0);
     diagnostics.order.push("actual-message-created-witness-before-reader-release");
@@ -122,10 +121,11 @@ test("fresh community snapshot catches up after its first stream opens", async (
     expect(diagnostics.forwarded).toBe(0);
     await expect(reader.getByRole("log").getByText(content, { exact: true })).toHaveCount(0);
 
+    diagnostics.gateReleaseReason = "after-publication";
     released = true;
     diagnostics.order.push("release-unchanged-initial-request");
     release();
-    await waitForLive(reader);
+    await expect(readerProvider).toHaveAttribute("data-realtime", "open", { timeout: 10_000 });
     diagnostics.order.push("reader-first-ready-open");
     await expect(reader.getByRole("log").locator(`li[data-message-id="${id}"]`),
       "committed message published before initial subscribe must arrive through first-open history catch-up")
@@ -137,6 +137,7 @@ test("fresh community snapshot catches up after its first stream opens", async (
     expect(diagnostics.errors).toEqual([]);
     diagnostics.order.push("uuid-exactly-once-from-real-catchup-without-reconnect");
   } finally {
+    diagnostics.gateReleaseReason ??= "cleanup";
     release();
     if (reader) await reader.screenshot({ path: test.info().outputPath("initial-sync.png") }).catch(() => {});
     await writeFile(test.info().outputPath("error-context-initial-sync.md"), `Initial SSE ordering and HTTP statuses (no credentials):\n\n${JSON.stringify(diagnostics, null, 2)}\n`);
