@@ -77,6 +77,18 @@ export class MediaSession {
     }
     this.present();
   }
+  private remoteTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant): void {
+    this.current(); this.validate(publication, participant);
+    if (!this.subscriptions.has(publication)) throw new Error("Unrequested media track.");
+    this.remotes.add(track);
+    if (publication.isMuted) this.removeTrack(track);
+    else if (![...this.tiles.values()].some(tile => tile.track === track)) {
+      const member = this.context.audience.find(party => party.participantIdentity === participant.identity)!;
+      const id = crypto.randomUUID(), source = this.source(publication.source)!;
+      this.tiles.set(id, { track, view: Object.freeze({ id, memberId: member.memberId, source, kind: publication.kind === Track.Kind.Audio ? "audio" : "video", isLocal: false }) });
+    }
+    this.attachAudio(); this.present();
+  }
   private attachAudio(): void {
     if (this.dead) return;
     const container = this.audioRoots.values().next().value;
@@ -183,8 +195,18 @@ export class MediaSession {
     room.on(RoomEvent.AudioPlaybackStatusChanged, () => this.present());
     room.on(RoomEvent.LocalTrackPublished, () => this.localTracks());
     room.on(RoomEvent.LocalTrackUnpublished, () => this.localTracks());
-    room.on(RoomEvent.TrackMuted, () => this.localTracks());
-    room.on(RoomEvent.TrackUnmuted, () => this.localTracks());
+    room.on(RoomEvent.TrackMuted, publication => {
+      for (const track of this.remotes) if (track === publication.track) this.removeTrack(track);
+      this.localTracks();
+    });
+    room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+      this.localTracks();
+      const remote = room.remoteParticipants.get(participant.identity);
+      const current = remote?.trackPublications.get(publication.trackSid);
+      if (!remote || !current?.track || !this.remotes.has(current.track)) return;
+      try { this.remoteTrack(current.track, current, remote); }
+      catch { this.fail("media-attach-failed"); }
+    });
     room.on(RoomEvent.ParticipantPermissionsChanged, (_previous, participant) => {
       if (participant !== room.localParticipant) return;
       const permissions = participant.permissions;
@@ -194,13 +216,7 @@ export class MediaSession {
     room.on(RoomEvent.TrackPublished, (publication, participant) => this.subscribe(publication, participant));
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       try {
-        this.current(); this.validate(publication, participant);
-        if (!this.subscriptions.has(publication)) throw new Error("Unrequested media track.");
-        this.remotes.add(track);
-        const member = this.context.audience.find(party => party.participantIdentity === participant.identity)!;
-        const id = crypto.randomUUID(), source = this.source(publication.source)!;
-        this.tiles.set(id, { track, view: Object.freeze({ id, memberId: member.memberId, source, kind: publication.kind === Track.Kind.Audio ? "audio" : "video", isLocal: false }) });
-        this.attachAudio(); this.present();
+        this.remoteTrack(track, publication, participant);
       } catch { track.detach().forEach(element => element.remove()); track.stop(); this.fail("media-attach-failed"); }
     });
     room.on(RoomEvent.TrackUnsubscribed, track => { this.remotes.delete(track); this.removeTrack(track); this.present(); });
