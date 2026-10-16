@@ -42,12 +42,15 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     expect(native.port!.transition).toHaveBeenCalledTimes(1); expect(call.getSnapshot().generation).toBe(2); expect(call.getSnapshot().state).not.toBe("ended");
   });
   it("any409 during transition throws retirement conflict immediately without discovery or a promise cycle", async () => {
-    let heartbeats = 0;
+    let heartbeats = 0, conflicts = false;
     vi.mocked(native.port!.query).mockImplementation(async () => { await dispatch(1); });
     call = await CallSession.create({ ...options, fetch: fetcher(action => {
       if (action === "heartbeat") { heartbeats++; return Response.json(snapshot(2)); }
+      if (!conflicts) return Response.json({ cursor: "0", events: [], oneTimeKeys: { signed_curve25519: 0 }, unusedFallbackKeys: [] });
       return Response.json({ code: "conflict" }, { status: 409 });
     }) });
+    expect(native.port!.query).toHaveBeenCalledTimes(1); expect(native.port!.transition).not.toHaveBeenCalled();
+    conflicts = true;
     vi.mocked(native.port!.transition).mockImplementation(async () => { await expect(dispatch(2)).rejects.toBeInstanceOf(VoiceRetirementConflict); });
     await expect(dispatch(1)).rejects.toThrow();
     expect(heartbeats).toBe(1); expect(native.port!.transition).toHaveBeenCalledTimes(1); expect(call.getSnapshot().state).toBe("ended");
