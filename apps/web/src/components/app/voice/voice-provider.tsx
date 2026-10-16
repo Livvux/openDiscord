@@ -56,6 +56,20 @@ function errorText(error: unknown): string {
   return "Voice could not complete this action. Check the call status and retry.";
 }
 
+/** Passive presentation can lag behind a synchronous authority fence. */
+export function mountCurrentVoiceAudio(
+  session: { getSnapshot(): Pick<VoiceCallView, "state">; mountAudio(container: HTMLElement): () => void },
+  isCurrent: () => boolean,
+  container: HTMLElement,
+): (() => void) | undefined {
+  if (!isCurrent() || session.getSnapshot().state === "ended") return;
+  try { return session.mountAudio(container); }
+  catch (error) {
+    if (!isCurrent() || error instanceof VoiceCallSessionError && ["ended", "lease-expired", "binding-changed"].includes(error.code)) return;
+    throw error;
+  }
+}
+
 /** One authenticated app lifetime; navigation only mounts and detaches presentation. */
 export function VoiceProvider({ accountId, sessionId, children }: { accountId: string; sessionId: string; children: React.ReactNode }) {
   const auth = authClient.useSession();
@@ -73,23 +87,27 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
   const sourceFlights = useRef(new Set<VoiceSource>());
   const [error, setError] = useState<string | null>(null);
   const view = useSyncExternalStore(session?.subscribe ?? noopSubscribe, session?.getSnapshot ?? emptySnapshot, emptySnapshot);
-  const leave = useCallback(() => {
+  const fence = useCallback((reason = "left") => {
     revision.current++;
     const old = current.current; current.current = null;
-    // close fences synchronously, before its best-effort asynchronous retirement.
-    void old?.close().catch(() => {});
-    setSession(null); setChannel(null); setJoining(false); setBusy(false); setPendingSources([]); sourceFlights.current.clear();
+    // close fences synchronously; its external snapshot reports ended before retirement finishes.
+    void old?.close(reason).catch(() => {});
   }, []);
+  const leave = useCallback(() => {
+    fence();
+    setSession(null); setChannel(null); setJoining(false); setBusy(false); setPendingSources([]); sourceFlights.current.clear();
+  }, [fence]);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; revision.current++; identityCurrent.current = false; const old = current.current; current.current = null; void old?.close("provider-unmounted").catch(() => {}); };
-  }, []);
+    return () => { mounted.current = false; identityCurrent.current = false; fence("provider-unmounted"); };
+  }, [fence]);
   useEffect(() => {
     identityCurrent.current = authenticated;
-    if (!authenticated && !auth.isPending) leave();
-  }, [authenticated, auth.isPending, leave]);
+    // Authority changes fence the external CallSession store synchronously, without mirroring it into React state.
+    if (!authenticated && !auth.isPending) fence("session-changed");
+  }, [authenticated, auth.isPending, fence]);
   useEffect(() => {
-    if (session && audio.current) return session.mountAudio(audio.current);
+    if (session && audio.current) return mountCurrentVoiceAudio(session, () => mounted.current && identityCurrent.current && current.current === session, audio.current);
   }, [session]);
   const join = useCallback(async (target: Channel) => {
     leave(); const mine = revision.current;
@@ -127,7 +145,7 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     try { return current.current?.mountVideo(id, element) ?? (() => {}); }
     catch { return () => {}; } // A synchronous fence can invalidate a rendered tile before its effect runs.
   }, []);
-  return <VoiceContext.Provider value={{ channel, view, joining, busy, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(call => call.confirmFullRoster()), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
+  return <VoiceContext.Provider value={{ channel, view, joining: joining && authenticated, busy: busy && authenticated, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(call => call.confirmFullRoster()), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
     {children}<div ref={audio} hidden aria-hidden="true" />
   </VoiceContext.Provider>;
 }
