@@ -1,13 +1,16 @@
-"""Bounded cleanup and incomplete-download regressions; no app/runtime launch."""
+"""Bounded harness regressions and disposable hosted TLS gateway mechanisms."""
 import io
 import http.server
 import socket
 import threading
 import json
 import pathlib
+import os
 import signal
+import ssl
 import subprocess
 import tempfile
+import time
 import types
 import unittest
 import urllib.error
@@ -15,6 +18,432 @@ from unittest.mock import Mock, patch
 from contextlib import contextmanager
 
 import native_app_flows as flows
+
+
+class GatewayRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def tls_fixture(self):
+        """Private per-test certificate; never use caller TLS files or global trust."""
+        with tempfile.TemporaryDirectory(prefix='native-gateway-tls-') as directory:
+            certificate = pathlib.Path(directory) / 'gateway.crt'
+            key = pathlib.Path(directory) / 'gateway.key'
+            key.touch(mode=0o600)
+            subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                            '-keyout', str(key), '-out', str(certificate), '-days', '1',
+                            '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost'],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            key.chmod(0o600)
+            yield {'NATIVE_TLS_CERT': str(certificate), 'NATIVE_TLS_KEY': str(key)}
+
+    @contextmanager
+    def identity(self, change=None):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = pathlib.Path(directory)
+            child = proc / '123'
+            child.mkdir()
+            fields = ['S', '456', '123', '123'] + ['0'] * 15 + ['789']
+            (child / 'stat').write_text('123 (node) ' + ' '.join(fields))
+            (child / 'status').write_text('Uid:\t' + '\t'.join([str(os.getuid())] * 4))
+            (child / 'cmdline').write_bytes(b'node\0desktop/tests/app_proxy.mjs\0')
+            (child / 'exe').symlink_to(proc / 'node')
+            (child / 'cwd').symlink_to(flows.ROOT.parent)
+            if change:
+                change(child)
+            with patch.dict(os.environ, {'NATIVE_APP_PROXY_PID': '123', 'NATIVE_APP_LAUNCHER_PID': '456'}), \
+                    patch.object(flows, 'PROC_ROOT', proc), \
+                    patch.object(flows.shutil, 'which', return_value=str(proc / 'node')), \
+                    patch.object(os, 'pidfd_open', return_value=99, create=True) as opened, \
+                    patch.object(os, 'close') as closed, \
+                    patch.object(signal, 'pidfd_send_signal', create=True) as sent, \
+                    patch.dict(flows.metadata, {}, clear=True):
+                yield child, opened, closed, sent
+
+    def test_gateway_identity_failures_close_descriptor_without_any_signals(self):
+        changes = [lambda p: (p / 'cmdline').write_bytes(b'node\0private-arbitrary-script\0'),
+                   lambda p: (p / 'status').write_text('Uid:\t-1\t-1\t-1\t-1'),
+                   lambda p: (p / 'stat').write_text('123 (node) S 999 123 123 ' + '0 ' * 15 + '789'),
+                   lambda p: (p / 'stat').write_text('123 (node) S 456 999 123 ' + '0 ' * 15 + '789'),
+                   lambda p: (p / 'stat').write_text('123 (node) S 456 123 999 ' + '0 ' * 15 + '789'),
+                   lambda p: (p / 'cwd').unlink(), lambda p: (p / 'exe').unlink()]
+        for change in changes:
+            with self.subTest(change=change), self.identity(change) as (_, opened, closed, sent):
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    flows.OwnedGateway()
+                opened.assert_called_once_with(123, 0)
+                closed.assert_called_once_with(99)
+                sent.assert_not_called()
+                self.assertFalse(flows.metadata['gateway_recovery']['ownership_valid'])
+
+    def test_gateway_missing_or_invalid_handoff_never_opens_or_signals(self):
+        for value in ['', '-123', '1', 'private', '１２３']:
+            with self.subTest(value=value), self.identity() as (_, opened, closed, sent), \
+                    patch.dict(os.environ, {'NATIVE_APP_PROXY_PID': value}):
+                with self.assertRaises(ValueError):
+                    flows.OwnedGateway()
+                opened.assert_not_called()
+                closed.assert_not_called()
+                sent.assert_not_called()
+
+    def test_production_fallback_missing_reaped_unsupported_or_replaced_never_signals(self):
+        for failure in ['missing_start', 'reaped', 'unsupported', 'replacement_before_read', 'wrong_start',
+                        'wrong_parent', 'wrong_uid', 'wrong_argv', 'wrong_cwd', 'wrong_exe', 'wrong_group', 'wrong_session']:
+            with self.subTest(failure=failure), self.identity() as (child, opened, closed, sent), \
+                    patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '' if failure == 'missing_start' else '789'}), \
+                    patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+                if failure in {'reaped', 'unsupported'}:
+                    opened.side_effect = ProcessLookupError() if failure == 'reaped' else NotImplementedError()
+                if failure == 'replacement_before_read':
+                    def open_replaced(*_):
+                        stat = child / 'stat'
+                        stat.write_text(stat.read_text().replace('789', '790'))
+                        return 99
+                    opened.side_effect = open_replaced
+                if failure == 'wrong_start':
+                    os.environ['NATIVE_APP_PROXY_START'] = '790'
+                if failure in {'wrong_parent', 'wrong_group', 'wrong_session'}:
+                    stat = child / 'stat'
+                    fields = stat.read_text().rsplit(') ', 1)[1].split()
+                    fields[{'wrong_parent': 1, 'wrong_group': 2, 'wrong_session': 3}[failure]] = '999'
+                    stat.write_text('123 (node) ' + ' '.join(fields))
+                if failure == 'wrong_uid':
+                    (child / 'status').write_text('Uid:\t-1\t-1\t-1\t-1')
+                if failure == 'wrong_argv':
+                    (child / 'cmdline').write_bytes(b'node\0private-replacement\0')
+                if failure in {'wrong_cwd', 'wrong_exe'}:
+                    (child / failure.removeprefix('wrong_')).unlink()
+                self.assertFalse(flows.resume_owned_gateway())
+                sent.assert_not_called()
+                numeric.assert_not_called()
+                group.assert_not_called()
+                self.assertNotIn('private-replacement', json.dumps(flows.metadata))
+                if failure not in {'missing_start', 'reaped', 'unsupported'}:
+                    closed.assert_called_once_with(99)
+
+    def test_production_fallback_pins_before_reads_and_never_signals_reused_pid(self):
+        for exited in [False, True]:
+            with self.subTest(exited=exited), self.identity() as (child, opened, closed, sent), \
+                    patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '789'}), \
+                    patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+                reads = []
+                record = flows.OwnedGateway._record
+
+                def read(gateway):
+                    opened.assert_called_once_with(123, 0)
+                    reads.append(True)
+                    return record(gateway)
+
+                def resume(fd, number, info, flags):
+                    self.assertTrue(reads)
+                    self.assertEqual((fd, number, info, flags), (99, signal.SIGCONT, None, 0))
+                    # Replacement appears after validation. The descriptor still targets only the original.
+                    stat = child / 'stat'
+                    stat.write_text(stat.read_text().replace('789', '790'))
+                    if exited:
+                        raise ProcessLookupError('private replacement record')
+
+                sent.side_effect = resume
+                with patch.object(flows.OwnedGateway, '_record', read):
+                    self.assertFalse(flows.resume_owned_gateway())
+                sent.assert_called_once_with(99, signal.SIGCONT, None, 0)
+                closed.assert_called_once_with(99)
+                numeric.assert_not_called()
+                group.assert_not_called()
+                self.assertNotIn('private replacement', json.dumps(flows.metadata))
+
+    def test_production_fallback_allows_stopped_owned_gateway_and_sends_only_descriptor_cont(self):
+        with self.identity() as (child, _, closed, sent), \
+                patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '789'}), \
+                patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+            stat = child / 'stat'
+            stat.write_text(stat.read_text().replace('(node) S ', '(node) T '))
+
+            def resume(*_):
+                stat.write_text(stat.read_text().replace('(node) T ', '(node) S '))
+
+            sent.side_effect = resume
+            self.assertTrue(flows.resume_owned_gateway())
+            sent.assert_called_once_with(99, signal.SIGCONT, None, 0)
+            closed.assert_called_once_with(99)
+            numeric.assert_not_called()
+            group.assert_not_called()
+
+    def test_gateway_changed_identity_never_signals_replacement(self):
+        with self.identity() as (child, _, _, sent):
+            gateway = flows.OwnedGateway()
+            stat = child / 'stat'
+            stat.write_text(stat.read_text().replace('789', '790'))
+            with self.assertRaises(ValueError):
+                with gateway.paused():
+                    self.fail('Replacement must never be paused')
+            sent.assert_not_called()
+            gateway.close()
+
+    def test_gateway_resume_obligation_precedes_stop_and_all_exceptions_resume(self):
+        for failure in ['stop_applied', 'observation', 'global_deadline', 'interrupt']:
+            with self.subTest(failure=failure), self.identity() as (_, _, _, sent):
+                gateway = flows.OwnedGateway()
+                events = []
+
+                def send(fd, number, info, flags):
+                    self.assertEqual((fd, info, flags), (99, None, 0))
+                    self.assertTrue(gateway.resume_required)
+                    events.append(number)
+                    if number == signal.SIGSTOP and failure == 'stop_applied':
+                        raise RuntimeError('private process metadata')
+
+                sent.side_effect = send
+                with patch.object(gateway, 'stopped', return_value=False), \
+                        patch.object(gateway, 'await_state'), \
+                        patch.object(signal, 'getitimer', return_value=(400, 0)), \
+                        patch.object(signal, 'setitimer') as timer, \
+                        patch.object(signal, 'signal', return_value=flows.deadline), \
+                        patch.object(signal, 'pthread_sigmask', return_value=set(), create=True):
+                    with self.assertRaises(BaseException):
+                        with gateway.paused():
+                            raise {'observation': ValueError, 'global_deadline': flows.NativeDeadlineExpired,
+                                   'interrupt': KeyboardInterrupt}[failure]()
+                    self.assertEqual(events, [signal.SIGSTOP, signal.SIGCONT])
+                    self.assertEqual(timer.call_args_list[0].args, (signal.ITIMER_REAL, 8))
+                    self.assertFalse(gateway.resume_required)
+                    self.assertTrue(flows.metadata['gateway_recovery']['resumed'])
+                    self.assertNotIn('private', json.dumps(flows.metadata))
+                gateway.close()
+
+    def test_gateway_state_read_deadline_is_one_second(self):
+        gateway = flows.OwnedGateway.__new__(flows.OwnedGateway)
+        gateway.stopped = Mock(return_value=False)
+        clock = [0.0]
+        with patch.object(time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaises(TimeoutError):
+                gateway.await_state(True)
+        self.assertLessEqual(clock[0], 1.01)
+
+    def test_public_probe_returns_only_allowlisted_outcome_and_has_native_deadline(self):
+        for value in [{'outcome': 'deadline', 'private': 'sentinel'},
+                      {'outcome': 'network_error', 'status_class': 'sentinel'},
+                      {'outcome': 'http_response', 'status_class': 2, 'headers': 'sentinel'}]:
+            client = types.SimpleNamespace(command=Mock(return_value=value))
+            with patch.object(time, 'monotonic', return_value=10):
+                result = flows.gateway_probe(client, 40)
+            self.assertNotIn('sentinel', json.dumps(result))
+            call = client.command.call_args
+            self.assertEqual(call.kwargs, {'timeout': 2})
+            self.assertEqual(call.args[2]['args'], [1000])
+            self.assertIn("cache: 'no-store'", call.args[2]['script'])
+            self.assertIn('controller.abort()', call.args[2]['script'])
+
+    def test_single_send_pending_recovery_and_every_failure_resume_without_replay(self):
+        ready = {'at_messages': True, 'log_visible': True, 'visibility': 'visible',
+                 'selection_count': 1, 'target_selection_count': 1, 'private_log_count': 1,
+                 'textarea_count': 1, 'send_control_count': 1, 'alert_count': 0,
+                 'decrypt_error_count': 0, 'textarea_enabled': True, 'send_enabled': True,
+                 'draft_matches': True, 'expected_plaintext_count': 0}
+        for failure in [None, 'probe', 'click', 'sender_dom', 'recipient_dom', 'global', 'pending_budget', 'duplicate']:
+            with self.subTest(failure=failure):
+                clock = [0.0]
+                events = []
+                paused = [False]
+                sent = [False]
+                alice, bob = types.SimpleNamespace(profile=0), types.SimpleNamespace(profile=1)
+
+                @contextmanager
+                def pause():
+                    paused[0] = True
+                    events.append('stop')
+                    try:
+                        yield
+                    finally:
+                        paused[0] = False
+                        events.append('resume')
+
+                def command(method, path, body=None, timeout=None):
+                    self.assertLessEqual(timeout, 2)
+                    if path == '/elements':
+                        return [{flows.ELEMENT: 'control'}]
+                    if path.endswith('/enabled'):
+                        return True
+                    if path.endswith('/click'):
+                        events.append('send')
+                        sent[0] = True
+                        self.assertTrue(paused[0])
+                        if failure == 'click':
+                            raise flows.http.client.RemoteDisconnected()
+                    return True
+
+                alice.command = Mock(side_effect=command)
+
+                def observe(client, expected, timeout):
+                    self.assertLessEqual(timeout, 2)
+                    if paused[0]:
+                        if failure in ['global', 'pending_budget']:
+                            if failure == 'global':
+                                raise flows.NativeDeadlineExpired()
+                            clock[0] = 31
+                            flows.gateway_timeout(30)
+                        if failure == ('sender_dom' if client.profile == 0 else 'recipient_dom'):
+                            raise ValueError('private DOM')
+                        return {**ready, **({'textarea_enabled': False, 'send_enabled': False,
+                                             'disabled_control_count': 2} if client.profile == 0 else {})}
+                    if sent[0]:
+                        return {**ready, 'expected_plaintext_count': 2 if failure == 'duplicate' else 1,
+                                'own_plaintext_present': True, 'draft_empty': True}
+                    return ready
+
+                def probe(client, end):
+                    if paused[0]:
+                        return {'outcome': 'http_response', 'status_class': 2} if failure == 'probe' else {'outcome': 'deadline'}
+                    return {'outcome': 'http_response', 'status_class': 2}
+
+                with patch.object(flows, 'dm_delivery_state', side_effect=observe), \
+                        patch.object(flows, 'gateway_probe', side_effect=probe), \
+                        patch.object(signal, 'getitimer', return_value=(400, 0)), \
+                        patch.object(time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.dict(flows.metadata, {'gateway_recovery': {'ownership_valid': True}}, clear=True):
+                    gateway = types.SimpleNamespace(paused=pause)
+                    if failure:
+                        with self.assertRaises(Exception):
+                            flows.gateway_recovery(alice, bob, gateway, 'private sentinel', 'previous sentinel')
+                    else:
+                        flows.gateway_recovery(alice, bob, gateway, 'private sentinel', 'previous sentinel')
+                        self.assertTrue(flows.metadata['gateway_recovery']['delivered_once'])
+                    self.assertFalse(paused[0])
+                    self.assertEqual(events.count('send'), 0 if failure == 'probe' else 1)
+                    self.assertEqual(events.count('resume'), 1)
+                    self.assertNotIn('sentinel', json.dumps(flows.metadata))
+
+    def test_remaining_global_budget_rejects_before_any_native_action(self):
+        alice, bob, gateway = Mock(), Mock(), Mock()
+        with patch.object(signal, 'getitimer', return_value=(209, 0)):
+            with self.assertRaises(TimeoutError):
+                flows.gateway_recovery(alice, bob, gateway, 'private', 'previous')
+        alice.command.assert_not_called()
+        gateway.paused.assert_not_called()
+
+    def test_workflow_cleanup_resumes_owned_gateway_before_term_and_keeps_deadlines(self):
+        workflow = (flows.ROOT.parent / '.github/workflows/native-app-flows.yml').read_text()
+        cleanup = workflow.split('          cleanup() {', 1)[1].split('          trap cleanup EXIT', 1)[0]
+        self.assertLess(cleanup.index('--resume-owned-gateway'), cleanup.index('kill --'))
+        self.assertLess(cleanup.index('kill --'), cleanup.index('kill -KILL'))
+        self.assertNotIn('kill -CONT', workflow)
+        self.assertIn('NATIVE_APP_PROXY_START="${proxy_start:-}"', cleanup)
+        self.assertIn('NATIVE_APP_PROXY_PID="$proxy_pid" NATIVE_APP_LAUNCHER_PID="$$"', workflow)
+        self.assertIn("trap 'exit 143' TERM", workflow)
+        self.assertIn("trap 'exit 130' INT", workflow)
+        self.assertIn('timeout-minutes: 12', workflow)
+
+    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Hosted Linux pidfd mechanism only')
+    def test_hosted_shell_fallback_resumes_stopped_child_before_termination(self):
+        workflow = (flows.ROOT.parent / '.github/workflows/native-app-flows.yml').read_text()
+        functions = workflow.split('          cleanup() {', 1)[1].split('          trap cleanup EXIT', 1)[0]
+        script = 'set -euo pipefail\ncleanup() {' + functions + '''
+          trap cleanup EXIT
+          trap 'exit 143' TERM
+          trap 'exit 130' INT
+          setsid node desktop/tests/app_proxy.mjs >/dev/null 2>&1 &
+          proxy_pid=$!
+          IFS= read -r proxy_record < "/proc/$proxy_pid/stat"
+          read -ra proxy_fields <<< "${proxy_record##*) }"
+          proxy_start=${proxy_fields[19]}
+          for attempt in $(seq 1 20); do
+            if curl --silent --output /dev/null --cacert "$NATIVE_TLS_CERT" https://localhost:9443/sign-in; then break; fi
+            sleep .05
+          done
+          curl --silent --output /dev/null --cacert "$NATIVE_TLS_CERT" https://localhost:9443/sign-in
+          NATIVE_APP_PROXY_PID="$proxy_pid" NATIVE_APP_LAUNCHER_PID="$$" python3 -c 'import sys, signal; sys.path.insert(0, "desktop/tests"); from native_app_flows import OwnedGateway; gateway = OwnedGateway(); signal.pidfd_send_signal(gateway.fd, signal.SIGSTOP, None, 0); gateway.await_state(True); gateway.close()'
+          kill() {
+            case "$1" in
+              --)
+                IFS= read -r record < "/proc/$proxy_pid/stat"
+                read -ra fields <<< "${record##*) }"
+                case "${fields[0]}" in T|t) echo STOPPED;; *) echo RESUMED;; esac
+                echo TERM;;
+              -KILL) echo KILL;;
+            esac
+            builtin kill "$@"
+          }
+          exit 143
+        '''
+        with self.tls_fixture() as tls:
+            result = subprocess.run(['bash', '-c', script], cwd=flows.ROOT.parent,
+                                    env={**os.environ, **tls}, capture_output=True, timeout=5)
+        diagnostic = {'exitcode': result.returncode,
+                      'tls_env_missing': b'NATIVE_TLS_CERT: unbound variable' in result.stderr,
+                      'stderr_present': bool(result.stderr)}
+        self.assertEqual(result.returncode, 143, diagnostic)
+        self.assertEqual(result.stdout.decode().splitlines(), ['RESUMED', 'TERM', 'KILL'])
+
+    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Hosted Linux pidfd mechanism only')
+    def test_hosted_real_linux_pidfd_gateway_blackout_and_restore(self):
+        """Actual owned TLS process capability; not a substitute for native DM acceptance."""
+        with self.tls_fixture() as tls:
+            self.assert_real_gateway_blackout_and_restore(tls)
+
+    def assert_real_gateway_blackout_and_restore(self, tls):
+        context = ssl.create_default_context(cafile=tls['NATIVE_TLS_CERT'])
+        process = subprocess.Popen(['node', 'desktop/tests/app_proxy.mjs'], cwd=flows.ROOT.parent,
+                                   env={**os.environ, **tls}, start_new_session=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        gateway = None
+
+        def health():
+            try:
+                with flows.urllib.request.urlopen(flows.ORIGIN + '/sign-in', context=context, timeout=.3) as response:
+                    return response.status
+            except urllib.error.HTTPError as error:
+                return error.code
+
+        try:
+            with patch.dict(os.environ, {'NATIVE_APP_PROXY_PID': str(process.pid),
+                                         'NATIVE_APP_LAUNCHER_PID': str(os.getpid())}), \
+                    patch.dict(flows.metadata, {}, clear=True):
+                end = time.monotonic() + 3
+                while True:
+                    try:
+                        if health() == 502:
+                            break
+                    except (urllib.error.URLError, TimeoutError):
+                        pass
+                    if time.monotonic() >= end:
+                        self.fail('Owned gateway readiness deadline exceeded')
+                    time.sleep(.05)
+                gateway = flows.OwnedGateway()
+                old_handler = signal.signal(signal.SIGALRM, flows.deadline)
+                signal.setitimer(signal.ITIMER_REAL, 10)
+                try:
+                    with gateway.paused():
+                        self.assertTrue(gateway.stopped())
+                        with self.assertRaises((TimeoutError, urllib.error.URLError)):
+                            health()
+                    self.assertFalse(gateway.stopped())
+                    self.assertEqual(health(), 502)
+                    gateway.resume_required = True
+                    signal.pidfd_send_signal(gateway.fd, signal.SIGSTOP, None, 0)
+                    gateway.await_state(True)
+                    resumed = subprocess.run([flows.sys.executable, str(flows.ROOT / 'tests/native_app_flows.py'),
+                                              '--resume-owned-gateway'], cwd=flows.ROOT.parent, capture_output=True,
+                                             env={**os.environ, 'NATIVE_APP_PROXY_START': gateway.start}, timeout=3)
+                    self.assertEqual((resumed.returncode, resumed.stdout, resumed.stderr), (0, b'', b''))
+                    gateway.await_state(False)
+                    gateway.resume_required = False
+                    self.assertEqual(health(), 502)
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    signal.signal(signal.SIGALRM, old_handler)
+        finally:
+            try:
+                if gateway is not None:
+                    try:
+                        gateway.resume()
+                    finally:
+                        gateway.close()
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
 
 
 class NativeSupportTests(unittest.TestCase):
@@ -96,6 +525,39 @@ class NativeSupportTests(unittest.TestCase):
                     self.assertNotIn(private, json.dumps(result))
                     self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
                     self.assertEqual(client.command.call_args.kwargs, {'timeout': .25})
+
+    def test_dm_failure_classification_retains_only_fixed_bounded_counts(self):
+        keys = ['failure_envelope_count', 'failure_sdk_decrypt_count', 'failure_shield_count',
+                'failure_sender_binding_count', 'failure_device_trust_count', 'failure_plaintext_schema_count',
+                'failure_message_binding_count', 'failure_history_schema_count', 'failure_replay_storage_count',
+                'failure_missing_room_key_count', 'failure_unknown_message_index_count',
+                'failure_mismatched_identity_keys_count', 'failure_unknown_sender_device_count',
+                'failure_unsigned_sender_device_count', 'failure_sender_identity_verification_violation_count',
+                'failure_unable_to_decrypt_count', 'failure_mismatched_sender_count', 'failure_unknown_code_count',
+                'failure_shield_color_red_count', 'failure_shield_color_grey_count',
+                'failure_shield_color_none_count', 'failure_shield_color_unknown_count',
+                'failure_shield_authenticity_not_guaranteed_count', 'failure_shield_unknown_device_count',
+                'failure_shield_unsigned_device_count', 'failure_shield_unverified_identity_count',
+                'failure_shield_verification_violation_count', 'failure_shield_mismatched_sender_count',
+                'failure_shield_unknown_code_count']
+        private = 'private message SAS JWT key draft native payload'
+        for profile in [0, 1]:
+            for value in [0, 1, 10000, -1, 10001, True, private, {'code': private}]:
+                with self.subTest(profile=profile, value_type=type(value).__name__):
+                    snapshot = {key: value for key in keys}
+                    snapshot.update({'visibility': 'visible', 'decrypt_error_count': 1,
+                                     'failure_arbitrary_count': 1, 'data-dm-failure-code': private,
+                                     'data-dm-shield-color': private, 'data-dm-shield-code': private,
+                                     'shield_color': private, 'shield_code': private, 'shield_message': private,
+                                     'failure_shield_arbitrary_count': 1,
+                                     'stage': private, 'code': private, 'error': private, 'payload': private})
+                    client = types.SimpleNamespace(profile=profile, command=Mock(return_value=snapshot))
+                    result = flows.dm_delivery_state(client, private)
+                    expected = {'profile': profile, 'visibility': 'visible', 'decrypt_error_count': 1}
+                    if type(value) is int and 0 <= value <= 10000:
+                        expected.update({key: value for key in keys})
+                    self.assertEqual(result, expected)
+                    self.assertNotIn(private, json.dumps(result))
 
     def test_both_dm_peer_diagnostics_share_budget_preserve_failure_and_are_failure_only(self):
         clients = [types.SimpleNamespace(profile=index) for index in range(3)]
@@ -589,11 +1051,17 @@ class NativeSupportTests(unittest.TestCase):
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': False},
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': True},
         ])
+        def encryption_ready(_text):
+            self.assertEqual(client.command.call_count, 3)
+            return client.text.call_count == 2
+        client.text = Mock(side_effect=encryption_ready)
         with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
             client.login('disposable@example.test')
         client.click.assert_called_once_with('Sign in')
         client.goto.assert_called_once_with('/sign-in?next=/app/messages')
         self.assertEqual(client.command.call_count, 3)
+        self.assertEqual(client.text.call_count, 2)
+        client.text.assert_called_with('Encrypted messaging ready.')
         for call in client.command.call_args_list:
             self.assertEqual(call.args[:2], ('POST', '/execute/sync'))
             self.assertLessEqual(call.kwargs['timeout'], 2)
