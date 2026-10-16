@@ -5,7 +5,7 @@ import { consumeVoiceOwnerGuard, type VoiceOwnerGuard } from "./owner-guard";
 import { sameVoiceParty, validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 import { decodeVoiceControlWire, encodeVoiceControlWire } from "./control-wire";
 import { validateVoiceContextControl, type VoiceContextControl } from "./context-control";
-import { EpochAgreement, VOICE_AGREEMENT_LIMITS, sameVoiceProposal, voiceContextProposal, voiceProposalPayload, type VoiceContextProposal } from "./epoch-agreement";
+import { EpochAgreement, VoiceContextRejected, VOICE_AGREEMENT_LIMITS, sameVoiceProposal, voiceContextProposal, voiceProposalPayload, type VoiceContextProposal } from "./epoch-agreement";
 
 export type VoiceAgreementEventRef = Readonly<{ kind: "context-offer" | "context-accept" | "context-restart" | "pending-material" }>;
 export type VoiceOwnerAgreementReceived = { kind: "context"; contextKind: VoiceContextControl["kind"]; proposal: VoiceContextProposal; senderId: string; ref: VoiceAgreementEventRef } | { kind: "pending-material"; ref: VoiceAgreementEventRef } | { kind: "media"; control: VoiceOwnerControl };
@@ -56,13 +56,17 @@ export class VoiceCryptoOwner {
   private transitioning = false;
   private revision = 0;
   private epochId: string | undefined;
+  private get controlAudience(): readonly VoiceControlParty[] { return this.installedProposal?.audience ?? this.audience; }
+  private installedProposal?: VoiceContextProposal;
   private audience: VoiceControlParty[] = [];
   private cleanup?: Promise<void>;
+  private receiveFlight?: { mode: boolean; promise: Promise<VoiceOwnerAgreementReceived[]> };
   private readonly agreement: EpochAgreement;
   private readonly agreementRefs = new WeakMap<VoiceAgreementEventRef, AgreementCapability>();
   private selectionRevision = -1;
-  private selectedAudience: VoiceControlParty[] = [];
-  private localOffer?: { proposal: VoiceContextProposal; deadline: number };
+  private get selectedAudience(): readonly VoiceControlParty[] { return this.agreement.selected(this.selectionRevision); }
+  private readonly transientRefs = new Set<VoiceAgreementEventRef>();
+  private localOffer?: { proposal: VoiceContextProposal; deadline: number; ref: VoiceAgreementEventRef };
   private offeredContext?: { proposal: VoiceContextProposal; ref: VoiceAgreementEventRef; deadline: number };
   private readonly now = () => performance.now();
   private readonly lifetimeLost = () => { this.stop("lifetime-lost"); };
@@ -115,14 +119,14 @@ export class VoiceCryptoOwner {
         this.assertCurrent(allowTransition);
         return result;
       }
-      catch (error) { if (!(error instanceof VoiceGenerationInterrupted)) this.stop("native-or-schema-failure"); throw error; }
+      catch (error) { if (!(error instanceof VoiceGenerationInterrupted) && !(error instanceof VoiceContextRejected)) this.stop("native-or-schema-failure"); throw error; }
     });
     this.tail = job.catch(() => undefined);
     return job;
   }
   private stop(reason: string): void {
     if (this.stopped) return;
-    this.stopped = true; this.revision++; this.abort.abort(); this.admitted.clear(); this.audience = []; this.epochId = undefined; this.agreement.clear(); this.offeredContext = undefined; this.localOffer = undefined; this.selectedAudience = [];
+    this.stopped = true; this.revision++; this.abort.abort(); this.admitted.clear(); this.audience = []; this.epochId = undefined; this.installedProposal = undefined; this.agreement.clear(); for (const ref of this.transientRefs) this.agreementRefs.delete(ref); this.transientRefs.clear(); this.offeredContext = undefined; this.localOffer = undefined;
     try { this.options.onFence(reason); } finally { void this.cleanupNative(); }
   }
   private cleanupNative(): Promise<void> {
@@ -332,20 +336,42 @@ export class VoiceCryptoOwner {
   selectAudience(memberIds: readonly string[], selectionRevision: number): Promise<void> {
     return this.serial(() => {
       if (memberIds.some(id => id !== this.snapshot.memberId && !this.admitted.has(id))) throw new Error("Explicit current audience admission required.");
+      for (const ref of this.transientRefs) this.agreementRefs.delete(ref); this.transientRefs.clear();
       this.agreement.select(memberIds, selectionRevision, true);
-      this.selectionRevision = selectionRevision; this.selectedAudience = [...this.agreement.selected(selectionRevision)];
-      this.offeredContext = undefined; this.localOffer = undefined; this.epochId = undefined; this.audience = [];
+      this.selectionRevision = selectionRevision;
+      this.offeredContext = undefined; this.localOffer = undefined; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
       this.options.onFence("audience-selection-change");
     });
   }
   agreementPort(): VoiceAgreementOwnerPort {
     return Object.freeze({ selectAudience: this.selectAudience.bind(this), createContextOffer: this.createContextOffer.bind(this), sendContextControl: this.sendContextControl.bind(this), receiveAgreement: this.receiveAgreement.bind(this), stageOfferedContext: this.stageOfferedContext.bind(this), acceptContextControl: this.acceptContextControl.bind(this), retainPendingMaterial: this.retainPendingMaterial.bind(this), installContext: this.installContext.bind(this), contextAgreementComplete: this.contextAgreementComplete.bind(this), sendControl: this.sendControl.bind(this), close: this.close.bind(this) });
   }
+  private retireAgreementRefs(keep?: VoiceContextProposal): void {
+    for (const ref of this.transientRefs) {
+      const cap = this.agreementRefs.get(ref);
+      if ((ref === this.offeredContext?.ref || ref === this.localOffer?.ref) && (!keep || (cap && sameVoiceProposal(cap.proposal, keep)))) continue;
+      if (keep && cap && sameVoiceProposal(cap.proposal, keep)) continue;
+      this.agreementRefs.delete(ref); this.transientRefs.delete(ref);
+    }
+    this.accountAgreementRefs();
+  }
+  private accountAgreementRefs(extra?: AgreementCapability): void {
+    const values = [...this.transientRefs].map(ref => this.agreementRefs.get(ref)).filter((cap): cap is AgreementCapability => !!cap);
+    if (extra) values.push(extra);
+    if (values.length > 18) throw new Error("Voice transient agreement reference bound.");
+    const proposals = [...new Map(values.map(cap => [JSON.stringify([cap.proposal.epochId, cap.proposal.sequence, cap.proposal.reference, cap.proposal.leaderId]), [cap.proposal.epochId, cap.proposal.sequence, cap.proposal.reference, cap.proposal.leaderId]])).values()];
+    const slots = values.map(cap => cap.detail.kind === "material" ? [cap.detail.kind, cap.detail.senderId, cap.detail.keyId, cap.detail.reference, cap.detail.transaction, cap.detail.material, cap.deadline] : [cap.detail.kind, cap.detail.senderId, cap.detail.transaction, cap.deadline]);
+    this.agreement.setExternalPayload([[this.revision, this.selectionRevision, this.snapshot.memberId], proposals, ...slots], extra?.proposal ?? values[0]?.proposal);
+  }
+  private consumeAgreementRef(ref: VoiceAgreementEventRef): void { this.agreementRefs.delete(ref); this.transientRefs.delete(ref); this.accountAgreementRefs(); }
   private issueAgreement(control: VoiceContextControl | VoiceOwnerControl, proposal: VoiceContextProposal, deadline: number): VoiceAgreementEventRef {
     const ref = Object.freeze({ kind: control.kind === "material" ? "pending-material" as const : control.kind as VoiceContextControl["kind"] });
     if (control.kind === "prepared" || control.kind === "key-ready") throw new Error("Pending material or context capability required.");
     const detail = { kind: control.kind, senderId: control.sender.memberId, recipientId: control.recipient.memberId, transaction: control.transaction, reference: control.reference, ...(control.kind === "material" ? { keyId: control.keyId, material: control.material } : {}) };
-    this.agreementRefs.set(ref, { detail, proposal, revision: this.revision, selectionRevision: this.selectionRevision, deadline }); return ref;
+    if (this.offeredContext && sameVoiceProposal(this.offeredContext.proposal, proposal)) proposal = this.offeredContext.proposal;
+    else if (this.localOffer && sameVoiceProposal(this.localOffer.proposal, proposal)) proposal = this.localOffer.proposal;
+    const cap = { detail, proposal, revision: this.revision, selectionRevision: this.selectionRevision, deadline };
+    this.accountAgreementRefs(cap); this.agreementRefs.set(ref, cap); this.transientRefs.add(ref); return ref;
   }
   private capability(ref: VoiceAgreementEventRef): AgreementCapability {
     const value = this.agreementRefs.get(ref);
@@ -355,7 +381,7 @@ export class VoiceCryptoOwner {
   private contextFromCapability(cap: AgreementCapability): VoiceContextControl {
     const { proposal, detail } = cap;
     const sender = proposal.audience.find(p => p.memberId === detail.senderId), recipient = proposal.audience.find(p => p.memberId === detail.recipientId);
-    return validateVoiceContextControl({ ...proposal, audience: [...proposal.audience], version: 1, purpose: VOICE_CONTROL_EVENT, kind: detail.kind, sender, recipient, transaction: detail.transaction }, this.snapshot, this.selectedAudience);
+    return validateVoiceContextControl({ callId: proposal.callId, generation: proposal.generation, epochId: proposal.epochId, sequence: proposal.sequence, reference: proposal.reference, leader: proposal.leader, audience: [...proposal.audience], version: 1, purpose: VOICE_CONTROL_EVENT, kind: detail.kind, sender, recipient, transaction: detail.transaction }, this.snapshot, this.selectedAudience);
   }
   createContextOffer(): Promise<{ ref: VoiceAgreementEventRef; proposal: VoiceContextProposal }> {
     return this.serial(() => {
@@ -363,8 +389,8 @@ export class VoiceCryptoOwner {
       if (!sameVoiceParty(audience[0], self)) throw new Error("Only deterministic voice leader may propose.");
       const reference = crypto.randomUUID(), sequence = this.agreement.nextSequence(this.now());
       const control = validateVoiceContextControl({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId: this.snapshot.callId, generation: this.snapshot.generation, epochId: crypto.randomUUID(), audience, sender: self, recipient: self, leader: self, sequence, reference, transaction: reference }, this.snapshot, audience);
-      const proposal = voiceContextProposal(control), ref = this.issueAgreement(control, proposal, this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs);
-      this.localOffer = { proposal, deadline: this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs };
+      const proposal = voiceContextProposal(control, this.agreement.table(this.selectionRevision)), ref = this.issueAgreement(control, proposal, this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs);
+      this.localOffer = { proposal, deadline: this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs, ref };
       return { ref, proposal };
     });
   }
@@ -373,8 +399,11 @@ export class VoiceCryptoOwner {
       const cap = this.capability(ref);
       if (cap.detail.kind !== "context-offer") throw new Error("Voice offer capability required.");
       const proposal = this.agreement.stage(this.contextFromCapability(cap), cap.selectionRevision, this.now(), cap.deadline);
+      cap.proposal = proposal;
+      if (this.localOffer && sameVoiceProposal(this.localOffer.proposal, proposal)) this.localOffer.proposal = proposal;
+      this.retireAgreementRefs(proposal);
       if (!this.offeredContext || !sameVoiceProposal(this.offeredContext.proposal, proposal)) {
-        this.offeredContext = { proposal, ref, deadline: cap.deadline }; this.epochId = undefined; this.audience = [];
+        this.offeredContext = { proposal, ref, deadline: cap.deadline }; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
         this.options.onFence("offered-context-change");
       }
     });
@@ -382,8 +411,8 @@ export class VoiceCryptoOwner {
   acceptContextControl(ref: VoiceAgreementEventRef): Promise<boolean> {
     return this.serial(() => {
       const cap = this.capability(ref);
-      if (cap.detail.kind === "context-accept") { this.agreement.accept(this.contextFromCapability(cap), cap.selectionRevision, this.now(), cap.deadline); return false; }
-      if (cap.detail.kind === "context-restart") return this.agreement.restart(this.contextFromCapability(cap), cap.selectionRevision, this.now());
+      if (cap.detail.kind === "context-accept") { this.consumeAgreementRef(ref); this.agreement.accept(this.contextFromCapability(cap), cap.selectionRevision, this.now(), cap.deadline); return false; }
+      if (cap.detail.kind === "context-restart") { this.consumeAgreementRef(ref); return this.agreement.restart(this.contextFromCapability(cap), cap.selectionRevision, this.now()); }
       throw new Error("Authenticated voice acceptance or restart capability required.");
     });
   }
@@ -393,8 +422,8 @@ export class VoiceCryptoOwner {
       if (cap.detail.kind !== "material" || !this.offeredContext || !sameVoiceProposal(this.offeredContext.proposal, cap.proposal)) throw new Error("Staged voice material capability required.");
       const { proposal, detail } = cap;
       const sender = proposal.audience.find(p => p.memberId === detail.senderId), recipient = proposal.audience.find(p => p.memberId === detail.recipientId);
-      const material = validateVoiceOwnerControl({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: proposal.callId, generation: proposal.generation, epochId: proposal.epochId, audience: [...proposal.audience], sender, recipient, publisher: sender, keyId: detail.keyId, material: detail.material, reference: detail.reference, transaction: detail.transaction }, this.snapshot, proposal.epochId, proposal.audience);
-      this.agreement.material(material, cap.selectionRevision, this.now());
+      const material = validateVoiceOwnerControl({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: proposal.callId, generation: proposal.generation, epochId: proposal.epochId, proposalSequence: proposal.sequence, audience: [...proposal.audience], sender, recipient, publisher: sender, keyId: detail.keyId, material: detail.material, reference: detail.reference, transaction: detail.transaction }, this.snapshot, proposal.epochId, proposal.audience, proposal.sequence);
+      this.consumeAgreementRef(ref); this.agreement.material(material, cap.selectionRevision, this.now());
     });
   }
   contextAgreementComplete(ref: VoiceAgreementEventRef): Promise<boolean> {
@@ -408,9 +437,12 @@ export class VoiceCryptoOwner {
     });
     // The native drain is the existing Owner executor; HTTP remains outside it.
     await this.installControlContext(prepared.proposal.epochId, prepared.proposal.audience.map(p => p.memberId), () => {
-      if (prepared.selectionRevision !== this.selectionRevision || this.now() >= prepared.deadline) throw new Error("Voice agreement expired during installation."); this.agreement.install(prepared.proposal, prepared.selectionRevision, this.now());
+      if (prepared.selectionRevision !== this.selectionRevision || this.now() >= prepared.deadline) throw new Error("Voice agreement expired during installation."); this.agreement.install(prepared.proposal, prepared.selectionRevision, this.now()); this.installedProposal = prepared.proposal;
     });
-    return this.serial(() => this.agreement.drain(prepared.proposal, prepared.selectionRevision, this.now()));
+    return this.serial(() => {
+      for (const event of this.transientRefs) this.agreementRefs.delete(event); this.transientRefs.clear(); this.agreement.setExternalPayload([]);
+      return this.agreement.drain(prepared.proposal, prepared.selectionRevision, this.now());
+    });
   }
   async sendContextControl(raw: VoiceContextControl): Promise<VoiceAgreementEventRef | undefined> {
     const prepared = await this.serial(async () => {
@@ -445,12 +477,12 @@ export class VoiceCryptoOwner {
   }
   /** Caller supplies the explicitly chosen fresh media context; no key generation or media work. */
   setControlContext(epochId: string, memberIds: readonly string[]): Promise<void> {
-    this.agreement.clear(); this.offeredContext = undefined;
+    this.agreement.clear(); for (const ref of this.transientRefs) this.agreementRefs.delete(ref); this.transientRefs.clear(); this.offeredContext = undefined;
     return this.installControlContext(epochId, memberIds);
   }
   private installControlContext(epochId: string, memberIds: readonly string[], agreed?: () => void): Promise<void> {
     this.assertCurrent();
-    this.transitioning = true; this.revision++; this.epochId = undefined; this.audience = [];
+    this.transitioning = true; this.revision++; this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
     this.options.onFence("audience-context-change");
     const selected = [...memberIds];
     return this.transitionDrain(structuredClone(this.snapshot), true, () => {
@@ -458,13 +490,13 @@ export class VoiceCryptoOwner {
       if (!selected.includes(this.snapshot.memberId) || new Set(selected).size !== selected.length || selected.length > VOICE_LIMITS.members || selected.some(id => id !== this.snapshot.memberId && !this.admitted.has(id))) throw new Error("Explicit current audience admission required.");
       agreed?.();
       this.epochId = epochId;
-      this.audience = selected.map(id => voiceControlParty(this.peer(id))).sort((a, b) => a.memberId.localeCompare(b.memberId));
+      this.audience = this.installedProposal ? [] : selected.map(id => voiceControlParty(this.peer(id))).sort((a, b) => a.memberId.localeCompare(b.memberId));
     }).catch(error => { this.stop("audience-transition-failed"); throw error; });
   }
   async sendControl(raw: VoiceOwnerControl): Promise<void> {
     const output = await this.serial(async () => {
       if (!this.epochId) throw new Error("Missing admitted voice context.");
-      const value = validateVoiceOwnerControl(raw, this.snapshot, this.epochId, this.audience);
+      const value = validateVoiceOwnerControl(raw, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
       if (value.sender.memberId !== this.snapshot.memberId || !this.admitted.has(value.recipient.memberId)) throw new Error("Voice control admission mismatch.");
       const peer = await this.device(value.recipient);
       if (!peer.isVerified()) throw new Error("Unverified native voice recipient.");
@@ -475,7 +507,7 @@ export class VoiceCryptoOwner {
     if (output.missing) await this.output(output.missing);
     const request = await this.serial(async () => {
       if (!this.epochId) throw new Error("Missing admitted voice context.");
-      const value = validateVoiceOwnerControl(output.value, this.snapshot, this.epochId, this.audience);
+      const value = validateVoiceOwnerControl(output.value, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
       const peer = await this.device(value.recipient);
       if (!peer.isVerified() || !this.admitted.has(value.recipient.memberId)) throw new Error("Unverified native voice recipient.");
       const encrypted = await peer.encryptToDeviceEvent(VOICE_CONTROL_EVENT, encodeVoiceControlWire(value), C.CollectStrategy.onlyTrustedDevices());
@@ -491,8 +523,17 @@ export class VoiceCryptoOwner {
     return values.map(value => { if (value.kind !== "media") throw new Error("Primitive Owner cannot consume context agreement."); return value.control; });
   }
   receiveAgreement(): Promise<VoiceOwnerAgreementReceived[]> { return this.receiveBatch(true); }
-  private async receiveBatch(agreementMode: boolean): Promise<VoiceOwnerAgreementReceived[]> {
+  private receiveBatch(agreementMode: boolean): Promise<VoiceOwnerAgreementReceived[]> {
+    if (this.receiveFlight) {
+      if (this.receiveFlight.mode === agreementMode) return this.receiveFlight.promise;
+      this.stop("competing-receive-facades"); return Promise.reject(new Error("Voice receive facades cannot compete."));
+    }
+    const promise = this.runReceiveBatch(agreementMode).finally(() => { if (this.receiveFlight?.promise === promise) this.receiveFlight = undefined; });
+    this.receiveFlight = { mode: agreementMode, promise }; return promise;
+  }
+  private async runReceiveBatch(agreementMode: boolean): Promise<VoiceOwnerAgreementReceived[]> {
     const revision = this.revision;
+    await this.serial(() => this.retireAgreementRefs());
     const rawBatch = await this.exchange({ kind: "sync" });
     const batch = await this.serial(() => {
       if (revision !== this.revision) throw new VoiceGenerationInterrupted();
@@ -519,6 +560,7 @@ export class VoiceCryptoOwner {
       let temporary: { proposal: VoiceContextProposal; deadline: number } | undefined;
       let batchProposal: VoiceContextProposal | undefined;
       let pendingCount = 0, pendingBytes = 0;
+      const thinSlots = new Map<string, string>();
       for (const item of processed) {
         if (item instanceof C.PlainTextToDeviceEvent) {
           const event = envelopeSchema.parse(JSON.parse(item.rawEvent));
@@ -546,27 +588,35 @@ export class VoiceCryptoOwner {
           if (isContext) {
             this.agreement.selected(this.selectionRevision);
             value = validateVoiceContextControl(decoded, this.snapshot, this.selectedAudience);
-          } else if (this.epochId && !temporary) value = validateVoiceOwnerControl(decoded, this.snapshot, this.epochId, this.audience);
+          } else if (this.epochId && (!temporary || decoded.epochId === this.epochId)) value = validateVoiceOwnerControl(decoded, this.snapshot, this.epochId, this.controlAudience, this.installedProposal?.sequence);
           else {
             pending = temporary ?? this.offeredContext;
             if (!agreementMode || !pending || decoded.kind !== "material" || this.now() >= pending.deadline) throw new Error("Missing exact offered voice context.");
-            value = validateVoiceOwnerControl(decoded, this.snapshot, pending.proposal.epochId, pending.proposal.audience);
+            value = validateVoiceOwnerControl(decoded, this.snapshot, pending.proposal.epochId, pending.proposal.audience, pending.proposal.sequence);
           }
           const peer = value.sender;
           if (!this.admitted.has(peer.memberId) || value.recipient.memberId !== this.snapshot.memberId || !sameVoiceParty(value.recipient, voiceControlParty(this.peer(this.snapshot.memberId))) || event.sender !== peer.voiceUserId || item.encryptionInfo.sender.toString() !== peer.voiceUserId || item.encryptionInfo.senderDevice?.toString() !== peer.voiceDeviceId || !(await this.device(peer)).isVerified()) throw new Error("Voice control sender/admission mismatch.");
           if (event.recipient !== this.snapshot.voiceUserId || event.recipient_keys.ed25519 !== this.machine.identityKeys.ed25519.toBase64() || event.sender_device_keys.user_id !== peer.voiceUserId || event.sender_device_keys.device_id !== peer.voiceDeviceId || event.keys.ed25519 !== event.sender_device_keys.keys[`ed25519:${peer.voiceDeviceId}`]) throw new Error("Voice Olm envelope mismatch.");
           if (value.kind === "context-offer" || value.kind === "context-accept" || value.kind === "context-restart") {
-            const normalized = voiceContextProposal(value), deadline = this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs;
+            const normalized = voiceContextProposal(value, this.agreement.table(this.selectionRevision)), deadline = this.now() + VOICE_AGREEMENT_LIMITS.deadlineMs;
             if (batchProposal && !sameVoiceProposal(batchProposal, normalized)) throw new Error("Multiple voice proposals in receive batch.");
             const proposal = batchProposal ??= normalized;
             if (value.kind === "context-offer") {
               if (temporary && !sameVoiceProposal(temporary.proposal, proposal)) throw new Error("Multiple temporary voice proposals.");
               temporary ??= { proposal, deadline };
             }
+            const slot = `${value.kind}:${value.sender.memberId}`, identity = JSON.stringify([value.transaction, value.reference]);
+            const prior = thinSlots.get(slot);
+            if (prior !== undefined) { if (prior !== identity) throw new Error("Conflicting temporary voice context slot."); continue; }
+            thinSlots.set(slot, identity);
             accepted.push({ kind: "context", contextKind: value.kind, proposal, senderId: value.sender.memberId, ref: this.issueAgreement(value, proposal, temporary && sameVoiceProposal(temporary.proposal, proposal) ? temporary.deadline : deadline) });
           } else if (pending) {
             // Thin temporary accounting; no persistent offered state or media effect before stage.
-            pendingCount++; pendingBytes += new TextEncoder().encode(JSON.stringify({ publisherId: value.publisher.memberId, keyId: value.keyId, reference: value.reference, transaction: value.transaction, material: value.kind === "material" ? value.material : undefined })).length;
+            const slot = `material:${value.publisher.memberId}`, identity = JSON.stringify({ publisherId: value.publisher.memberId, keyId: value.keyId, reference: value.reference, transaction: value.transaction, material: value.kind === "material" ? value.material : undefined });
+            const prior = thinSlots.get(slot);
+            if (prior !== undefined) { if (prior !== identity) throw new Error("Conflicting temporary voice material slot."); continue; }
+            thinSlots.set(slot, identity);
+            pendingCount++; pendingBytes += new TextEncoder().encode(identity).length;
             if (pendingCount > VOICE_AGREEMENT_LIMITS.slots || pendingBytes + new TextEncoder().encode(JSON.stringify(voiceProposalPayload(pending.proposal))).length > VOICE_AGREEMENT_LIMITS.retainedBytes) throw new Error("Temporary voice material payload bound.");
             accepted.push({ kind: "pending-material", ref: this.issueAgreement(value, pending.proposal, pending.deadline) });
           } else accepted.push({ kind: "media", control: value });
@@ -582,8 +632,8 @@ export class VoiceCryptoOwner {
   transition(next: VoiceSnapshot): Promise<void> {
     this.assertCurrent();
     const admissions = [...this.admitted].map(memberId => voiceControlParty(this.peer(memberId)));
-    this.transitioning = true; this.revision++; this.admitted.clear(); this.epochId = undefined; this.audience = [];
-    this.agreement.transition(structuredClone(next)); this.offeredContext = undefined; this.localOffer = undefined; this.selectedAudience = [];
+    this.transitioning = true; this.revision++; this.admitted.clear(); this.epochId = undefined; this.installedProposal = undefined; this.audience = [];
+    this.agreement.transition(structuredClone(next)); for (const ref of this.transientRefs) this.agreementRefs.delete(ref); this.transientRefs.clear(); this.offeredContext = undefined; this.localOffer = undefined;
     this.options.onFence("generation-transition");
     const snapshot = structuredClone(next);
     return this.transitionDrain(snapshot, false, () => {

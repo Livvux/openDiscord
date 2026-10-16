@@ -9,10 +9,12 @@ import type { VoiceSnapshot } from "@/lib/voice/contracts";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { registerDmDevice } from "@/server/direct-messages";
 import { handleVoiceCrypto, heartbeatVoiceControl, joinVoiceControl } from "@/server/voice-control";
+import { PublicServicePeer } from "./voice-service-peer";
 import { testUsers } from "../helpers";
 
 const users = testUsers();
 const owners = new Set<VoiceCryptoOwner>();
+const peers = new Set<PublicServicePeer>();
 type Dispatch = Parameters<VoiceOwnerTransport>[0];
 export type AgreementEndpoint = { userId: string; sessionId: string; anchorDeviceId: string; anchorSecret: string; secret: string; snapshot: VoiceSnapshot; owner: VoiceCryptoOwner; fence: ReturnType<typeof vi.fn<(reason: string) => void>>; lifetime: AbortController; calls: Dispatch[]; before?: (input: Dispatch) => Promise<void>; after?: (input: Dispatch, response: unknown) => Promise<void> };
 const auth = (e: AgreementEndpoint) => ({ userId: e.userId, sessionId: e.sessionId, memberId: e.snapshot.memberId, secret: e.secret });
@@ -21,7 +23,7 @@ function locks() {
   const held = new Set<string>();
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
 }
-export async function agreementServiceFixture(count = 2, nativeOwners = count, beforeNative?: () => Promise<void>) {
+export async function agreementServiceFixture(count = 2, nativeOwners = count, beforeNative?: () => Promise<void>, ownerLast = false) {
   locks();
   const accounts = [];
   for (let i = 0; i < count; i++) {
@@ -46,6 +48,7 @@ export async function agreementServiceFixture(count = 2, nativeOwners = count, b
   }
   for (const endpoint of endpoints) endpoint.snapshot = await heartbeatVoiceControl(auth(endpoint), binding(endpoint));
   await beforeNative?.();
+  if (ownerLast) endpoints.sort((a, b) => b.snapshot.memberId.localeCompare(a.snapshot.memberId));
   for (const endpoint of endpoints.slice(0, nativeOwners)) {
     endpoint.owner = await VoiceCryptoOwner.create({ accountId: endpoint.userId, guard: await acquireVoiceOwnerGuard(endpoint.userId), snapshot: endpoint.snapshot, lifetime: { signal: endpoint.lifetime.signal, assertCurrent() {} }, onFence: endpoint.fence, transport: async input => {
       endpoint.calls.push({ binding: structuredClone(input.binding), request: structuredClone(input.request), signal: input.signal });
@@ -87,5 +90,34 @@ export async function verifyAgreementPeers(a: AgreementEndpoint, b: AgreementEnd
   expect((await state(a, b)).done).toBe(true); expect((await state(b, a)).done).toBe(true);
   await a.owner.admit(b.snapshot.memberId); await b.owner.admit(a.snapshot.memberId);
 }
-export async function closeAgreementFixture() { for (const owner of owners) await owner.close(); owners.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+export async function openAgreementPublicPeer(e: AgreementEndpoint) {
+  const peer = await PublicServicePeer.create(e.snapshot, input => handleVoiceCrypto(auth(e), { ...input.binding, request: input.request })); peers.add(peer); return peer;
+}
+export async function verifyAgreementPublicPeer(a: AgreementEndpoint, b: AgreementEndpoint, peer: PublicServicePeer) {
+  const decimals = new Map<string, number[]>(), original = C.Sas.prototype.emojiIndex;
+  const observation = vi.spyOn(C.Sas.prototype, "emojiIndex").mockImplementation(function(this: C.Sas) {
+    const values = this.decimals(); if (values) decimals.set(this.userId.toString(), Array.from(values));
+    return original.call(this);
+  });
+  await peer.query();
+  const handle = await a.owner.requestVerification(b.snapshot.memberId); await peer.receive();
+  const ownMember = a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!;
+  const request = peer.verification(ownMember), ready = request.acceptWithMethods([C.VerificationMethod.SasV1]);
+  if (!ready) throw new Error("Missing genuine peer SAS ready.");
+  await peer.out(ready); await a.owner.receive();
+  await a.owner.verificationStep(handle, "start"); await peer.receive();
+  const sas = peer.sas(ownMember), accept = sas.accept(); if (accept) await peer.out(accept);
+  await a.owner.receive(); await peer.receive(); await a.owner.receive();
+  const nativeState = await state(a, b);
+  expect(nativeState.emojiIndices).toHaveLength(7); expect(nativeState.emojiIndices).toEqual(Array.from(sas.emojiIndex()!));
+  expect(decimals.size).toBe(2); expect([...decimals.values()][0]).toHaveLength(3);
+  expect([...decimals.values()][0]).toEqual([...decimals.values()][1]); observation.mockRestore();
+  await a.owner.verificationStep(handle, "confirm");
+  for (const output of await sas.confirm()) await peer.out(output);
+  for (let round = 0; round < 3; round++) { await a.owner.receive(); await peer.receive(); }
+  await a.owner.query([a.snapshot.memberId, b.snapshot.memberId]); await peer.query();
+  expect((await state(a, b)).done).toBe(true); expect(sas.isDone()).toBe(true);
+  await a.owner.admit(b.snapshot.memberId);
+}
+export async function closeAgreementFixture() { for (const owner of owners) await owner.close(); owners.clear(); for (const peer of peers) peer.close(); peers.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
 export async function cleanupAgreementUsers() { await users.cleanup(); }

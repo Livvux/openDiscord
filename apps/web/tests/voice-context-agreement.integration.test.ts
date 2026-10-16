@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { VoiceContextControl } from "@/lib/voice/context-control";
 import type { VoiceAgreementEventRef, VoiceOwnerAgreementReceived } from "@/lib/voice/crypto-owner";
+import { VoiceContextRejected } from "@/lib/voice/epoch-agreement";
+import { encodeVoiceControlWire } from "@/lib/voice/control-wire";
 import type { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty, type VoiceOwnerControl } from "@/lib/voice/owner-control";
-import { agreementServiceFixture, cleanupAgreementUsers, closeAgreementFixture, verifyAgreementPeers, type AgreementEndpoint } from "./fixtures/voice-agreement-service";
+import { agreementServiceFixture, cleanupAgreementUsers, closeAgreementFixture, verifyAgreementPeers, openAgreementPublicPeer, verifyAgreementPublicPeer, type AgreementEndpoint } from "./fixtures/voice-agreement-service";
 
 afterEach(closeAgreementFixture);
 afterAll(cleanupAgreementUsers);
 const self = (e: AgreementEndpoint) => voiceControlParty(e.snapshot.members.find(p => p.memberId === e.snapshot.memberId)!);
 function control(proposal: VoiceContextProposal, sender: AgreementEndpoint, recipient: AgreementEndpoint, kind: VoiceContextControl["kind"]): VoiceContextControl {
-  return { ...proposal, audience: [...proposal.audience], version: 1, purpose: VOICE_CONTROL_EVENT, sender: self(sender), recipient: self(recipient), kind, transaction: kind === "context-offer" ? proposal.reference : randomUUID() };
+  return { callId: proposal.callId, generation: proposal.generation, epochId: proposal.epochId, sequence: proposal.sequence, reference: proposal.reference, leader: proposal.leader, audience: [...proposal.audience], version: 1, purpose: VOICE_CONTROL_EVENT, sender: self(sender), recipient: self(recipient), kind, transaction: kind === "context-offer" ? proposal.reference : randomUUID() };
 }
 function context(values: VoiceOwnerAgreementReceived[], kind: VoiceContextControl["kind"]) {
   const result = values.find(v => v.kind === "context" && v.contextKind === kind);
@@ -44,7 +46,7 @@ describe("unreachable in-band context agreement over three actual PostgreSQL nat
     expect(await c.owner.contextAgreementComplete(cOffer.ref)).toBe(true);
     await c.owner.sendContextControl(control(cOffer.proposal, c, a, "context-accept")); await acceptEvents(a);
     expect(await a.owner.contextAgreementComplete(local.ref)).toBe(true); expect(await a.owner.installContext(local.ref)).toEqual([]);
-    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: local.proposal.callId, generation: local.proposal.generation, epochId: local.proposal.epochId, sender: self(a), recipient: self(b), publisher: self(a), audience: [...local.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 17).toString("base64") };
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: local.proposal.callId, generation: local.proposal.generation, epochId: local.proposal.epochId, proposalSequence: local.proposal.sequence, sender: self(a), recipient: self(b), publisher: self(a), audience: [...local.proposal.audience], keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 17).toString("base64") };
     await a.owner.sendControl(material);
     const pending = await b.owner.receiveAgreement(); expect(pending.map(v => v.kind)).toEqual(["pending-material"]);
     for (const event of pending) if (event.kind === "pending-material") await b.owner.retainPendingMaterial(event.ref);
@@ -87,4 +89,36 @@ describe("unreachable in-band context agreement over three actual PostgreSQL nat
     await a.owner.selectAudience([a.snapshot.memberId], 1); await b.owner.selectAudience([b.snapshot.memberId], 1);
     const local = await a.owner.createContextOffer(); await expect(b.owner.stageOfferedContext(local.ref)).rejects.toThrow(/capability/);
   });
+  it.each(["equal-proposal", "old-material", "prepared", "key-ready"] as const)("rejects lower replay without mutation, preserves current traffic, and fences %s", async (negative) => {
+    const [a, b] = await agreementServiceFixture(2, 1, undefined, true), peer = await openAgreementPublicPeer(b);
+    await verifyAgreementPublicPeer(a, b, peer); await a.owner.selectAudience(a.snapshot.members.map(m => m.memberId), 1);
+    const audience = a.snapshot.members.map(voiceControlParty).sort((x, y) => x.memberId.localeCompare(y.memberId));
+    const offer = (sequence: number): VoiceContextControl => { const reference = randomUUID(); return { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId: a.snapshot.callId, generation: a.snapshot.generation, epochId: randomUUID(), sender: self(b), recipient: self(a), audience, leader: self(b), sequence, reference, transaction: reference }; };
+    async function agree(value: VoiceContextControl) {
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(value));
+      const offered = context(await a.owner.receiveAgreement(), "context-offer"); await a.owner.stageOfferedContext(offered.ref);
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire({ ...value, kind: "context-accept", transaction: randomUUID() })); await acceptEvents(a);
+      expect(await a.owner.contextAgreementComplete(offered.ref)).toBe(true); await a.owner.installContext(offered.ref);
+    }
+    const first = offer(1); await agree(first);
+    await new Promise(resolve => setTimeout(resolve, 1_010));
+    const second = { ...offer(2), epochId: first.epochId }; await agree(second);
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId: second.callId, generation: second.generation, epochId: second.epochId, proposalSequence: second.sequence, audience, sender: self(b), recipient: self(a), publisher: self(b), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID(), material: Buffer.alloc(32, 23).toString("base64") };
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material)); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+    const fences = a.fence.mock.calls.length;
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(first)); await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material));
+    const batch = await a.owner.receiveAgreement(), lower = context(batch, "context-offer");
+    expect(batch.filter(e => e.kind === "media")).toEqual([{ kind: "media", control: material }]);
+    await expect(a.owner.stageOfferedContext(lower.ref)).rejects.toBeInstanceOf(VoiceContextRejected); expect(a.fence.mock.calls).toHaveLength(fences);
+    await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(material)); expect(await a.owner.receiveAgreement()).toEqual([{ kind: "media", control: material }]);
+    if (negative === "equal-proposal") {
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire({ ...second, epochId: randomUUID() }));
+      const divergent = context(await a.owner.receiveAgreement(), "context-offer"); await expect(a.owner.stageOfferedContext(divergent.ref)).rejects.toThrow(/sequence conflict/);
+    } else {
+      const payload: VoiceOwnerControl = negative === "old-material" ? { ...material, proposalSequence: first.sequence } : { version: 1, purpose: VOICE_CONTROL_EVENT, kind: negative, callId: second.callId, generation: second.generation, epochId: second.epochId, proposalSequence: first.sequence, audience, sender: self(b), recipient: self(a), publisher: self(a), keyId: randomUUID(), reference: randomUUID(), transaction: randomUUID() };
+      await peer.encrypt(a.snapshot.members.find(m => m.memberId === a.snapshot.memberId)!, encodeVoiceControlWire(payload)); await expect(a.owner.receiveAgreement()).rejects.toThrow(/proposal sequence/);
+    }
+    expect(a.fence).toHaveBeenCalledWith("native-or-schema-failure");
+  }, 60_000);
+
 });

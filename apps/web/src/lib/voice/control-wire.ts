@@ -7,7 +7,7 @@ const encoding = z.literal("party-table-v2"), id = z.uuid(), index = z.number().
 const accountId = z.string().min(4).max(344).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
 const partyTuple = z.tuple([id, accountId, id, id]);
 const references = { encoding, parties: z.array(partyTuple).min(1).max(8), sender: index, recipient: index };
-const media = { ...voiceOwnerControlSchema.options[1].omit({ audience: true, kind: true }).shape, ...references, publisher: index };
+const media = { ...voiceOwnerControlSchema.options[1].omit({ audience: true, kind: true, proposalSequence: true }).shape, ...references, publisher: index, q: voiceOwnerControlSchema.options[0].shape.proposalSequence };
 const context = { ...voiceContextControlSchema.options[0].omit({ audience: true, kind: true }).shape, ...references, leader: index };
 export const voiceControlWireSchema = z.discriminatedUnion("kind", [
   z.object({ ...media, kind: z.literal("material"), material: voiceOwnerControlSchema.options[0].shape.material }).strict(),
@@ -45,9 +45,9 @@ function validateTable(value: CanonicalControl): void {
 export function encodeVoiceControlWire(raw: CanonicalControl): z.infer<typeof voiceControlWireSchema> {
   const value = canonicalSchema.parse(raw);
   validateTable(value);
-  const fields = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "audience"));
+  const fields = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "audience" && key !== "proposalSequence"));
   const ref = (memberId: string) => value.audience.findIndex(party => party.memberId === memberId);
-  return voiceControlWireSchema.parse({ ...fields, encoding: "party-table-v2", parties: value.audience.map(party => [party.memberId, encodeAccount(party.userId), party.voiceDeviceId, party.joinNonce]), sender: ref(value.sender.memberId), recipient: ref(value.recipient.memberId), ...("publisher" in value ? { publisher: ref(value.publisher.memberId) } : { leader: ref(value.leader.memberId) }) });
+  return voiceControlWireSchema.parse({ ...fields, encoding: "party-table-v2", parties: value.audience.map(party => [party.memberId, encodeAccount(party.userId), party.voiceDeviceId, party.joinNonce]), sender: ref(value.sender.memberId), recipient: ref(value.recipient.memberId), ...("publisher" in value ? { publisher: ref(value.publisher.memberId), ...(value.proposalSequence === undefined ? {} : { q: value.proposalSequence }) } : { leader: ref(value.leader.memberId) }) });
 }
 
 /** The encoding discriminator is authoritative: malformed compact data never retries legacy. */
@@ -60,8 +60,8 @@ export function decodeVoiceControlWire(raw: unknown): CanonicalControl {
     if (!found) throw new Error("Unknown voice wire party reference.");
     return found;
   };
-  const fields = Object.fromEntries(Object.entries(wire).filter(([key]) => key !== "encoding" && key !== "parties"));
-  const value = canonicalSchema.parse({ ...fields, audience, sender: resolve(wire.sender), recipient: resolve(wire.recipient), ...("publisher" in wire ? { publisher: resolve(wire.publisher) } : { leader: resolve(wire.leader) }) });
+  const fields = Object.fromEntries(Object.entries(wire).filter(([key]) => key !== "encoding" && key !== "parties" && key !== "q"));
+  const value = canonicalSchema.parse({ ...fields, audience, sender: resolve(wire.sender), recipient: resolve(wire.recipient), ...("publisher" in wire ? { publisher: resolve(wire.publisher), ...(wire.q === undefined ? {} : { proposalSequence: wire.q }) } : { leader: resolve(wire.leader) }) });
   validateTable(value);
   return value;
 }
