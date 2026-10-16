@@ -94,6 +94,8 @@ jobs:
             apps/web/test-results/**/trace.zip
             apps/web/test-results/**/error-context.md
             apps/web/test-results/**/signup-diagnostics.json
+            apps/web/test-results/**/community-scroll-diagnostic.json
+            apps/web/test-results/**/error-context-initial-sync.md
           retention-days: 3
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
