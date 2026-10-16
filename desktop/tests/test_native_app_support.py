@@ -18,6 +18,118 @@ import native_app_flows as flows
 
 
 class NativeSupportTests(unittest.TestCase):
+    def test_auth_destination_requires_exact_origin_path_and_protected_content(self):
+        for path in ['/app', '/app/messages']:
+            for url in [
+                flows.ORIGIN + '/sign-in?next=' + path,
+                flows.ORIGIN + '/sign-in?next=' + flows.urllib.parse.quote(path, safe=''),
+                flows.ORIGIN + '/sign-in#' + path,
+                flows.ORIGIN + path + '-other', flows.ORIGIN + path + '/extra',
+                'https://outside.example' + path, 'http://localhost:9443' + path,
+                'https://localhost:9444' + path,
+            ]:
+                with self.subTest(path=path, url=url):
+                    self.assertFalse(flows.auth_destination_reached({'url': url, 'protected_content': True}, path))
+            for protected in [False, None, 1, 'true']:
+                self.assertFalse(flows.auth_destination_reached({
+                    'url': flows.ORIGIN + path, 'protected_content': protected,
+                }, path))
+            self.assertTrue(flows.auth_destination_reached({
+                'url': flows.ORIGIN + path + '?view=test#section', 'protected_content': True,
+            }, path))
+        self.assertFalse(flows.at_app_path(flows.ORIGIN + '/app?next=/sign-in', '/sign-in'))
+        self.assertTrue(flows.at_app_path(flows.ORIGIN + '/sign-in?next=/app/messages', '/sign-in'))
+
+    def test_login_submits_once_and_waits_for_protected_destination_in_recovery_profile(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 2
+        client.goto, client.fill, client.click = Mock(), Mock(), Mock()
+        client.command = Mock(side_effect=[
+            {'url': flows.ORIGIN + '/sign-in?next=/app/messages', 'protected_content': False},
+            {'url': flows.ORIGIN + '/app/messages', 'protected_content': False},
+            {'url': flows.ORIGIN + '/app/messages', 'protected_content': True},
+        ])
+        with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
+            client.login('disposable@example.test')
+        client.click.assert_called_once_with('Sign in')
+        client.goto.assert_called_once_with('/sign-in?next=/app/messages')
+        self.assertEqual(client.command.call_count, 3)
+        for call in client.command.call_args_list:
+            self.assertEqual(call.args[:2], ('POST', '/execute/sync'))
+            self.assertLessEqual(call.kwargs['timeout'], 2)
+
+    def test_signup_submits_once_and_uses_the_same_protected_destination_barrier(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 0
+        client.goto, client.fill, client.click = Mock(), Mock(), Mock()
+        client.element = Mock(return_value='checkbox')
+        client.command = Mock(side_effect=[None,
+            {'url': flows.ORIGIN + '/app', 'protected_content': False},
+            {'url': flows.ORIGIN + '/app', 'protected_content': True},
+        ])
+        with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
+            self.assertEqual(client.signup('Native Alice'), 'native-alice@example.test')
+        client.click.assert_called_once_with('Create account')
+        self.assertEqual(client.command.call_count, 3)
+        self.assertEqual(client.command.call_args_list[0].args[:2], ('POST', '/element/checkbox/click'))
+
+    def test_auth_barrier_keeps_30_second_budget_without_replaying_any_action(self):
+        client = flows.Native.__new__(flows.Native)
+        client.command = Mock(return_value={'url': flows.ORIGIN + '/app/messages', 'protected_content': False})
+        clock = [0.0]
+        with patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaises(TimeoutError):
+                client.wait_authenticated('/app/messages')
+        self.assertEqual(clock[0], 30)
+        self.assertTrue(all(call.args[:2] == ('POST', '/execute/sync') for call in client.command.call_args_list))
+        self.assertEqual(client.command.call_args_list[-1].kwargs['timeout'], .25)
+
+    def test_auth_diagnostic_keeps_only_fixed_counts_status_and_boolean(self):
+        private = 'private-value-must-not-be-retained'
+        client = types.SimpleNamespace(profile=0, command=Mock(return_value={
+            'route': private, 'forms': 1, 'invalid_controls': 0, 'alerts': 1, 'notices': 0,
+            'pending': False, 'http_status': 200, 'authenticated': False,
+            'user': private, 'session': private, 'url': private, 'headers': private,
+        }))
+        result = flows.auth_diagnostics(client)
+        self.assertEqual(result, {'profile': 0, 'route': 'other', 'forms': 1,
+            'invalid_controls': 0, 'alerts': 1, 'notices': 0, 'pending': False,
+            'http_status': 200, 'authenticated': False})
+        self.assertNotIn(private, json.dumps(result))
+        client.command.assert_called_once()
+        self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/async'))
+        self.assertEqual(client.command.call_args.kwargs['timeout'], 2)
+        self.assertEqual(client.command.call_args.args[2]['args'], [flows.ORIGIN, 1500])
+
+    def test_auth_diagnostic_and_transport_share_existing_failure_budget(self):
+        client = types.SimpleNamespace(profile=0)
+        clock = [0.0]
+
+        def auth(_client, timeout):
+            self.assertEqual(timeout, 2)
+            clock[0] += timeout
+            return {'http_status': 200, 'authenticated': False}
+
+        with patch.dict(flows.metadata, {'auth_action': {'profile': 0}}, clear=True), \
+                patch.dict(flows.results, {'signup_login': {'status': 'failed'}, 'dm_recovery': {'status': 'not-run'}}), \
+                patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows, 'auth_diagnostics', side_effect=auth) as observation, \
+                patch.object(flows, 'transport_diagnostics', return_value={}) as transport:
+            flows.failure_diagnostics([client])
+            observation.assert_called_once()
+            transport.assert_called_once_with([client], budget=8)
+            flows.results['signup_login'] = {'status': 'passed'}
+            observation.reset_mock()
+            flows.failure_diagnostics([client])
+            observation.assert_not_called()
+            flows.results['signup_login'] = {'status': 'failed'}
+            observation.side_effect = flows.NativeDeadlineExpired()
+            transport.reset_mock()
+            with self.assertRaises(flows.NativeDeadlineExpired):
+                flows.failure_diagnostics([client])
+            transport.assert_not_called()
+
     def test_hung_drivers_all_receive_signal_before_wait_and_share_budget(self):
         events = []
         clock = [0.0]

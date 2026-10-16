@@ -208,6 +208,24 @@ class Native:
     def screenshot(self, name, *, timeout=40):
         (EVIDENCE / (name + '.png')).write_bytes(base64.b64decode(self.command('GET', '/screenshot', timeout=timeout)))
 
+    def wait_authenticated(self, path):
+        deadline_at = time.monotonic() + 30
+        while (remaining := deadline_at - time.monotonic()) > 0:
+            # URL and protected content must belong to the same document observation.
+            snapshot = self.command('POST', '/execute/sync', {'args': [path], 'script': """
+              const visible = node => !!(node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+              const protectedContent = arguments[0] === '/app'
+                ? Array.from(document.querySelectorAll('main section button')).some(node => visible(node) && node.textContent.trim() === 'Create a community')
+                : Array.from(document.querySelectorAll('aside[aria-label="Direct conversations"]')).some(visible);
+              return {url: location.href, protected_content: protectedContent};
+            """}, timeout=min(2, remaining))
+            if auth_destination_reached(snapshot, path):
+                return
+            remaining = deadline_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.25, remaining))
+        raise TimeoutError('Authenticated destination deadline exceeded')
+
     def signup(self, name):
         email = name.lower().replace(' ', '-') + '@example.test'
         auth_progress(self.profile, 'open_signup')
@@ -224,7 +242,7 @@ class Native:
         auth_progress(self.profile, 'submit_signup')
         self.click('Create account')
         auth_progress(self.profile, 'await_signup_navigation')
-        wait(lambda: '/app' in self.command('GET', '/url'))
+        self.wait_authenticated('/app')
         return email
 
     def login(self, email):
@@ -237,7 +255,7 @@ class Native:
         auth_progress(self.profile, 'submit_login')
         self.click('Sign in')
         auth_progress(self.profile, 'await_login_navigation')
-        wait(lambda: self.command('GET', '/url').endswith('/app/messages'))
+        self.wait_authenticated('/app/messages')
 
     def upload(self, xpath, path):
         identifier = self.element(xpath)
@@ -293,6 +311,74 @@ def auth_progress(profile, action):
         raise ValueError('Auth diagnostic action is not allowlisted')
     metadata['auth_action'] = {'profile': profile, 'action': action}
     persist()
+
+
+def at_app_path(url, path):
+    actual = urllib.parse.urlsplit(url)
+    expected = urllib.parse.urlsplit(ORIGIN + path)
+    return (actual.scheme, actual.netloc, actual.path) == (expected.scheme, expected.netloc, expected.path)
+
+
+def auth_destination_reached(snapshot, path):
+    return snapshot['protected_content'] is True and at_app_path(snapshot['url'], path)
+
+
+def auth_diagnostics(client, timeout=2):
+    """Failure-only public session observation; never return session/user fields."""
+    snapshot = client.command('POST', '/execute/async', {'args': [ORIGIN, int(timeout * 750)], 'script': """
+      const done = arguments[arguments.length - 1];
+      const origin = arguments[0];
+      const limit = arguments[1];
+      const routes = {'/sign-in': 'sign-in', '/sign-up': 'sign-up', '/app': 'app', '/app/messages': 'messages'};
+      const visible = node => !!(node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+      const count = selector => Array.from(document.querySelectorAll(selector)).filter(visible).length;
+      const summary = {
+        route: routes[location.pathname] || 'other',
+        forms: count('form'), invalid_controls: count('form input:invalid'),
+        alerts: count('form [role="alert"]'), notices: count('form [role="status"]'),
+        pending: Array.from(document.querySelectorAll('form button[type="submit"]')).some(node => visible(node) && node.disabled && node.textContent.trim() === 'Please wait…')
+      };
+      if (location.origin !== origin) { done(summary); return; }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), limit);
+      fetch('/api/auth/get-session', {method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal})
+        .then(async response => {
+          summary.http_status = response.status;
+          const body = await response.json();
+          summary.authenticated = response.ok && !!(body && body.session && body.user);
+        })
+        .catch(() => {})
+        .finally(() => { clearTimeout(timer); done(summary); });
+    """}, timeout=timeout)
+    # Defense at the artifact boundary: retain only the fixed schema, never extra fields.
+    safe = {'profile': client.profile, 'route': snapshot.get('route') if snapshot.get('route') in {
+        'sign-in', 'sign-up', 'app', 'messages', 'other',
+    } else 'other'}
+    for key in ['forms', 'invalid_controls', 'alerts', 'notices', 'http_status']:
+        value = snapshot.get(key)
+        if type(value) is int and value >= 0:
+            safe[key] = value
+    for key in ['pending', 'authenticated']:
+        if type(snapshot.get(key)) is bool:
+            safe[key] = snapshot[key]
+    return safe
+
+
+def failure_diagnostics(clients, budget=10):
+    """Called inside the existing global diagnostic timer, sharing its total budget."""
+    deadline_at = time.monotonic() + budget
+    if any(results[name]['status'] == 'failed' for name in ['signup_login', 'dm_recovery']):
+        profile = metadata.get('auth_action', {}).get('profile')
+        client = next((client for client in clients if client.profile == profile), None)
+        remaining = deadline_at - time.monotonic()
+        if client is not None and remaining > 0:
+            try:
+                metadata['auth_diagnostic'] = auth_diagnostics(client, timeout=min(2, remaining))
+            except NativeDeadlineExpired:
+                raise
+            except Exception as error:
+                metadata['auth_diagnostic_error_type'] = type(error).__name__
+    metadata['transport_diagnostic'] = transport_diagnostics(clients, budget=max(0, deadline_at - time.monotonic()))
 
 
 # Exact fixed output literals from installed tauri-driver 2.1.0 src/server.rs/main.rs.
@@ -684,7 +770,7 @@ def main():
                 auth_progress(alice.profile, 'sign_out')
                 alice.click('Sign out')
                 auth_progress(alice.profile, 'await_signout_navigation')
-                wait(lambda: '/sign-in' in alice.command('GET', '/url'))
+                wait(lambda: at_app_path(alice.command('GET', '/url'), '/sign-in'))
                 alice.login(email)
             with stage('community_navigation'), diagnose_community(alice, bob):
                 community_progress('open_home')
@@ -801,9 +887,9 @@ def main():
             with stage('logout'):
                 bob.goto('/app/settings')
                 bob.click('Sign out')
-                wait(lambda: '/sign-in' in bob.command('GET', '/url'))
+                wait(lambda: at_app_path(bob.command('GET', '/url'), '/sign-in'))
                 bob.goto('/app/messages')
-                wait(lambda: '/sign-in' in bob.command('GET', '/url'))
+                wait(lambda: at_app_path(bob.command('GET', '/url'), '/sign-in'))
             with stage('runtime_errors'):
                 unavailable = 0
                 for client in clients:
@@ -824,7 +910,7 @@ def main():
             if primary_error is not None:
                 signal.setitimer(signal.ITIMER_REAL, 10)
                 try:
-                    metadata['transport_diagnostic'] = transport_diagnostics(clients)
+                    failure_diagnostics(clients)
                 except Exception as error:
                     metadata['transport_diagnostic_error_type'] = type(error).__name__
                 finally:
