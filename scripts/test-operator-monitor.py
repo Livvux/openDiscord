@@ -2,6 +2,7 @@
 import datetime as dt
 import http.client
 import importlib.util
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -23,6 +24,27 @@ class AlertStateTests(unittest.TestCase):
             with patch.object(Path, "read_text", return_value="2026-10-15T00:00:00Z daily/backup.age"), \
                     patch.object(monitor.subprocess, "run", side_effect=error):
                 self.assertEqual(monitor.check({"mode": "backup"}, now), "backup-status-unavailable")
+
+    def test_voice_status_thresholds_and_recovery(self):
+        healthy = {"finished_at": 1000, "ok": True, "limited_streak": 0, "sdk_failure_streak": 0}
+        cases = [(healthy, None), ({**healthy, "finished_at": 879}, "voice-invocations-stale"),
+                 ({**healthy, "finished_at": 1031}, "voice-invocations-stale"),
+                 ({**healthy, "ok": False}, "voice-job-failed"),
+                 ({**healthy, "limited_streak": 5}, None),
+                 ({**healthy, "limited_streak": 6}, "voice-scheduling-pressure-sustained"),
+                 ({**healthy, "sdk_failure_streak": 6, "ok": False}, "voice-sdk-failures-sustained")]
+        for status, expected in cases:
+            with self.subTest(status=status), patch.object(Path, "read_text", return_value=json.dumps(status)), \
+                    patch.object(monitor.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "success")):
+                self.assertEqual(monitor.check({"mode": "voice"}, 1000), expected)
+
+    def test_voice_missing_status_and_failed_unit(self):
+        with patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertEqual(monitor.check({"mode": "voice"}, 1000), "voice-status-unavailable")
+        status = {"finished_at": 1000, "ok": True, "limited_streak": 0, "sdk_failure_streak": 0}
+        with patch.object(Path, "read_text", return_value=json.dumps(status)), \
+                patch.object(monitor.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "timeout")):
+            self.assertEqual(monitor.check({"mode": "voice"}, 1000), "voice-job-failed")
 
     def test_transient_and_alternating_failures(self):
         state = {}

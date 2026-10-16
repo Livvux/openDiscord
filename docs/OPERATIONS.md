@@ -61,7 +61,7 @@ is written only after a complete encrypted off-host readback. It does not contin
 the object remains available later. Monitor state suppresses repeat emails for one hour and sends
 a recovery email after a notified failure resolves.
 
-The owner-only JSON configuration contains `mode` (`health` or `backup`), `smtp_url`, `from`, and
+The owner-only JSON configuration contains `mode` (`health`, `backup` or activation-only `voice`), `smtp_url`, `from`, and
 `to`; the file must belong to the executing user and have no group/other permissions. SMTP uses
 verified TLS (implicit TLS for `smtps`, mandatory STARTTLS for `smtp`). Credentials are never
 included in check output or exception logs. State is stored in `/var/lib/opendiscord-monitor`.
@@ -113,6 +113,9 @@ gate, not evidence of deployment or Voice/E2EE activation.
 2. Establish deployment-wide operational exclusion. Disable automatic deployments/restart overlap,
    schedules and admissions. Drain and stop every old web replica and admin/bootstrap/manual/
    maintenance writer using this database, including actual job containers and operator connections.
+   Explicitly stop `opendiscord-maintenance.timer`, `opendiscord-voice-maintenance.timer` and
+   their services; stop `opendiscord-voice-monitor.timer`/service while Voice is quiescent.
+   A stopped timer alone does not stop an already running job container.
    The maintenance script's flock serializes maintenance only; it is not a deployment mutex.
    Stopping a Compose client does not prove its job container stopped.
 3. With explicit bounded drain, lock and statement budgets, inspect `pg_stat_activity` and `pg_locks`
@@ -134,9 +137,14 @@ gate, not evidence of deployment or Voice/E2EE activation.
    environment. Do not create production test accounts or mutate customer sessions without
    separately scoped authorization. Compose `depends_on` orders new startup only.
 6. Reopen schedules and admissions only after compatibility and readback pass. Record the actual
-   maintenance release image and cadence separately. No rolling old/new writer period is permitted.
+   maintenance release image and cadence separately. Restart the hourly timer only against its
+   compatible release. Enable/restart the Voice repair and Voice monitor timers only when the
+   coherent Voice activation gates below pass; they are not installed by a source change.
+   No rolling old/new writer period is permitted.
 
-For recovery, quiesce and drain all compatible writers and schedules again first. Prefer a known
+For recovery, quiesce and drain all compatible writers and schedules again first, explicitly
+stopping both hourly and Voice repair timers/services and the Voice monitor timer/service.
+Preserve labelled running containers until drained or explicitly stopped under the recovery plan. Prefer a known
 compatible fix-forward image. Never routinely start old images against `0031` guards. Full restore
 requires preserving the current database, the verified pre-upgrade backup and matching old
 application/operator images, explicit acknowledgement of loss of all post-backup writes, and
@@ -183,7 +191,8 @@ instant physical revocation nor prevention of all physical room resurrection is 
 
 Successful retired rows recur every five minutes when a consumer runs; active checks recur every
 30 seconds. These are eligibility times, **not a scheduler**. The existing hosted maintenance
-cadence must be monitored separately; an hourly job cannot promise five-minute cleanup. Inspect
+cadence must be monitored separately; an hourly job cannot promise five-minute cleanup.
+The activation-only dedicated Voice runner described below is required before leased product activation. Inspect
 count of due/leased/retired rows and oldest overdue time without exporting identities. SDK failure
 or unavailable configuration must never undo a committed suspension, block, role loss or revoke.
 The retained legacy channel-UUID room path remains separate, exact-name, best effort and is not
@@ -207,3 +216,89 @@ creation. Existing basic voice currently depends on auto-create. Product JWTs om
 roomAdmin. Run isolated real absent-room rejection, explicit-create acceptance and authenticated
 three-browser/media acceptance before release. auto_create false is an admission barrier, not a
 cross-system atomic fence against already validated joins or late create completion.
+
+
+### Activation-only frequent Voice repair
+
+Current production basic Voice and migrations 0000–0029 do **not** imply this job is installed or
+safe to start. Migrations 0030/0031/0032, compatible writers, coherent product activation and all
+separate acceptance gates must be reviewed together. Do not install/enable these timers against
+current production merely because their templates exist. In particular, 0031 requires the complete
+writer/timer quiescence and compatible image readback above.
+
+`pnpm --filter web maintenance:voice` is dry-run by default. `--apply` invokes exactly one existing
+`sweepVoiceLifecycle` batch of at most eight eligible calls, with a fresh current time. It also runs
+the existing due-room consumer even if that batch is empty: no second loop or whole retention job
+is started. The shared SFU allowance stays 16 room claims, 32 sequential SDK requests and a
+20-second monotonic **scheduling** window. SQL and total wall-clock work are not bounded by that
+SDK window. The wrapper supplies 15-second SQL statement and 2-second lock timeouts, a 60-second
+outer job deadline plus five seconds kill grace; systemd allows 90 seconds plus 20 seconds stop
+cleanup. Claims abandoned by a crash remain recoverable after their existing 30-second leases.
+CLI exit closes its actual PostgreSQL pool in `finally`; failures/unavailable SDK work produce
+nonzero exit. CLI output explicitly allowlists only aggregate counts and flags, never IDs,
+room names, identities, keys or opaque native payloads.
+
+`scripts/production-voice-maintenance.sh` uses the already-built release `migrate` image with
+`--pull never`, no dependencies and no build. `ops/voice-maintenance/compose.yml` passes only the
+existing four `LIVEKIT_*` variables from the deployed protected `.env` through Compose and joins
+the same existing `dokploy-network` as web, without exposed ports. Keep `.env` root-owned mode600;
+never source, print or duplicate it. Before activation verify the chosen exact release image
+contains the CLI/tsx and that its configured SFU API is reachable from that network. The operator
+must record the resolved image digest/revision under deployment exclusion so a mutable image tag
+cannot be changed by an overlapping deploy.
+
+The Voice runner has its own flock and `opendiscord.voice-maintenance.project/run` labels. It
+refuses a previous same-project Voice container without deleting it. Cleanup verifies the unique
+run label then removes only that immutable container ID, including after a client timeout. A
+SIGKILL/daemon outage can leave an orphan; the next invocation fails closed for operator review.
+Never use broad container/orphan deletion. The hourly retention job uses different labels/lock;
+its existing database locks serialize shared Voice work safely. Contention can cause a bounded
+failure and retry; neither flock is a deployment-wide exclusion mechanism.
+
+The frequent job does not require a new successful backup each tick. It expires ephemeral leased
+membership and repairs already-authorized SFU revocation, using existing durable state; tying it
+to backup availability would prolong stale SFU access during a backup outage. The separate hourly
+destructive retention job retains its verified-backup gate. Backup/restore policy is unchanged:
+the encrypted recovery bundle additionally captures installed Voice repair/monitor units, wrapper,
+private operator environment/config and aggregate status when present. Restore these only with
+the matching compatible release, review root-only modes and paths, and keep timers stopped until
+restored database/readiness/auth/Voice acceptance passes. Do not blindly replay old status as
+fresh execution evidence.
+
+At coherent activation only, install the checked-in `.service`/`.timer` templates under
+`/etc/systemd/system`, the reviewed wrapper as `/usr/local/sbin/opendiscord-voice-maintenance`,
+and the existing monitor script as `/usr/local/sbin/opendiscord-operator-monitor`. Provision
+`/etc/opendiscord-voice-maintenance/environment` root-owned mode600 containing only the verified
+`OPENDISCORD_COMPOSE_DIR` and `OPENDISCORD_COMPOSE_PROJECT` settings (same checkout/project as the
+hourly job). The service creates root-only `/var/lib/opendiscord-voice-maintenance`. The timer
+uses `OnUnitInactiveSec=10s`, one second accuracy and no randomized delay, so its next run is
+approximately ten seconds **after completion**, not ten seconds after the previous start.
+
+Provision `/etc/opendiscord-monitor/voice.json` root-owned mode600 using the existing owner-only
+SMTP configuration/destination with `mode` set to `voice`. No new mailbox or secret copies are
+needed beyond the current per-mode JSON schema; never put values in Git/logs. The Voice monitor
+timer checks each minute through existing SMTP suppression/recovery logic; per-mode locks keep
+local backup checks independent. It alerts on missing/invalid status, completion older than 120
+seconds, a failed service/job, six consecutive SDK-failure results, or six consecutive limited
+results. `limited` is scheduling pressure (including an exactly full batch), **not proof of
+backlog**. SDK failures are exposed by the real existing consumer metrics, never inferred as
+success from a completed CLI. Job failure alerts also cover the first SDK failure. A backup,
+monitor-host or SMTP outage has separate alerts/limits; SMTP acceptance alone is not inbox proof.
+Do not enable Voice monitoring expectation before activation, or it would falsely alarm on the
+intentionally absent job. Record actual unit enablement/status, last invocation, alert delivery
+and recovery separately; this source change sends no mail and installs nothing.
+
+Ten seconds is an initial operating cadence, **not a revocation SLA**. Effective removal depends
+on room due times (active 30 seconds, tombstones five minutes), SQL contention, batch capacity,
+SDK completion, backoff and recurring rechecks. Monitor pressure and privately inspect aggregate
+count of due/leased/retired rows and oldest overdue age before changing capacity. Backlog or SFU/DB
+outages can extend eventual cleanup without a hard upper bound. Frozen JS, native auth cascades
+and crash recovery need this independent scheduler but still require isolated acceptance, plus
+separate real browser/media and refresh/reconnect/TOCTOU acceptance before activation.
+
+Canonical isolated CI checks wrapper locking/immutable cleanup with fake Docker, CLI pool closure
+and failure handling with SDK-port mocks, and systemd syntax on Linux. After the existing LiveKit
+startup, a CI-only real SDK/DB check creates an exact random room and a live crashed-worker lease,
+proves it survives the first bounded call sweep, expires only that fixture lease, then proves
+exact-room deletion and natural CLI process exit. It does not claim real media, production
+scheduling, actual process-crash timing, or authenticated browser acceptance.

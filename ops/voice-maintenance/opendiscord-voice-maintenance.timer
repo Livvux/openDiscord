@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule bounded OpenDiscord Voice repair after each completion
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=10s
+AccuracySec=1s
+Unit=opendiscord-voice-maintenance.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check OpenDiscord Voice repair scheduling each minute
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=opendiscord-voice-monitor.service
+
+[Install]
+WantedBy=timers.target

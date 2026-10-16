@@ -14,7 +14,8 @@
     "auth:schema": "auth generate --config src/lib/auth.ts --output src/db/auth-schema.ts --yes",
     "test:e2e": "playwright test",
     "admin:bootstrap": "tsx --env-file=.env scripts/bootstrap-instance-admin.ts",
-    "maintenance": "tsx scripts/maintenance.ts"
+    "maintenance": "tsx scripts/maintenance.ts",
+    "maintenance:voice": "tsx scripts/voice-maintenance.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
