@@ -54,6 +54,39 @@ class NativeSupportTests(unittest.TestCase):
             with patch.object(flows, 'wait', side_effect=wait_after_writes):
                 self.assertEqual(flows.complete_json(path, flows.recovery_shape), value)
 
+    def test_endpoint_diagnostics_never_retain_session_or_element_identifiers(self):
+        self.assertEqual(flows.endpoint_class('/session/private-session/url'), 'navigation')
+        self.assertEqual(flows.endpoint_class('/session/private-session/element/private-element/value'), 'element_input')
+        self.assertEqual(flows.endpoint_class('/session/private-session/execute/sync'), 'sync_script')
+        self.assertEqual(flows.endpoint_class('/unrecognized/private-value'), 'other')
+
+    def test_transport_diagnostics_probe_once_and_emit_only_signature_counts(self):
+        calls = []
+        clock = [0.0]
+
+        class Opener:
+            def open(self, url, timeout):
+                calls.append(url)
+                clock[0] += timeout
+                raise TimeoutError('private diagnostic text must never be retained')
+
+        with tempfile.TemporaryFile() as log:
+            log.write(b'private payload\nError serving connection: private session\n')
+            log.flush()
+            clients = [types.SimpleNamespace(profile=index, port=4444 + index * 2,
+                       process=types.SimpleNamespace(poll=lambda: None), log=log) for index in range(3)]
+            with patch.object(flows.urllib.request, 'build_opener', return_value=Opener()), \
+                    patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(flows.pathlib.Path, 'read_text', return_value='MemAvailable: 123 kB\nMemTotal: 456 kB\n'):
+                summary = flows.transport_diagnostics(clients)
+        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(set(calls)), 7)
+        self.assertLessEqual(clock[0], 10)
+        self.assertEqual([profile['driver_signatures']['connection_error'] for profile in summary['profiles']], [1, 1, 1])
+        self.assertNotIn('private', json.dumps(summary))
+        self.assertNotIn('http', json.dumps(summary))
+        self.assertEqual(summary['memory_kib']['MemAvailable'], 123)
+
     def test_console_only_explicit_w3c_unsupported_codes_are_unavailable(self):
         for code, expected in [('unknown command', True), ('unsupported operation', True),
                                ('unknown error', False), ('invalid session id', False)]:

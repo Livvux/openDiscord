@@ -69,6 +69,7 @@ def wait(check, timeout=30):
 
 class Native:
     def __init__(self, index, sandbox):
+        self.profile = index
         self.port = 4444 + index * 2
         self.session = None
         self.home = sandbox / str(index)
@@ -82,6 +83,9 @@ class Native:
                  'XDG_DATA_HOME': str(self.home / '.local/share'), 'XDG_CACHE_HOME': str(self.home / '.cache')})
 
     def request(self, method, path, body=None, *, timeout=40):
+        metadata['last_native_request'] = {
+            'profile': self.profile, 'method': method, 'endpoint': endpoint_class(path),
+        }
         request = urllib.request.Request(f'http://127.0.0.1:{self.port}' + path,
             json.dumps(body).encode() if body is not None else None,
             {'Content-Type': 'application/json'}, method=method)
@@ -143,21 +147,33 @@ class Native:
 
     def signup(self, name):
         email = name.lower().replace(' ', '-') + '@example.test'
+        auth_progress(self.profile, 'open_signup')
         self.goto('/sign-up')
+        auth_progress(self.profile, 'fill_display_name')
         self.fill('Display name', name)
+        auth_progress(self.profile, 'fill_signup_email')
         self.fill('Email', email)
+        auth_progress(self.profile, 'fill_signup_password')
         self.fill('Password', 'native acceptance disposable password')
+        auth_progress(self.profile, 'confirm_registration_policy')
         checkbox = self.element('//button[@role="checkbox"] | //input[@type="checkbox"]')
         self.command('POST', '/element/' + checkbox + '/click', {})
+        auth_progress(self.profile, 'submit_signup')
         self.click('Create account')
+        auth_progress(self.profile, 'await_signup_navigation')
         wait(lambda: '/app' in self.command('GET', '/url'))
         return email
 
     def login(self, email):
+        auth_progress(self.profile, 'open_login')
         self.goto('/sign-in?next=/app/messages')
+        auth_progress(self.profile, 'fill_login_email')
         self.fill('Email', email)
+        auth_progress(self.profile, 'fill_login_password')
         self.fill('Password', 'native acceptance disposable password')
+        auth_progress(self.profile, 'submit_login')
         self.click('Sign in')
+        auth_progress(self.profile, 'await_login_navigation')
         wait(lambda: self.command('GET', '/url').endswith('/app/messages'))
 
     def upload(self, xpath, path):
@@ -176,6 +192,107 @@ class Native:
         subprocess.run(['xdotool', 'key', 'Return'], check=True, timeout=5)
         wait(lambda: destination.exists() and destination.stat().st_size > 0)
         wait(lambda: not dialog())
+
+def endpoint_class(path):
+    # Never retain raw paths: session/element IDs and URL values are not diagnostics.
+    parts = path.split('/')
+    if path == '/status':
+        return 'status'
+    if path == '/session':
+        return 'create_session'
+    if len(parts) < 3 or parts[1] != 'session':
+        return 'other'
+    suffix = parts[3:]
+    fixed = {'url': 'navigation', 'timeouts': 'timeouts', 'elements': 'find_elements',
+             'refresh': 'refresh', 'screenshot': 'screenshot', 'log': 'console_log'}
+    if len(suffix) == 1:
+        return fixed.get(suffix[0], 'other')
+    if suffix == ['execute', 'sync']:
+        return 'sync_script'
+    if suffix == ['execute', 'async']:
+        return 'async_script'
+    if len(suffix) >= 3 and suffix[0] == 'element':
+        return {'click': 'element_click', 'value': 'element_input', 'displayed': 'element_displayed',
+                'enabled': 'element_enabled', 'attribute': 'element_attribute'}.get(suffix[2], 'other')
+    return 'other'
+
+
+AUTH_ACTIONS = {
+    'open_signup', 'fill_display_name', 'fill_signup_email', 'fill_signup_password',
+    'confirm_registration_policy', 'submit_signup', 'await_signup_navigation',
+    'open_login', 'fill_login_email', 'fill_login_password', 'submit_login',
+    'await_login_navigation', 'open_account_settings', 'sign_out', 'await_signout_navigation',
+}
+
+
+def auth_progress(profile, action):
+    if profile not in {0, 1, 2} or action not in AUTH_ACTIONS:
+        raise ValueError('Auth diagnostic action is not allowlisted')
+    metadata['auth_action'] = {'profile': profile, 'action': action}
+    persist()
+
+
+# Exact fixed output literals from installed tauri-driver 2.1.0 src/server.rs/main.rs.
+DRIVER_SIGNATURES = {
+    'connection_error': b'Error serving connection:',
+    'accept_error': b'accept new stream fail, ignore here',
+    'listen_error': b'can not listen to address:',
+    'server_error': b'error while running server:',
+}
+
+
+class NoProbeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
+def transport_diagnostics(clients, budget=10):
+    """One bounded observation, no command replay and no raw logs/body retention."""
+    started = time.monotonic()
+    deadline_at = started + budget
+    observations = []
+    opener = urllib.request.build_opener(NoProbeRedirect())
+
+    def probe(url):
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            return {'state': 'budget_exhausted'}
+        try:
+            with opener.open(url, timeout=min(1, remaining)) as response:
+                return {'status': response.status}
+        except urllib.error.HTTPError as error:
+            status = error.code
+            error.close()
+            return {'status': status}
+        except Exception as error:
+            return {'error_type': type(error).__name__}
+
+    for client in clients:
+        entry = {'profile': client.profile, 'driver_exitcode': client.process.poll()}
+        try:
+            size = os.fstat(client.log.fileno()).st_size
+            # Read at most 64 KiB without changing the shared output descriptor's offset.
+            data = os.pread(client.log.fileno(), min(size, 65536), max(0, size - 65536))
+            entry['driver_log_sampled'] = size > 65536
+            entry['driver_signatures'] = {key: data.count(marker) for key, marker in DRIVER_SIGNATURES.items()}
+        except OSError as error:
+            entry['driver_log_error_type'] = type(error).__name__
+        entry['intermediary_status'] = probe(f'http://127.0.0.1:{client.port}/status')
+        entry['native_status'] = probe(f'http://127.0.0.1:{client.port + 1}/status')
+        observations.append(entry)
+    summary = {'profiles': observations, 'app_health': probe(ORIGIN + '/sign-in')}
+    try:
+        memory = {}
+        for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
+            key, value = line.split(':', 1)
+            if key in {'MemTotal', 'MemAvailable', 'SwapFree'}:
+                memory[key] = int(value.split()[0])
+        summary['memory_kib'] = memory
+    except (OSError, ValueError):
+        summary['memory_available'] = False
+    summary['seconds'] = round(time.monotonic() - started, 2)
+    return summary
+
 
 COMMUNITY_ACTIONS = {
     'open_home', 'open_create_dialog', 'fill_community_name', 'submit_create',
@@ -343,8 +460,11 @@ def main():
             with stage('signup_login'):
                 email = alice.signup('Native Alice')
                 bob.signup('Native Bob')
+                auth_progress(alice.profile, 'open_account_settings')
                 alice.goto('/app/settings')
+                auth_progress(alice.profile, 'sign_out')
                 alice.click('Sign out')
+                auth_progress(alice.profile, 'await_signout_navigation')
                 wait(lambda: '/sign-in' in alice.command('GET', '/url'))
                 alice.login(email)
             with stage('community_navigation'), diagnose_community(alice, bob):
@@ -482,6 +602,14 @@ def main():
         finally:
             primary_error = sys.exception()
             signal.alarm(0)
+            if primary_error is not None:
+                signal.setitimer(signal.ITIMER_REAL, 10)
+                try:
+                    metadata['transport_diagnostic'] = transport_diagnostics(clients)
+                except Exception as error:
+                    metadata['transport_diagnostic_error_type'] = type(error).__name__
+                finally:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
             errors = cleanup_clients(list(reversed(clients)))
             metadata['cleanup_errors'] = errors
             persist()
