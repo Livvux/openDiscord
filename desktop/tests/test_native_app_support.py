@@ -70,6 +70,89 @@ class GatewayRecoveryTests(unittest.TestCase):
                 closed.assert_not_called()
                 sent.assert_not_called()
 
+    def test_production_fallback_missing_reaped_unsupported_or_replaced_never_signals(self):
+        for failure in ['missing_start', 'reaped', 'unsupported', 'replacement_before_read', 'wrong_start',
+                        'wrong_parent', 'wrong_uid', 'wrong_argv', 'wrong_cwd', 'wrong_exe', 'wrong_group', 'wrong_session']:
+            with self.subTest(failure=failure), self.identity() as (child, opened, closed, sent), \
+                    patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '' if failure == 'missing_start' else '789'}), \
+                    patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+                if failure in {'reaped', 'unsupported'}:
+                    opened.side_effect = ProcessLookupError() if failure == 'reaped' else NotImplementedError()
+                if failure == 'replacement_before_read':
+                    def open_replaced(*_):
+                        stat = child / 'stat'
+                        stat.write_text(stat.read_text().replace('789', '790'))
+                        return 99
+                    opened.side_effect = open_replaced
+                if failure == 'wrong_start':
+                    os.environ['NATIVE_APP_PROXY_START'] = '790'
+                if failure in {'wrong_parent', 'wrong_group', 'wrong_session'}:
+                    stat = child / 'stat'
+                    fields = stat.read_text().rsplit(') ', 1)[1].split()
+                    fields[{'wrong_parent': 1, 'wrong_group': 2, 'wrong_session': 3}[failure]] = '999'
+                    stat.write_text('123 (node) ' + ' '.join(fields))
+                if failure == 'wrong_uid':
+                    (child / 'status').write_text('Uid:\t-1\t-1\t-1\t-1')
+                if failure == 'wrong_argv':
+                    (child / 'cmdline').write_bytes(b'node\0private-replacement\0')
+                if failure in {'wrong_cwd', 'wrong_exe'}:
+                    (child / failure.removeprefix('wrong_')).unlink()
+                self.assertFalse(flows.resume_owned_gateway())
+                sent.assert_not_called()
+                numeric.assert_not_called()
+                group.assert_not_called()
+                self.assertNotIn('private-replacement', json.dumps(flows.metadata))
+                if failure not in {'missing_start', 'reaped', 'unsupported'}:
+                    closed.assert_called_once_with(99)
+
+    def test_production_fallback_pins_before_reads_and_never_signals_reused_pid(self):
+        for exited in [False, True]:
+            with self.subTest(exited=exited), self.identity() as (child, opened, closed, sent), \
+                    patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '789'}), \
+                    patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+                reads = []
+                record = flows.OwnedGateway._record
+
+                def read(gateway):
+                    opened.assert_called_once_with(123, 0)
+                    reads.append(True)
+                    return record(gateway)
+
+                def resume(fd, number, info, flags):
+                    self.assertTrue(reads)
+                    self.assertEqual((fd, number, info, flags), (99, signal.SIGCONT, None, 0))
+                    # Replacement appears after validation. The descriptor still targets only the original.
+                    stat = child / 'stat'
+                    stat.write_text(stat.read_text().replace('789', '790'))
+                    if exited:
+                        raise ProcessLookupError('private replacement record')
+
+                sent.side_effect = resume
+                with patch.object(flows.OwnedGateway, '_record', read):
+                    self.assertFalse(flows.resume_owned_gateway())
+                sent.assert_called_once_with(99, signal.SIGCONT, None, 0)
+                closed.assert_called_once_with(99)
+                numeric.assert_not_called()
+                group.assert_not_called()
+                self.assertNotIn('private replacement', json.dumps(flows.metadata))
+
+    def test_production_fallback_allows_stopped_owned_gateway_and_sends_only_descriptor_cont(self):
+        with self.identity() as (child, _, closed, sent), \
+                patch.dict(os.environ, {'NATIVE_APP_PROXY_START': '789'}), \
+                patch.object(os, 'kill') as numeric, patch.object(os, 'killpg') as group:
+            stat = child / 'stat'
+            stat.write_text(stat.read_text().replace('(node) S ', '(node) T '))
+
+            def resume(*_):
+                stat.write_text(stat.read_text().replace('(node) T ', '(node) S '))
+
+            sent.side_effect = resume
+            self.assertTrue(flows.resume_owned_gateway())
+            sent.assert_called_once_with(99, signal.SIGCONT, None, 0)
+            closed.assert_called_once_with(99)
+            numeric.assert_not_called()
+            group.assert_not_called()
+
     def test_gateway_changed_identity_never_signals_replacement(self):
         with self.identity() as (child, _, _, sent):
             gateway = flows.OwnedGateway()
@@ -226,9 +309,10 @@ class GatewayRecoveryTests(unittest.TestCase):
     def test_workflow_cleanup_resumes_owned_gateway_before_term_and_keeps_deadlines(self):
         workflow = (flows.ROOT.parent / '.github/workflows/native-app-flows.yml').read_text()
         cleanup = workflow.split('          cleanup() {', 1)[1].split('          trap cleanup EXIT', 1)[0]
-        self.assertLess(cleanup.index('kill -CONT'), cleanup.index('kill --'))
+        self.assertLess(cleanup.index('--resume-owned-gateway'), cleanup.index('kill --'))
         self.assertLess(cleanup.index('kill --'), cleanup.index('kill -KILL'))
-        self.assertIn('if gateway_still_owned;', cleanup)
+        self.assertNotIn('kill -CONT', workflow)
+        self.assertIn('NATIVE_APP_PROXY_START="${proxy_start:-}"', cleanup)
         self.assertIn('NATIVE_APP_PROXY_PID="$proxy_pid" NATIVE_APP_LAUNCHER_PID="$$"', workflow)
         self.assertIn("trap 'exit 143' TERM", workflow)
         self.assertIn("trap 'exit 130' INT", workflow)
@@ -237,30 +321,38 @@ class GatewayRecoveryTests(unittest.TestCase):
     @unittest.skipUnless(os.uname().sysname == 'Linux', 'Hosted Linux pidfd mechanism only')
     def test_hosted_shell_fallback_resumes_stopped_child_before_termination(self):
         workflow = (flows.ROOT.parent / '.github/workflows/native-app-flows.yml').read_text()
-        functions = workflow.split('          gateway_still_owned() {', 1)[1].split('          trap cleanup EXIT', 1)[0]
-        script = 'set -euo pipefail\ngateway_still_owned() {' + functions + '''
+        functions = workflow.split('          cleanup() {', 1)[1].split('          trap cleanup EXIT', 1)[0]
+        script = 'set -euo pipefail\ncleanup() {' + functions + '''
           trap cleanup EXIT
           trap 'exit 143' TERM
           trap 'exit 130' INT
-          setsid sleep 30 &
+          setsid node desktop/tests/app_proxy.mjs >/dev/null 2>&1 &
           proxy_pid=$!
           IFS= read -r proxy_record < "/proc/$proxy_pid/stat"
           read -ra proxy_fields <<< "${proxy_record##*) }"
           proxy_start=${proxy_fields[19]}
-          builtin kill -STOP "$proxy_pid"
+          for attempt in $(seq 1 20); do
+            if curl --silent --output /dev/null --cacert "$NATIVE_TLS_CERT" https://localhost:9443/sign-in; then break; fi
+            sleep .05
+          done
+          curl --silent --output /dev/null --cacert "$NATIVE_TLS_CERT" https://localhost:9443/sign-in
+          NATIVE_APP_PROXY_PID="$proxy_pid" NATIVE_APP_LAUNCHER_PID="$$" python3 -c 'import sys, signal; sys.path.insert(0, "desktop/tests"); from native_app_flows import OwnedGateway; gateway = OwnedGateway(); signal.pidfd_send_signal(gateway.fd, signal.SIGSTOP, None, 0); gateway.await_state(True); gateway.close()'
           kill() {
             case "$1" in
-              -CONT) echo CONT;;
-              --) echo TERM;;
+              --)
+                IFS= read -r record < "/proc/$proxy_pid/stat"
+                read -ra fields <<< "${record##*) }"
+                case "${fields[0]}" in T|t) echo STOPPED;; *) echo RESUMED;; esac
+                echo TERM;;
               -KILL) echo KILL;;
             esac
             builtin kill "$@"
           }
           exit 143
         '''
-        result = subprocess.run(['bash', '-c', script], capture_output=True, timeout=5)
+        result = subprocess.run(['bash', '-c', script], cwd=flows.ROOT.parent, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 143)
-        self.assertEqual(result.stdout.decode().splitlines(), ['CONT', 'TERM', 'KILL'])
+        self.assertEqual(result.stdout.decode().splitlines(), ['RESUMED', 'TERM', 'KILL'])
 
     @unittest.skipUnless(os.uname().sysname == 'Linux', 'Hosted Linux pidfd mechanism only')
     def test_hosted_real_linux_pidfd_gateway_blackout_and_restore(self):
@@ -300,6 +392,16 @@ class GatewayRecoveryTests(unittest.TestCase):
                         with self.assertRaises((TimeoutError, urllib.error.URLError)):
                             health()
                     self.assertFalse(gateway.stopped())
+                    self.assertEqual(health(), 502)
+                    gateway.resume_required = True
+                    signal.pidfd_send_signal(gateway.fd, signal.SIGSTOP, None, 0)
+                    gateway.await_state(True)
+                    resumed = subprocess.run([flows.sys.executable, str(flows.ROOT / 'tests/native_app_flows.py'),
+                                              '--resume-owned-gateway'], cwd=flows.ROOT.parent, capture_output=True,
+                                             env={**os.environ, 'NATIVE_APP_PROXY_START': gateway.start}, timeout=3)
+                    self.assertEqual((resumed.returncode, resumed.stdout, resumed.stderr), (0, b'', b''))
+                    gateway.await_state(False)
+                    gateway.resume_required = False
                     self.assertEqual(health(), 502)
                 finally:
                     signal.setitimer(signal.ITIMER_REAL, 0)

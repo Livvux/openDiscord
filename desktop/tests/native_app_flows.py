@@ -43,7 +43,7 @@ class NativeDeadlineExpired(Exception):
 
 class OwnedGateway:
     """One workflow-owned Node child; signals always use its retained Linux pidfd."""
-    def __init__(self):
+    def __init__(self, *, expected_start=None, allow_stopped=False):
         self.fd = None
         self.resume_required = False
         metadata['gateway_recovery'] = {'ownership_valid': False}
@@ -58,9 +58,12 @@ class OwnedGateway:
             self.fd = os.pidfd_open(self.pid, 0)
             record = self._record()
             self.start = record[19]
+            if expected_start is not None and self.start != expected_start:
+                raise ValueError('Owned gateway start identity mismatch')
             directory = PROC_ROOT / str(self.pid)
             node = shutil.which('node')
-            if (record[0] in {'T', 't', 'Z', 'X'} or int(record[1]) != self.launcher
+            if (record[0] in {'Z', 'X'} or (not allow_stopped and record[0] in {'T', 't'})
+                    or int(record[1]) != self.launcher
                     or int(record[2]) != self.pid or int(record[3]) != self.pid
                     or node is None or directory.joinpath('exe').resolve() != pathlib.Path(node).resolve()
                     or directory.joinpath('cwd').resolve() != ROOT.parent
@@ -142,6 +145,25 @@ class OwnedGateway:
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
+
+
+def resume_owned_gateway():
+    """Synchronous shell fallback: validate first, resume only the opened descriptor."""
+    gateway = None
+    try:
+        expected = os.environ.get('NATIVE_APP_PROXY_START', '')
+        if not expected.isascii() or not expected.isdecimal() or int(expected) <= 0:
+            return False
+        gateway = OwnedGateway(expected_start=expected, allow_stopped=True)
+        gateway.resume_required = True
+        gateway.resume()
+        return True
+    except Exception:
+        # Cleanup does not expose process identity, arguments or private exception bodies.
+        return False
+    finally:
+        if gateway is not None:
+            gateway.close()
 
 
 def persist():
@@ -1567,5 +1589,11 @@ def deadline(_signal, _frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGALRM, deadline)
     signal.signal(signal.SIGTERM, deadline)
+    if sys.argv[1:] == ['--resume-owned-gateway']:
+        signal.signal(signal.SIGINT, deadline)
+        signal.alarm(2)
+        sys.exit(0 if resume_owned_gateway() else 1)
+    if len(sys.argv) != 1:
+        sys.exit(2)
     signal.alarm(660)
     main()

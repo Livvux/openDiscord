@@ -65,19 +65,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gateway_still_owned() {
-            local record
-            local -a fields
-            [ -n "${proxy_pid:-}" ] && [ -n "${proxy_start:-}" ] || return 1
-            IFS= read -r record 2>/dev/null < "/proc/$proxy_pid/stat" || return 1
-            read -ra fields <<< "${record##*) }"
-            [ "${fields[1]:-}" = "$$" ] && [ "${fields[19]:-}" = "$proxy_start" ]
-          }
           cleanup() {
             trap - EXIT
             trap '' TERM INT
             # The captured child is resumed before any termination, including Python failure.
-            if gateway_still_owned; then kill -CONT "$proxy_pid" 2>/dev/null || true; fi
+            NATIVE_APP_PROXY_PID="${proxy_pid:-}" NATIVE_APP_LAUNCHER_PID="$$" NATIVE_APP_PROXY_START="${proxy_start:-}" \
+              python3 desktop/tests/native_app_flows.py --resume-owned-gateway >/dev/null 2>&1 || true
             for pid in "${proxy_pid:-}" "${app_pid:-}"; do
               if [ -n "$pid" ]; then kill -- "-$pid" 2>/dev/null || true; fi
             done
