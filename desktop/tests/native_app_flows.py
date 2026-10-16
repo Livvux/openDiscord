@@ -466,6 +466,9 @@ class Native:
         self.click('Sign in')
         auth_progress(self.profile, 'await_login_navigation')
         self.wait_authenticated('/app/messages')
+        # The inbox shell mounts before its persistent crypto bootstrap finishes.
+        auth_progress(self.profile, 'await_encryption_ready')
+        wait(lambda: self.text('Encrypted messaging ready.'), 60)
 
     def upload(self, xpath, path):
         identifier = self.element(xpath)
@@ -603,7 +606,7 @@ AUTH_ACTIONS = {
     'open_signup', 'fill_display_name', 'fill_signup_email', 'fill_signup_password',
     'confirm_registration_policy', 'submit_signup', 'await_signup_navigation',
     'open_login', 'fill_login_email', 'fill_login_password', 'submit_login',
-    'await_login_navigation', 'open_account_settings', 'sign_out', 'await_signout_navigation',
+    'await_login_navigation', 'await_encryption_ready', 'open_account_settings', 'sign_out', 'await_signout_navigation',
 }
 
 
@@ -627,7 +630,7 @@ DM_ACTIONS = {
     'select_message_request', 'accept_message_request', 'await_verify_device',
     'locate_encrypted_send', 'assert_unverified_send_disabled', 'start_device_verification',
     'accept_device_verification', 'show_verification_numbers', 'await_verification_numbers',
-    'compare_verification_numbers', 'confirm_verification_numbers', 'fill_encrypted_message',
+    'compare_verification_numbers', 'confirm_verification_numbers', 'await_verification_complete', 'fill_encrypted_message',
     'send_encrypted_message', 'await_encrypted_send_complete', 'await_encrypted_message', 'assert_ciphertext_transport',
     'reload_conversation', 'select_conversation', 'await_persisted_message',
     'check_recovery_controls', 'open_recovery_controls', 'create_recovery_backup',
@@ -1523,6 +1526,10 @@ def main():
                 alice.click('The numbers match')
                 dm_progress(bob.profile, 'confirm_verification_numbers')
                 bob.click('The numbers match')
+                # Confirmation sends protocol messages; each SDK still has to consume them.
+                for client in [alice, bob]:
+                    dm_progress(client.profile, 'await_verification_complete')
+                    wait(lambda: client.text('Verification complete.'), 60)
                 send_and_receive_dm(alice, bob, secret_message)
                 dm_progress(alice.profile, 'assert_ciphertext_transport')
                 safe_transport = alice.async_script('''const done=arguments[arguments.length-1], text=arguments[0];

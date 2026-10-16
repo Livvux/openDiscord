@@ -1051,11 +1051,17 @@ class NativeSupportTests(unittest.TestCase):
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': False},
             {'url': flows.ORIGIN + '/app/messages', 'protected_content': True},
         ])
+        def encryption_ready(_text):
+            self.assertEqual(client.command.call_count, 3)
+            return client.text.call_count == 2
+        client.text = Mock(side_effect=encryption_ready)
         with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
             client.login('disposable@example.test')
         client.click.assert_called_once_with('Sign in')
         client.goto.assert_called_once_with('/sign-in?next=/app/messages')
         self.assertEqual(client.command.call_count, 3)
+        self.assertEqual(client.text.call_count, 2)
+        client.text.assert_called_with('Encrypted messaging ready.')
         for call in client.command.call_args_list:
             self.assertEqual(call.args[:2], ('POST', '/execute/sync'))
             self.assertLessEqual(call.kwargs['timeout'], 2)
