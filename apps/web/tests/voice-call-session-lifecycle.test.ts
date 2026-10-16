@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CallSession, VoiceRetirementConflict } from "@/lib/voice/call-session";
 import type { VoiceOwnerOptions, VoiceProductOwnerPort } from "@/lib/voice/crypto-owner";
 import { VoiceContextProposal, VoiceContextRejected } from "@/lib/voice/epoch-agreement";
-import { VOICE_CONTROL_EVENT, voiceControlParty } from "@/lib/voice/owner-control";
+import { VOICE_CONTROL_EVENT, voiceControlParty, type VoiceOwnerControl } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
 
 const native = vi.hoisted(() => ({ options: undefined as VoiceOwnerOptions | undefined, port: undefined as VoiceProductOwnerPort | undefined }));
@@ -126,7 +126,7 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     await vi.advanceTimersByTimeAsync(11_000);
     expect(call.getSnapshot().state).toBe("agreed"); expect(call.getSnapshot().fenceRevision).toBe(installed.fenceRevision);
     expect(native.port!.installContext).toHaveBeenCalledTimes(1);
-    const material = { version: 1 as const, purpose: VOICE_CONTROL_EVENT, kind: "material" as const, callId, generation: 1, epochId: proposal.epochId, proposalSequence: proposal.sequence, sender: party, recipient: party, publisher: party, audience: [party], keyId: crypto.randomUUID(), reference: crypto.randomUUID(), transaction: crypto.randomUUID(), material: Buffer.alloc(32, 1).toString("base64") };
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId, generation: 1, epochId: proposal.epochId, proposalSequence: proposal.sequence, sender: party, recipient: party, publisher: party, audience: [party], keyId: crypto.randomUUID(), reference: crypto.randomUUID(), transaction: crypto.randomUUID(), material: Buffer.alloc(32, 1).toString("base64") };
     vi.mocked(native.port!.receiveAgreement).mockResolvedValueOnce([{ kind: "context", contextKind: "context-offer", senderId: memberId, proposal, ref: Object.freeze({ kind: "context-offer" }) }, { kind: "pending-material", ref: Object.freeze({ kind: "pending-material" }) }, { kind: "media", control: material }]);
     vi.mocked(native.port!.stageOfferedContext).mockRejectedValueOnce(new VoiceContextRejected("Retired voice proposal replay."));
     await vi.advanceTimersByTimeAsync(1_000);
