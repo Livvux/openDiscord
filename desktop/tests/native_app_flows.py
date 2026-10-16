@@ -228,6 +228,21 @@ class Native:
                 time.sleep(min(.25, remaining))
         raise TimeoutError('Channel destination deadline exceeded')
 
+    def wait_dm_send_complete(self, message):
+        deadline_at = time.monotonic() + 30
+        while (remaining := deadline_at - time.monotonic()) > 0:
+            state = dm_delivery_state(self, message, timeout=min(2, remaining))
+            if (all(state.get(key) is True for key in [
+                    'at_messages', 'log_visible', 'own_plaintext_present', 'draft_empty', 'textarea_enabled'])
+                    and all(state.get(key) == 1 for key in [
+                        'selection_count', 'target_selection_count', 'private_log_count', 'textarea_count'])
+                    and state.get('alert_count') == 0 and state.get('decrypt_error_count') == 0):
+                return
+            remaining = deadline_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.25, remaining))
+        raise TimeoutError('Encrypted sender completion deadline exceeded')
+
     def open_private_message(self, message_id):
         def unique(path, xpath):
             def find():
@@ -486,7 +501,7 @@ DM_ACTIONS = {
     'locate_encrypted_send', 'assert_unverified_send_disabled', 'start_device_verification',
     'accept_device_verification', 'show_verification_numbers', 'await_verification_numbers',
     'compare_verification_numbers', 'confirm_verification_numbers', 'fill_encrypted_message',
-    'send_encrypted_message', 'await_encrypted_message', 'assert_ciphertext_transport',
+    'send_encrypted_message', 'await_encrypted_send_complete', 'await_encrypted_message', 'assert_ciphertext_transport',
     'reload_conversation', 'select_conversation', 'await_persisted_message',
     'check_recovery_controls', 'open_recovery_controls', 'create_recovery_backup',
     'save_recovery_file', 'validate_recovery_file', 'login_recovery_profile',
@@ -519,6 +534,64 @@ def open_dm_from_community(alice, bob, community_path):
     dm_progress(alice.profile, 'await_owner_channel')
     alice.wait_channel(community_path)
     alice.open_private_message(message_id)
+
+
+def send_and_receive_dm(alice, bob, message):
+    dm_progress(alice.profile, 'fill_encrypted_message')
+    alice.fill('Encrypted message', message)
+    dm_progress(alice.profile, 'send_encrypted_message')
+    alice.click('Send encrypted message')
+    dm_progress(alice.profile, 'await_encrypted_send_complete')
+    alice.wait_dm_send_complete(message)
+    dm_progress(bob.profile, 'await_encrypted_message')
+    wait(lambda: bob.text(message), 60)
+
+
+def dm_delivery_state(client, message, timeout=2):
+    """Read actual selected DM UI; return only fixed counts, booleans and visibility."""
+    peer = {0: 'Native Bob', 1: 'Native Alice'}[client.profile]
+    snapshot = client.command('POST', '/execute/sync', {'args': [ORIGIN, peer, message], 'script': """
+      const [origin, peer, expected] = arguments;
+      const selected = Array.from(document.querySelectorAll('aside[aria-label="Direct conversations"] button[aria-current="page"]'));
+      const logs = Array.from(document.querySelectorAll('ol[role="log"]')).filter(node => node.getAttribute('aria-label') === 'Private conversation with ' + peer);
+      const rows = logs.length === 1 ? Array.from(logs[0].children).filter(node => node.tagName === 'LI') : [];
+      const paragraphs = row => Array.from(row.children).filter(node => node.tagName === 'P');
+      const matches = row => paragraphs(row)[1]?.textContent === expected;
+      const controls = Array.from(document.querySelectorAll('textarea#private-message'));
+      const textarea = controls.length === 1 ? controls[0] : null;
+      const buttons = textarea ? Array.from(textarea.form.querySelectorAll('button[type="submit"]')).filter(node => node.textContent.trim() === 'Send encrypted message') : [];
+      const decryptError = 'Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.';
+      return {
+        at_messages: location.origin === origin && location.pathname === '/app/messages',
+        visibility: document.visibilityState,
+        selection_count: selected.length,
+        target_selection_count: selected.filter(node => node.querySelector('span')?.textContent === peer).length,
+        private_log_count: logs.length, message_row_count: rows.length,
+        log_visible: logs.length === 1 && !!logs[0].getClientRects().length && getComputedStyle(logs[0]).visibility !== 'hidden',
+        expected_plaintext_present: rows.some(matches),
+        own_plaintext_present: rows.some(row => matches(row) && paragraphs(row)[0]?.textContent.startsWith('You ·')),
+        decrypt_error_count: rows.filter(row => paragraphs(row)[1]?.textContent === decryptError).length,
+        textarea_count: controls.length, draft_empty: !!textarea && textarea.value === '',
+        textarea_enabled: !!textarea && !textarea.disabled,
+        send_control_count: buttons.length, send_enabled: buttons.length === 1 && !buttons[0].disabled,
+        disabled_control_count: controls.concat(buttons).filter(node => node.disabled).length,
+        verification_count: document.querySelectorAll('section[aria-label="Device verification"]').length,
+        alert_count: document.querySelectorAll('[role="alert"]').length
+      };
+    """}, timeout=timeout)
+    safe = {'profile': client.profile, 'visibility': snapshot.get('visibility')
+            if snapshot.get('visibility') in {'visible', 'hidden'} else 'other'}
+    for key in ['selection_count', 'target_selection_count', 'private_log_count', 'message_row_count',
+                'decrypt_error_count', 'textarea_count', 'send_control_count', 'disabled_control_count',
+                'verification_count', 'alert_count']:
+        value = snapshot.get(key)
+        if type(value) is int and 0 <= value <= 10000:
+            safe[key] = value
+    for key in ['at_messages', 'log_visible', 'expected_plaintext_present', 'own_plaintext_present',
+                'draft_empty', 'textarea_enabled', 'send_enabled']:
+        if type(snapshot.get(key)) is bool:
+            safe[key] = snapshot[key]
+    return safe
 
 
 def dm_diagnostics(client, timeout=2):
@@ -631,7 +704,7 @@ def auth_diagnostics(client, timeout=2):
     return safe
 
 
-def failure_diagnostics(clients, budget=10):
+def failure_diagnostics(clients, budget=10, *, delivery_message=None):
     """Called inside the existing global diagnostic timer, sharing its total budget."""
     deadline_at = time.monotonic() + budget
     if any(results[name]['status'] == 'failed' for name in [
@@ -641,7 +714,20 @@ def failure_diagnostics(clients, budget=10):
         profile = metadata.get('dm_action', {}).get('profile')
         client = next((client for client in clients if client.profile == profile), None)
         remaining = deadline_at - time.monotonic()
-        if client is not None and remaining > 0:
+        if results['dm_sas_delivery']['status'] == 'failed' and delivery_message is not None:
+            observations = []
+            metadata['dm_peer_diagnostics'] = observations
+            for peer in clients:
+                remaining = deadline_at - time.monotonic()
+                if peer.profile not in {0, 1} or remaining <= 0:
+                    continue
+                try:
+                    observations.append(dm_delivery_state(peer, delivery_message, timeout=min(2, remaining)))
+                except NativeDeadlineExpired:
+                    raise
+                except Exception as error:
+                    observations.append({'profile': peer.profile, 'error_type': type(error).__name__})
+        elif client is not None and remaining > 0:
             try:
                 metadata['dm_diagnostic'] = dm_diagnostics(client, timeout=min(2, remaining))
             except NativeDeadlineExpired:
@@ -1027,6 +1113,7 @@ def main():
     metadata['webkit_package'] = subprocess.run(['dpkg-query', '-W', '-f=${Version}', 'libwebkit2gtk-4.1-0'], capture_output=True, text=True, check=True, timeout=5).stdout
     persist()
     clients = []
+    delivery_message = None
     with tempfile.TemporaryDirectory(prefix='native-app-flows-') as directory:
         sandbox = pathlib.Path(directory)
         try:
@@ -1126,6 +1213,8 @@ def main():
                 dm_progress(alice.profile, 'assert_unverified_send_disabled')
                 assert not alice.command('GET', '/element/' + send + '/enabled')
             with stage('dm_sas_delivery'):
+                secret_message = 'Disposable native encrypted delivery 73192'
+                delivery_message = secret_message
                 dm_progress(alice.profile, 'start_device_verification')
                 alice.prefix_click('Verify device ')
                 dm_progress(bob.profile, 'accept_device_verification')
@@ -1143,13 +1232,7 @@ def main():
                 alice.click('The numbers match')
                 dm_progress(bob.profile, 'confirm_verification_numbers')
                 bob.click('The numbers match')
-                secret_message = 'Disposable native encrypted delivery 73192'
-                dm_progress(alice.profile, 'fill_encrypted_message')
-                alice.fill('Encrypted message', secret_message)
-                dm_progress(alice.profile, 'send_encrypted_message')
-                alice.click('Send encrypted message')
-                dm_progress(bob.profile, 'await_encrypted_message')
-                wait(lambda: bob.text(secret_message), 60)
+                send_and_receive_dm(alice, bob, secret_message)
                 dm_progress(alice.profile, 'assert_ciphertext_transport')
                 safe_transport = alice.async_script('''const done=arguments[arguments.length-1], text=arguments[0];
                   fetch('/api/dm').then(r=>r.json()).then(async r=>{const id=r.conversations[0].id;const response=await fetch('/api/dm?conversation='+encodeURIComponent(id));done(response.ok && !(await response.text()).includes(text));}).catch(()=>done(false));''', secret_message)
@@ -1224,7 +1307,7 @@ def main():
             if primary_error is not None:
                 signal.setitimer(signal.ITIMER_REAL, 10)
                 try:
-                    failure_diagnostics(clients)
+                    failure_diagnostics(clients, delivery_message=delivery_message)
                 except Exception as error:
                     metadata['transport_diagnostic_error_type'] = type(error).__name__
                 finally:

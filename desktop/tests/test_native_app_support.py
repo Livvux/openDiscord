@@ -18,6 +18,134 @@ import native_app_flows as flows
 
 
 class NativeSupportTests(unittest.TestCase):
+    def test_encrypted_send_waits_for_own_committed_ui_before_receiver_without_replay(self):
+        ready = {'at_messages': True, 'log_visible': True, 'own_plaintext_present': True,
+                 'draft_empty': True, 'textarea_enabled': True, 'selection_count': 1,
+                 'target_selection_count': 1, 'private_log_count': 1, 'textarea_count': 1,
+                 'alert_count': 0, 'decrypt_error_count': 0}
+        failures = [{'draft_empty': False}, {'textarea_enabled': False}, {'alert_count': 1},
+                    {'own_plaintext_present': False}, {'decrypt_error_count': 1},
+                    {'at_messages': False}, {'log_visible': False}, {'selection_count': 2},
+                    {'target_selection_count': 0}, {'private_log_count': 2}, {'textarea_count': 0}]
+        for failure in [None, *failures]:
+            with self.subTest(failure=failure):
+                alice = flows.Native.__new__(flows.Native)
+                alice.profile = 0
+                alice.fill, alice.click = Mock(), Mock()
+                bob = types.SimpleNamespace(profile=1, text=Mock(return_value=True))
+                clock = [0.0]
+                observations = []
+
+                def observe(client, message, timeout):
+                    self.assertIs(client, alice)
+                    self.assertEqual(message, 'private fixture')
+                    self.assertLessEqual(timeout, 2)
+                    alice.click.assert_called_once_with('Send encrypted message')
+                    bob.text.assert_not_called()
+                    clock[0] += 10
+                    observations.append(True)
+                    # A ready run still observes an asynchronous pending state first.
+                    return {**ready, **(failure or ({'draft_empty': False} if len(observations) == 1 else {}))}
+
+                with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True), \
+                        patch.object(flows, 'dm_delivery_state', side_effect=observe), \
+                        patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(flows.time, 'sleep'):
+                    if failure is None:
+                        flows.send_and_receive_dm(alice, bob, 'private fixture')
+                        bob.text.assert_called_once_with('private fixture')
+                    else:
+                        with self.assertRaises(TimeoutError):
+                            flows.send_and_receive_dm(alice, bob, 'private fixture')
+                        bob.text.assert_not_called()
+                        self.assertEqual(clock[0], 30)
+                        self.assertEqual(flows.metadata['dm_action']['action'], 'await_encrypted_send_complete')
+                    alice.fill.assert_called_once_with('Encrypted message', 'private fixture')
+                    alice.click.assert_called_once_with('Send encrypted message')
+                    self.assertNotIn('private fixture', json.dumps(flows.metadata))
+
+    def test_encrypted_sender_global_expiry_propagates_without_receiver_or_second_send(self):
+        alice = flows.Native.__new__(flows.Native)
+        alice.profile = 0
+        alice.fill, alice.click = Mock(), Mock()
+        bob = types.SimpleNamespace(profile=1, text=Mock())
+        with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True), \
+                patch.object(flows, 'dm_delivery_state', side_effect=flows.NativeDeadlineExpired()):
+            with self.assertRaises(flows.NativeDeadlineExpired):
+                flows.send_and_receive_dm(alice, bob, 'private fixture')
+        alice.click.assert_called_once_with('Send encrypted message')
+        bob.text.assert_not_called()
+
+    def test_dm_delivery_observation_redacts_both_peers_and_does_not_treat_no_alert_as_delivery(self):
+        private = 'private message SAS JWT key draft native payload'
+        for profile in [0, 1]:
+            for visibility in ['visible', 'hidden', private]:
+                with self.subTest(profile=profile, visibility=visibility):
+                    snapshot = {'visibility': visibility, 'private_log_count': 1, 'message_row_count': 1,
+                                'expected_plaintext_present': False, 'own_plaintext_present': False,
+                                'decrypt_error_count': 1, 'alert_count': 0, 'draft_empty': False,
+                                'textarea_enabled': True, 'selection_count': True, 'textarea_count': -1,
+                                'send_control_count': 10001, 'send_enabled': private, 'text': private,
+                                'url': private, 'SAS': private, 'draft': private, 'native_payload': private}
+                    client = types.SimpleNamespace(profile=profile, command=Mock(return_value=snapshot))
+                    result = flows.dm_delivery_state(client, private, timeout=.25)
+                    self.assertEqual(result, {'profile': profile, 'visibility': visibility if visibility in {'visible', 'hidden'} else 'other',
+                        'private_log_count': 1, 'message_row_count': 1, 'expected_plaintext_present': False,
+                        'own_plaintext_present': False, 'decrypt_error_count': 1, 'alert_count': 0,
+                        'draft_empty': False, 'textarea_enabled': True})
+                    self.assertNotIn(private, json.dumps(result))
+                    self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
+                    self.assertEqual(client.command.call_args.kwargs, {'timeout': .25})
+
+    def test_both_dm_peer_diagnostics_share_budget_preserve_failure_and_are_failure_only(self):
+        clients = [types.SimpleNamespace(profile=index) for index in range(3)]
+        for budget, fail_first in [(10, False), (3, False), (10, True)]:
+            with self.subTest(budget=budget, fail_first=fail_first):
+                clock = [0.0]
+                seen = []
+                failed_request = {'profile': 1, 'method': 'POST', 'endpoint': 'sync_script'}
+
+                def observe(client, message, timeout):
+                    self.assertEqual(message, 'private fixture')
+                    seen.append((client.profile, timeout))
+                    clock[0] += timeout
+                    flows.metadata['last_native_request'] = {'profile': client.profile, 'endpoint': 'sync_script'}
+                    if fail_first and client.profile == 0:
+                        raise ValueError('private fixture')
+                    return {'profile': client.profile, 'visibility': 'hidden' if client.profile == 1 else 'visible'}
+
+                with patch.dict(flows.metadata, {'last_native_request': failed_request}, clear=True), \
+                        patch.dict(flows.results, {name: {'status': 'passed'} for name in flows.CASES}), \
+                        patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(flows, 'dm_delivery_state', side_effect=observe) as dm, \
+                        patch.object(flows, 'dm_diagnostics') as community, \
+                        patch.object(flows, 'transport_diagnostics', return_value={}) as transport:
+                    flows.failure_diagnostics(clients, budget=budget, delivery_message='private fixture')
+                    dm.assert_not_called()
+                    self.assertNotIn('dm_peer_diagnostics', flows.metadata)
+                    transport.reset_mock()
+                    flows.results['dm_sas_delivery'] = {'status': 'failed'}
+                    flows.failure_diagnostics(clients, budget=budget, delivery_message='private fixture')
+                    self.assertEqual(seen, [(0, 2), (1, min(2, budget - 2))])
+                    self.assertEqual(flows.metadata['dm_failed_request'], failed_request)
+                    self.assertEqual(len(flows.metadata['dm_peer_diagnostics']), 2)
+                    if fail_first:
+                        self.assertEqual(flows.metadata['dm_peer_diagnostics'][0], {'profile': 0, 'error_type': 'ValueError'})
+                    self.assertNotIn('private fixture', json.dumps(flows.metadata))
+                    community.assert_not_called()
+                    transport.assert_called_once_with(clients, budget=max(0, budget - 4))
+
+    def test_dm_peer_diagnostics_global_expiry_stops_remaining_probes(self):
+        clients = [types.SimpleNamespace(profile=index) for index in range(2)]
+        with patch.dict(flows.metadata, {}, clear=True), \
+                patch.dict(flows.results, {name: {'status': 'failed' if name == 'dm_sas_delivery' else 'passed'} for name in flows.CASES}), \
+                patch.object(flows, 'dm_delivery_state', side_effect=flows.NativeDeadlineExpired()) as dm, \
+                patch.object(flows, 'transport_diagnostics') as transport:
+            with self.assertRaises(flows.NativeDeadlineExpired):
+                flows.failure_diagnostics(clients, delivery_message='private fixture')
+            dm.assert_called_once()
+            transport.assert_not_called()
+
     def test_enabled_inputs_wait_without_writes_then_send_once_or_fail_without_replay(self):
         for operation in ['fill', 'upload']:
             for outcome in ['ready', 'disabled', 'write_failure']:
