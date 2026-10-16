@@ -196,6 +196,40 @@ class Native:
         wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/click', {})
 
+    def open_private_message(self):
+        def unique(path, xpath):
+            def find():
+                values = self.command('POST', path, {'using': 'xpath', 'value': xpath})
+                if len(values) > 1:
+                    raise ValueError('Ambiguous private-message target')
+                return values[0][ELEMENT] if values else None
+            return wait(find)
+
+        dm_progress(self.profile, 'locate_community_message')
+        message = unique('/elements', DM_MESSAGE_XPATH)
+        wait(lambda: self.command('GET', '/element/' + message + '/displayed'))
+        dm_progress(self.profile, 'hover_community_message')
+        # WebKitGTK resolves this element origin into a real mouse move.
+        try:
+            self.command('POST', '/actions', {'actions': [{
+                'type': 'pointer', 'id': 'dm-mouse', 'parameters': {'pointerType': 'mouse'},
+                'actions': [{'type': 'pointerMove', 'origin': {ELEMENT: message},
+                             'x': 0, 'y': 0, 'duration': 0}],
+            }]})
+        except urllib.error.HTTPError as error:
+            if unsupported_command(error):
+                metadata['dm_pointer_capability'] = 'unsupported'
+            raise
+        metadata['dm_pointer_capability'] = 'supported'
+        dm_progress(self.profile, 'locate_private_message_link')
+        link = unique('/element/' + message + '/elements', DM_LINK_XPATH)
+        dm_progress(self.profile, 'await_private_message_link_visible')
+        wait(lambda: self.command('GET', '/element/' + link + '/displayed'))
+        dm_progress(self.profile, 'await_private_message_link_enabled')
+        wait(lambda: self.command('GET', '/element/' + link + '/enabled'))
+        dm_progress(self.profile, 'click_private_message_link')
+        self.command('POST', '/element/' + link + '/click', {})
+
     def fill(self, label, value):
         identifier = self.element(f'//*[self::input or self::textarea][@id=//label[normalize-space(.)={json.dumps(label)}]/@for]'
             f' | //label[starts-with(normalize-space(.),{json.dumps(label)})]//input'
@@ -373,7 +407,8 @@ def endpoint_class(path):
         return 'other'
     suffix = parts[3:]
     fixed = {'url': 'navigation', 'timeouts': 'timeouts', 'elements': 'find_elements',
-             'refresh': 'refresh', 'screenshot': 'screenshot', 'log': 'console_log'}
+             'refresh': 'refresh', 'screenshot': 'screenshot', 'log': 'console_log',
+             'actions': 'pointer_actions'}
     if len(suffix) == 1:
         return fixed.get(suffix[0], 'other')
     if suffix == ['execute', 'sync']:
@@ -382,7 +417,8 @@ def endpoint_class(path):
         return 'async_script'
     if len(suffix) >= 3 and suffix[0] == 'element':
         return {'click': 'element_click', 'value': 'element_input', 'displayed': 'element_displayed',
-                'enabled': 'element_enabled', 'attribute': 'element_attribute'}.get(suffix[2], 'other')
+                'enabled': 'element_enabled', 'attribute': 'element_attribute',
+                'elements': 'find_child_elements'}.get(suffix[2], 'other')
     return 'other'
 
 
@@ -399,6 +435,75 @@ def auth_progress(profile, action):
         raise ValueError('Auth diagnostic action is not allowlisted')
     metadata['auth_action'] = {'profile': profile, 'action': action}
     persist()
+
+
+DM_MESSAGE_XPATH = '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'
+DM_LINK_XPATH = './/a[@aria-label="Message Native Bob privately"]'
+DM_ACTIONS = {
+    'open_member_channel', 'locate_community_composer', 'fill_community_message',
+    'send_community_message', 'open_owner_channel', 'locate_community_message',
+    'hover_community_message', 'locate_private_message_link',
+    'await_private_message_link_visible', 'await_private_message_link_enabled',
+    'click_private_message_link', 'send_message_request', 'open_member_inbox',
+    'select_message_request', 'accept_message_request', 'await_verify_device',
+    'locate_encrypted_send', 'assert_unverified_send_disabled', 'start_device_verification',
+    'accept_device_verification', 'show_verification_numbers', 'await_verification_numbers',
+    'compare_verification_numbers', 'confirm_verification_numbers', 'fill_encrypted_message',
+    'send_encrypted_message', 'await_encrypted_message', 'assert_ciphertext_transport',
+    'reload_conversation', 'select_conversation', 'await_persisted_message',
+    'check_recovery_controls', 'open_recovery_controls', 'create_recovery_backup',
+    'save_recovery_file', 'validate_recovery_file', 'login_recovery_profile',
+    'upload_recovery_file', 'open_recovered_archive', 'await_recovered_message',
+    'reload_recovered_archive', 'remove_recovery_file', 'open_logout_settings',
+    'sign_out', 'await_signout_navigation', 'open_protected_inbox', 'assert_logged_out',
+}
+
+
+def dm_progress(profile, action):
+    if type(profile) is not int or profile not in {0, 1, 2} or action not in DM_ACTIONS:
+        raise ValueError('DM diagnostic action is not allowlisted')
+    metadata['dm_action'] = {'profile': profile, 'action': action}
+    persist()
+
+
+def dm_diagnostics(client, timeout=2):
+    """One failure-only read: no DOM, text, identifiers or private SDK state returned."""
+    snapshot = client.command('POST', '/execute/sync', {'args': [DM_MESSAGE_XPATH, DM_LINK_XPATH], 'script': """
+      const matches = (xpath, root) => {
+        const result = document.evaluate(xpath, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        return Array.from({length: result.snapshotLength}, (_, i) => result.snapshotItem(i));
+      };
+      const routes = {'/sign-in': 'sign-in', '/app/messages': 'messages', '/app/settings': 'settings'};
+      const messages = matches(arguments[0], document);
+      const links = messages.length === 1 ? matches(arguments[1], messages[0]) : [];
+      const zeroOpacity = node => {
+        for (let current = node; current; current = current.parentElement) {
+          if (Number(getComputedStyle(current).opacity) === 0) return true;
+        }
+        return false;
+      };
+      const summary = {route: routes[location.pathname] || (/^\\/app\\/c\\/[^/]+\\/[^/]+$/.test(location.pathname) ? 'community' : 'other'),
+        message_count: messages.length, link_count: links.length,
+        verification_count: document.querySelectorAll('[data-verification-code]').length,
+        alert_count: document.querySelectorAll('[role="alert"]').length};
+      if (messages.length === 1) summary.message_hovered = messages[0].matches(':hover');
+      if (links.length === 1) {
+        summary.link_zero_opacity = zeroOpacity(links[0]);
+        summary.link_has_rect = !!links[0].getClientRects().length;
+      }
+      return summary;
+    """}, timeout=timeout)
+    safe = {'profile': client.profile, 'route': snapshot.get('route') if snapshot.get('route') in {
+        'sign-in', 'messages', 'settings', 'community', 'other',
+    } else 'other'}
+    for key in ['message_count', 'link_count', 'verification_count', 'alert_count']:
+        value = snapshot.get(key)
+        if type(value) is int and 0 <= value <= 10000:
+            safe[key] = value
+    for key in ['message_hovered', 'link_zero_opacity', 'link_has_rect']:
+        if type(snapshot.get(key)) is bool:
+            safe[key] = snapshot[key]
+    return safe
 
 
 def at_app_path(url, path):
@@ -455,6 +560,20 @@ def auth_diagnostics(client, timeout=2):
 def failure_diagnostics(clients, budget=10):
     """Called inside the existing global diagnostic timer, sharing its total budget."""
     deadline_at = time.monotonic() + budget
+    if any(results[name]['status'] == 'failed' for name in [
+            'dm_enrollment', 'dm_sas_delivery', 'dm_persistence', 'dm_recovery', 'logout']):
+        # Keep the failed application command before read-only diagnostics replace it.
+        metadata['dm_failed_request'] = dict(metadata.get('last_native_request', {}))
+        profile = metadata.get('dm_action', {}).get('profile')
+        client = next((client for client in clients if client.profile == profile), None)
+        remaining = deadline_at - time.monotonic()
+        if client is not None and remaining > 0:
+            try:
+                metadata['dm_diagnostic'] = dm_diagnostics(client, timeout=min(2, remaining))
+            except NativeDeadlineExpired:
+                raise
+            except Exception as error:
+                metadata['dm_diagnostic_error_type'] = type(error).__name__
     if any(results[name]['status'] == 'failed' for name in ['signup_login', 'dm_recovery']):
         profile = metadata.get('auth_action', {}).get('profile')
         client = next((client for client in clients if client.profile == profile), None)
@@ -917,63 +1036,109 @@ def main():
                 assert len(data['messages']) >= 1
             with stage('dm_enrollment'):
                 # Post a community message from Bob, then use the actual private-message link.
+                dm_progress(bob.profile, 'open_member_channel')
                 bob.goto(community_path)
+                dm_progress(bob.profile, 'locate_community_composer')
                 composer = bob.element('//textarea[@id=//label[starts-with(normalize-space(.),"Message #")]/@for]')
+                dm_progress(bob.profile, 'fill_community_message')
                 bob.command('POST', '/element/' + composer + '/value', {'text': 'Native community greeting'})
+                dm_progress(bob.profile, 'send_community_message')
                 bob.click('Send message')
+                dm_progress(alice.profile, 'open_owner_channel')
                 alice.goto(community_path)
-                alice.click('Message Native Bob privately', 'a')
+                alice.open_private_message()
+                dm_progress(alice.profile, 'send_message_request')
                 alice.click('Send message request')
+                dm_progress(bob.profile, 'open_member_inbox')
                 bob.goto('/app/messages')
+                dm_progress(bob.profile, 'select_message_request')
                 bob.prefix_click('Native Alice')
+                dm_progress(bob.profile, 'accept_message_request')
                 bob.click('Accept message request')
+                dm_progress(alice.profile, 'await_verify_device')
                 wait(lambda: alice.text('Verify device'))
+                dm_progress(alice.profile, 'locate_encrypted_send')
                 send = alice.element('//button[normalize-space(.)="Send encrypted message"]')
+                dm_progress(alice.profile, 'assert_unverified_send_disabled')
                 assert not alice.command('GET', '/element/' + send + '/enabled')
             with stage('dm_sas_delivery'):
+                dm_progress(alice.profile, 'start_device_verification')
                 alice.prefix_click('Verify device ')
+                dm_progress(bob.profile, 'accept_device_verification')
                 bob.click('Accept verification')
+                dm_progress(alice.profile, 'show_verification_numbers')
                 alice.click('Show verification numbers')
+                dm_progress(alice.profile, 'await_verification_numbers')
                 code_a = wait(lambda: alice.script('return document.querySelector("[data-verification-code]")?.textContent'))
+                dm_progress(bob.profile, 'await_verification_numbers')
                 code_b = wait(lambda: bob.script('return document.querySelector("[data-verification-code]")?.textContent'))
+                dm_progress(alice.profile, 'compare_verification_numbers')
                 assert code_a == code_b
                 del code_a, code_b
+                dm_progress(alice.profile, 'confirm_verification_numbers')
                 alice.click('The numbers match')
+                dm_progress(bob.profile, 'confirm_verification_numbers')
                 bob.click('The numbers match')
                 secret_message = 'Disposable native encrypted delivery 73192'
+                dm_progress(alice.profile, 'fill_encrypted_message')
                 alice.fill('Encrypted message', secret_message)
+                dm_progress(alice.profile, 'send_encrypted_message')
                 alice.click('Send encrypted message')
+                dm_progress(bob.profile, 'await_encrypted_message')
                 wait(lambda: bob.text(secret_message), 60)
+                dm_progress(alice.profile, 'assert_ciphertext_transport')
                 safe_transport = alice.async_script('''const done=arguments[arguments.length-1], text=arguments[0];
                   fetch('/api/dm').then(r=>r.json()).then(async r=>{const id=r.conversations[0].id;const response=await fetch('/api/dm?conversation='+encodeURIComponent(id));done(response.ok && !(await response.text()).includes(text));}).catch(()=>done(false));''', secret_message)
                 assert safe_transport
             with stage('dm_persistence'):
+                dm_progress(bob.profile, 'reload_conversation')
                 bob.command('POST', '/refresh', {})
+                dm_progress(bob.profile, 'select_conversation')
                 bob.prefix_click('Native Alice')
+                dm_progress(bob.profile, 'await_persisted_message')
                 wait(lambda: bob.text(secret_message), 60)
             with stage('dm_recovery'):
+                dm_progress(alice.profile, 'check_recovery_controls')
                 if not alice.text('Create encrypted recovery backup'):
+                    dm_progress(alice.profile, 'open_recovery_controls')
                     alice.click('Devices and recovery')
+                dm_progress(alice.profile, 'create_recovery_backup')
                 alice.click('Create encrypted recovery backup')
                 recovery = sandbox / 'recovery.json'
+                dm_progress(alice.profile, 'save_recovery_file')
                 alice.save(recovery, lambda: alice.click('Download your private recovery file', 'a'))
+                dm_progress(alice.profile, 'validate_recovery_file')
                 complete_json(recovery, recovery_shape)
+                dm_progress(recovered.profile, 'login_recovery_profile')
                 recovered.login(email)
+                dm_progress(recovered.profile, 'open_recovery_controls')
                 recovered.click('Devices and recovery')
+                dm_progress(recovered.profile, 'upload_recovery_file')
                 recovered.upload('//label[starts-with(normalize-space(.),"Open encrypted recovery archive")]//input', recovery)
+                dm_progress(recovered.profile, 'open_recovered_archive')
                 summary = recovered.element('//summary[starts-with(normalize-space(.),"View recovered archive")]')
                 recovered.command('POST', '/element/' + summary + '/click', {})
+                dm_progress(recovered.profile, 'await_recovered_message')
                 wait(lambda: recovered.text(secret_message), 60)
+                dm_progress(recovered.profile, 'reload_recovered_archive')
                 recovered.command('POST', '/refresh', {})
+                dm_progress(recovered.profile, 'open_recovered_archive')
                 summary = recovered.element('//summary[starts-with(normalize-space(.),"View recovered archive")]')
                 recovered.command('POST', '/element/' + summary + '/click', {})
+                dm_progress(recovered.profile, 'await_recovered_message')
                 wait(lambda: recovered.text(secret_message), 60)
+                dm_progress(recovered.profile, 'remove_recovery_file')
                 recovery.unlink()
             with stage('logout'):
+                dm_progress(bob.profile, 'open_logout_settings')
                 bob.goto('/app/settings')
+                dm_progress(bob.profile, 'sign_out')
                 bob.click('Sign out')
+                dm_progress(bob.profile, 'await_signout_navigation')
                 wait(lambda: at_app_path(bob.command('GET', '/url'), '/sign-in'))
+                dm_progress(bob.profile, 'open_protected_inbox')
                 bob.goto('/app/messages')
+                dm_progress(bob.profile, 'assert_logged_out')
                 wait(lambda: at_app_path(bob.command('GET', '/url'), '/sign-in'))
             with stage('runtime_errors'):
                 unavailable = 0

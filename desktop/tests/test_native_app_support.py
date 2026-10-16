@@ -18,6 +18,149 @@ import native_app_flows as flows
 
 
 class NativeSupportTests(unittest.TestCase):
+    def test_dm_real_pointer_reveals_only_the_uniquely_scoped_message_link(self):
+        for failure in [None, 'ambiguous_message', 'ambiguous_link', 'unsupported', 'disconnected']:
+            with self.subTest(failure=failure):
+                client = flows.Native.__new__(flows.Native)
+                client.profile = 0
+                hovered = False
+                events = []
+
+                def command(method, path, body=None):
+                    nonlocal hovered
+                    events.append((method, path, body))
+                    if (method, path) == ('POST', '/elements'):
+                        # A global author-link lookup would also select an unrelated message.
+                        self.assertEqual(body, {'using': 'xpath', 'value':
+                            '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'})
+                        return [{flows.ELEMENT: 'message'}] * (2 if failure == 'ambiguous_message' else 1)
+                    if (method, path) == ('GET', '/element/message/displayed'):
+                        return True
+                    if (method, path) == ('POST', '/actions'):
+                        self.assertFalse(hovered)
+                        self.assertEqual(body, {'actions': [{'type': 'pointer', 'id': 'dm-mouse',
+                            'parameters': {'pointerType': 'mouse'}, 'actions': [{'type': 'pointerMove',
+                            'origin': {flows.ELEMENT: 'message'}, 'x': 0, 'y': 0, 'duration': 0}]}]})
+                        if failure == 'unsupported':
+                            raise urllib.error.HTTPError('private-url', 404, '', {}, io.BytesIO(json.dumps(
+                                {'value': {'error': 'unsupported operation', 'message': 'private-value'}}).encode()))
+                        if failure == 'disconnected':
+                            raise flows.http.client.RemoteDisconnected()
+                        hovered = True
+                        return None
+                    if (method, path) == ('POST', '/element/message/elements'):
+                        self.assertTrue(hovered)
+                        self.assertEqual(body, {'using': 'xpath', 'value': './/a[@aria-label="Message Native Bob privately"]'})
+                        return [{flows.ELEMENT: 'scoped-link'}] * (2 if failure == 'ambiguous_link' else 1)
+                    if (method, path) == ('GET', '/element/scoped-link/displayed'):
+                        return hovered
+                    if (method, path) == ('GET', '/element/scoped-link/enabled'):
+                        self.assertEqual(events[-2][:2], ('GET', '/element/scoped-link/displayed'))
+                        return True
+                    if (method, path) == ('POST', '/element/scoped-link/click'):
+                        self.assertEqual(events[-2][:2], ('GET', '/element/scoped-link/enabled'))
+                        return None
+                    self.fail('Unexpected command: no JS, style mutation, navigation or action replay allowed')
+
+                client.command = command
+                with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
+                    if failure:
+                        with self.assertRaises((ValueError, urllib.error.HTTPError, flows.http.client.RemoteDisconnected)):
+                            client.open_private_message()
+                    else:
+                        client.open_private_message()
+                    self.assertEqual(sum(path == '/actions' for _, path, _ in events),
+                                     0 if failure == 'ambiguous_message' else 1)
+                    self.assertEqual(sum(path.endswith('/click') for _, path, _ in events), 0 if failure else 1)
+                    if failure == 'unsupported':
+                        self.assertEqual(flows.metadata['dm_pointer_capability'], 'unsupported')
+                    self.assertNotIn('private-value', json.dumps(flows.metadata))
+
+    def test_dm_hidden_link_times_out_without_second_hover_or_click(self):
+        client = flows.Native.__new__(flows.Native)
+        client.profile = 0
+        events = []
+        clock = [0.0]
+
+        def command(method, path, body=None):
+            events.append(path)
+            if path == '/elements':
+                return [{flows.ELEMENT: 'message'}]
+            if path == '/element/message/elements':
+                return [{flows.ELEMENT: 'link'}]
+            if path == '/element/message/displayed':
+                return True
+            if path == '/element/link/displayed':
+                clock[0] += 10
+                return False
+            if path == '/actions':
+                return None
+            self.fail('Hidden link must not be enabled or clicked')
+
+        client.command = command
+        with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True), \
+                patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows.time, 'sleep'):
+            with self.assertRaises(TimeoutError):
+                client.open_private_message()
+            self.assertEqual(clock[0], 30)
+            self.assertEqual(events.count('/actions'), 1)
+            self.assertEqual(flows.metadata['dm_action']['action'], 'await_private_message_link_visible')
+
+    def test_dm_diagnostic_allowlists_actions_routes_counts_and_booleans(self):
+        private = 'private-payload-never-retained'
+        client = types.SimpleNamespace(profile=1, command=Mock(return_value={
+            'route': private, 'message_count': 1, 'link_count': 1, 'verification_count': True,
+            'alert_count': -1, 'message_hovered': True, 'link_zero_opacity': False,
+            'link_has_rect': private, 'text': private, 'code': private, 'url': private,
+        }))
+        with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True):
+            for profile, action in [(0, private), (3, 'send_message_request'), (True, 'send_message_request')]:
+                with self.assertRaises(ValueError):
+                    flows.dm_progress(profile, action)
+            self.assertEqual(flows.metadata, {})
+            flows.dm_progress(1, 'accept_message_request')
+            self.assertEqual(flows.metadata['dm_action'], {'profile': 1, 'action': 'accept_message_request'})
+            result = flows.dm_diagnostics(client, timeout=.5)
+        self.assertEqual(result, {'profile': 1, 'route': 'other', 'message_count': 1, 'link_count': 1,
+                                 'message_hovered': True, 'link_zero_opacity': False})
+        self.assertNotIn(private, json.dumps(result))
+        client.command.assert_called_once()
+        self.assertEqual(client.command.call_args.args[:2], ('POST', '/execute/sync'))
+        self.assertEqual(client.command.call_args.kwargs['timeout'], .5)
+
+    def test_dm_failure_observation_shares_auth_transport_budget_and_never_runs_on_success(self):
+        client = types.SimpleNamespace(profile=2)
+        clock = [0.0]
+
+        def observe(_client, timeout):
+            self.assertEqual(timeout, 2)
+            clock[0] += timeout
+            return {'route': 'messages'}
+
+        with patch.dict(flows.metadata, {'dm_action': {'profile': 2}, 'auth_action': {'profile': 2}}, clear=True), \
+                patch.dict(flows.results, {name: {'status': 'passed'} for name in flows.CASES}), \
+                patch.object(flows.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(flows, 'dm_diagnostics', side_effect=observe) as dm, \
+                patch.object(flows, 'auth_diagnostics', side_effect=observe) as auth, \
+                patch.object(flows, 'transport_diagnostics', return_value={}) as transport:
+            flows.failure_diagnostics([client])
+            dm.assert_not_called()
+            auth.assert_not_called()
+            transport.reset_mock()
+            flows.results['dm_recovery'] = {'status': 'failed'}
+            flows.failure_diagnostics([client])
+            dm.assert_called_once()
+            auth.assert_called_once()
+            transport.assert_called_once_with([client], budget=6)
+            dm.side_effect = flows.NativeDeadlineExpired()
+            auth.reset_mock()
+            transport.reset_mock()
+            with self.assertRaises(flows.NativeDeadlineExpired):
+                flows.failure_diagnostics([client])
+            auth.assert_not_called()
+            transport.assert_not_called()
+
     def test_save_requires_causal_unique_visible_dialog_and_never_replays_input(self):
         dialog, foreign = '100001', '100002'
         cases = [
