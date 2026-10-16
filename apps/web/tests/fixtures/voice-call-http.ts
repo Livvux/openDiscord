@@ -20,7 +20,7 @@ export async function callHttpFixture(count: number) {
   vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { if (held.has(name)) return callback(null); held.add(name); try { await callback({ name }); } finally { held.delete(name); } } } });
   const events = new EventTarget();
   const writes = vi.fn();
-  vi.stubGlobal("window", { addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), localStorage: { getItem: (key: string) => anchors.get(key) ?? null, setItem: writes } });
+  vi.stubGlobal("window", { performance: globalThis.performance, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), localStorage: { getItem: (key: string) => anchors.get(key) ?? null, setItem: writes } });
   const accounts: CallAccount[] = [];
   for (let i = 0; i < count; i++) {
     const signup = await auth.api.signUpEmail({ headers: REGISTRATION_HEADERS, body: { email: `call-session-${randomUUID()}@example.test`, password: "correct horse battery", name: `Call ${i}` }, returnHeaders: true });

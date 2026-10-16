@@ -46,6 +46,42 @@ describe("unactivated CallSession with actual cookie HTTP / PostgreSQL / public 
     }
   }, 120_000);
 
+  it("keeps a newer installed agreement after a genuine delayed lower offer, then agrees fresh current traffic", async () => {
+    const { accounts } = await callHttpFixture(2);
+    const issued = new Map<string, { port: nativeFactory.VoiceProductOwnerPort; proposals: VoiceContextProposal[] }>();
+    const create = nativeFactory.createVoiceProductOwner;
+    vi.spyOn(nativeFactory, "createVoiceProductOwner").mockImplementation(async options => {
+      const port = await create(options), observed = { port, proposals: [] as VoiceContextProposal[] };
+      issued.set(options.accountId, observed);
+      return Object.freeze({ ...port, createContextOffer: async () => { const offer = await port.createContextOffer(); observed.proposals.push(offer.proposal); return offer; } });
+    });
+    for (const account of accounts) await startCall(account);
+    await until(() => accounts.every(account => account.call!.getSnapshot().roster.length === 2));
+    const [leaderAccount, otherAccount] = [...accounts].sort((a, b) => a.call!.getSnapshot().selfMemberId.localeCompare(b.call!.getSnapshot().selfMemberId));
+    const leader = leaderAccount.call!, receiver = otherAccount.call!, observer = issued.get(leaderAccount.accountId)!;
+    await verifyCalls(leader, receiver); await receiver.confirmFullRoster(); await leader.confirmFullRoster();
+    await until(() => leader.getSnapshot().state === "agreed" && receiver.getSnapshot().state === "agreed");
+    const first = observer.proposals[0];
+    let release!: () => void, held = false;
+    const delayed = new Promise<void>(resolve => { release = resolve; });
+    leaderAccount.before = async body => { if (!held && body.action === "crypto" && body.input.request?.kind === "send") { held = true; await delayed; } };
+    const sender = voiceControlParty(leader.getSnapshot().roster.find(member => member.memberId === leader.getSnapshot().selfMemberId)!), recipient = voiceControlParty(receiver.getSnapshot().roster.find(member => member.memberId === receiver.getSnapshot().selfMemberId)!);
+    const oldDelivery = observer.port.sendContextControl({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId: first.callId, generation: first.generation, epochId: first.epochId, sequence: first.sequence, reference: first.reference, transaction: first.reference, audience: [...first.audience], leader: first.leader, sender, recipient }).catch(error => error);
+    await until(() => held);
+    await leader.confirmFullRoster();
+    await until(() => observer.proposals.length === 2 && leader.getSnapshot().state === "agreed" && receiver.getSnapshot().state === "agreed");
+    const installed = receiver.getSnapshot(), acks = otherAccount.calls.filter(trace => trace.kind === "ack").length;
+    release(); await oldDelivery;
+    await until(() => otherAccount.calls.filter(trace => trace.kind === "ack").length > acks);
+    expect(receiver.getSnapshot()).toEqual(installed);
+    expect(receiver.getSnapshot().state).toBe("agreed");
+    await new Promise(resolve => setTimeout(resolve, 1_050));
+    await leader.confirmFullRoster();
+    await until(() => observer.proposals.length === 3 && leader.getSnapshot().state === "agreed" && receiver.getSnapshot().state === "agreed");
+    expect(observer.proposals.map(proposal => proposal.sequence)).toEqual([1, 2, 3]);
+    expect(otherAccount.calls.some(trace => trace.status === 429)).toBe(false);
+  }, 90_000);
+
   it("discovers real HTTP409 first, transitions once, exchanges fresh peer SAS, preserves exact admission on a later generation", async () => {
     const { accounts, held } = await callHttpFixture(3);
     const a = await startCall(accounts[0]), original = a.getSnapshot().generation;

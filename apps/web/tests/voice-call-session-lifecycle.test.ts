@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CallSession, VoiceRetirementConflict } from "@/lib/voice/call-session";
 import type { VoiceOwnerOptions, VoiceProductOwnerPort } from "@/lib/voice/crypto-owner";
-import { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
+import { VoiceContextProposal, VoiceContextRejected } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty } from "@/lib/voice/owner-control";
 import type { VoiceSnapshot } from "@/lib/voice/contracts";
 
@@ -109,6 +109,23 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     expect(call.getSnapshot().fenceRevision).toBeGreaterThan(revision);
     expect(observed).toEqual(Array(6).fill("negotiating"));
     expect(native.port!.installContext).toHaveBeenCalledTimes(2);
+  });
+  it("a real typed lower-offer staging rejection leaves the installed view/fence/timer unchanged", async () => {
+    call = await CallSession.create({ ...options, fetch: fetcher() });
+    const party = voiceControlParty(snapshot().members[0]), reference = crypto.randomUUID();
+    const proposal = new VoiceContextProposal({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId, generation: 1, epochId: crypto.randomUUID(), sequence: 2, reference, transaction: reference, sender: party, recipient: party, leader: party, audience: [party] });
+    vi.mocked(native.port!.createContextOffer).mockResolvedValue({ ref: Object.freeze({ kind: "context-offer" }), proposal });
+    vi.mocked(native.port!.contextAgreementComplete).mockResolvedValue(true);
+    await call.confirmFullRoster();
+    const installed = call.getSnapshot();
+    const seen: string[] = []; call.subscribe(() => seen.push(call!.getSnapshot().state));
+    vi.mocked(native.port!.receiveAgreement).mockResolvedValueOnce([{ kind: "context", contextKind: "context-offer", senderId: memberId, proposal, ref: Object.freeze({ kind: "context-offer" }) }]);
+    vi.mocked(native.port!.stageOfferedContext).mockRejectedValueOnce(new VoiceContextRejected("Lower voice leader sequence rejected."));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(call.getSnapshot()).toEqual(installed); expect(seen).not.toContain("negotiating"); expect(seen).not.toContain("ended");
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(call.getSnapshot().state).toBe("agreed"); expect(call.getSnapshot().fenceRevision).toBe(installed.fenceRevision);
+    expect(native.port!.installContext).toHaveBeenCalledTimes(1);
   });
   it("never overlaps receives and waits at least one second after a complete batch", async () => {
     call = await CallSession.create({ ...options, fetch: fetcher() });
