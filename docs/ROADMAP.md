@@ -1,9 +1,9 @@
 # Roadmap and gap analysis
 
-Status as of 2026-10-15, audited against the code on `main` plus the open feature PRs that update this
-file. "Implemented" means implemented end-to-end and covered by automated tests (Vitest and Playwright);
-anything less is listed as partial or missing. Nothing here is a claim of production readiness: there has
-been no external security audit.
+Status as of 2026-10-16, reconciled against `main` at `e810b2cc4db088fd0c4de74e5b5427aa6b58b8d1`.
+Implementation, automated acceptance, deployment and external review are separate evidence states.
+A checkmark describes the stated implementation/test scope; it does not establish production readiness
+or an external audit. See the [evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md#main-acceptance-checkpoint-2026-10-16).
 
 ## Why openDiscord exists
 
@@ -21,14 +21,22 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-`main` runs the text-chat MVP, encrypted DMs and merged implementation increments through #52 in production
-(opendiscord.app, closed alpha). Recent releases add shared abuse controls, bounded retention,
-community rules and private ban appeals, readiness checks, optional local attachment storage/scanning,
-cost-backed funding disclosure, native versioned auth-key support and operator job hardening. See the [release evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md).
+The closed-alpha production revision last verified by the operator is
+`4386e07173b89ee3332d7805ca1794c929507d1f` (30 applied migrations, `0000`–`0029`).
+Main `e810b2c` adds accepted test/fixture increments; it has not been deployed at this checkpoint.
+Production automatic deployment is paused. The ledger distinguishes earlier releases from this snapshot.
 
-Encrypted DMs merged in PR #30 after exact-head CI38785473940 passed 268 unit/integration tests and 43 browser tests, including desktop/mobile SAS, recovery, transfer and identity reset. Production deployment acceptance is recorded separately in the release ledger. Public
-operator policies and required 16-year signup self-attestation shipped in PR #34. Production TURN/TLS relay transport acceptance passed in two controlled Chromium clients with TCP443-only egress. Voice E2EE, physical-device media, real Web Push delivery, external
-security/legal review and the remaining product items below are still open.
+Encrypted DMs, private complete archives, custom emoji/stickers, explicit public channels/discovery,
+operator policies, 16-year signup self-attestation, funding disclosure and auth-key rotation support
+are implemented. Desktop/mobile automated web acceptance passes. Real HTTP/SSE characterization,
+real ClamAV-engine rejection and populated operational-backup recovery now have isolated CI evidence.
+The official instance still uses R2 without a configured scanner.
+
+Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
+Voice E2EE remains a draft integration: isolated crypto/control proofs do not establish actual product
+media/listener acceptance or activate an E2EE label. Native desktop bundles are preview artifacts;
+full native application-flow acceptance remains open. Physical-device media, actual inbox/push delivery,
+manual screen-reader acceptance and independent security/crypto/legal/license reviews remain open.
 
 ## Requirements matrix
 
@@ -57,7 +65,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | --- | --- | --- |
 | Independent instances | ✅ | Docker Compose stack verified end-to-end (TLS, auth, SSE through Caddy) |
 | No mandatory proprietary services | ✅ | SMTP optional; no external APIs |
-| Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh`, round trip tested |
+| Portable backup and restore | ✅ | `scripts/backup.sh` / `restore.sh` round trip tested; unchanged operational production-backup script rehearsed with a populated private attachment, separate DB/S3 and retrieval/negative controls (#71). Newest production-data restore remains separately gated |
 | Export per community (channels, messages, roles, settings) | ✅ | Owner-only JSON export (roles, categories, channels, overrides, messages; mentions as names, no account ids), audited; import creates a new community with messages marked as imported. JSON excludes attachment bytes. Complete gzip file archives shipped in PR #39 with private storage, checksummed streams, atomic import and desktop/mobile acceptance; library-complete archive v3 shipped in PR #41 |
 | Migration and recovery docs | ✅ | [SELF-HOSTING.md](SELF-HOSTING.md) |
 | Hosted service has no exclusive capabilities | ✅ | One codebase, no feature flags or license keys |
@@ -101,7 +109,7 @@ encrypted (the SFU relays DTLS-SRTP).
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
-| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery (THREAT-MODEL T23) |
+| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery; optional fail-closed ClamAV tested with real clean/EICAR/unavailable upload/import cases (#68). Official production scanner unconfigured (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |
@@ -131,6 +139,7 @@ encrypted (the SFU relays DTLS-SRTP).
 | Responsive | ✅ | Off-canvas navigation on mobile, tested on Pixel 7 profile |
 | Optimistic UI | ✅ | Pending messages, rollback with draft restore on failure |
 | Virtualised history | 🟡 | Pagination + `content-visibility`; true windowing P1 when profiling shows a need |
+| Measured scaling | 🟡 bounded characterization | #67: real HTTP/SSE, 20 readers, 100 history reads, 16 writes plus reconnect sentinel, 320 fanout receipts. Single process; no production/multi-replica capacity, application CPU/RSS or SLO claim |
 | Reconnect and recovery | ✅ | Heartbeat watchdog, online/offline detection, gap-safe resync, visible connection state; offline recovery tested end-to-end |
 | Loading, empty, offline, error states | ✅ | |
 
