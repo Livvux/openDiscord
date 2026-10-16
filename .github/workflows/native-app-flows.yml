@@ -31,8 +31,8 @@ jobs:
       NATIVE_TLS_KEY: /tmp/opendiscord-native-app.key
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -41,8 +41,15 @@ jobs:
           cache-on-failure: true
           # Default environment/toolchain/Cargo hashes remain active; isolate native origin/inputs.
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENDISCORD_INSTANCE_URL
-          key: ubuntu2404-native-https-localhost-9443-${{ hashFiles('desktop/src/**', 'desktop/build.rs', 'desktop/Cargo.toml', 'desktop/Cargo.lock', 'desktop/tauri.conf.json', 'desktop/Info.plist', 'desktop/assets/**', 'apps/web/public/brand/symbol-flat.svg') }}
+          key: ubuntu2404-native-https-localhost-9443
       - run: pnpm install --frozen-lockfile
+      - name: Restore Next.js compiler cache
+        uses: actions/cache@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - name: Install Linux native dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver xdotool
       - name: Isolated TLS proxy transport regressions
@@ -99,7 +106,7 @@ jobs:
           IFS= read -r proxy_record 2>/dev/null < "/proc/$proxy_pid/stat"
           read -ra proxy_fields <<< "${proxy_record##*) }"
           proxy_start=${proxy_fields[19]:-}
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if curl --fail --silent --output /dev/null https://localhost:9443/sign-in; then break; fi
             sleep 1
           done
@@ -112,7 +119,7 @@ jobs:
           sudo update-ca-certificates
           rm -f "$NATIVE_TLS_CERT" "$NATIVE_TLS_KEY" /tmp/native-app-server.log /tmp/native-app-proxy.log
           rm -rf "$ATTACHMENT_DIR"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: native-linux-app-${{ github.sha }}

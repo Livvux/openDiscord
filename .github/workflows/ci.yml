@@ -4,12 +4,17 @@ on:
   push: { branches: [main] }
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18-alpine
@@ -30,10 +35,17 @@ jobs:
       LIVEKIT_API_SECRET: secret
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Restore Next.js compiler cache
+        uses: actions/cache@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - name: Production dependency license inventory
         run: node scripts/check-dependency-licenses.mjs
       - name: Dependency audit (production dependencies)
@@ -51,7 +63,7 @@ jobs:
         env:
           OPENDISCORD_ISOLATED_LOAD: "1"
         run: pnpm --filter web exec tsx scripts/characterize-load.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: load-characterization
           path: apps/web/load-characterization.json
@@ -69,7 +81,7 @@ jobs:
           BETTER_AUTH_URL: http://localhost:3300
           OPENDISCORD_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: pnpm --filter web exec tsx scripts/characterize-http-sse.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: http-sse-characterization
@@ -85,7 +97,7 @@ jobs:
         if: always() && steps.livekit.outcome == 'success'
         # Deliberately omit participant, SDP, ICE credential and token logs.
         run: docker logs opendiscord-ci-livekit 2>&1 | sed -n '/starting LiveKit server/p'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         # A failed initial attempt must survive a successful retry on disposable CI accounts.
         if: always()
         with:
@@ -98,7 +110,7 @@ jobs:
             apps/web/test-results/**/error-context-initial-sync.md
           retention-days: 3
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: browser-screenshots
@@ -108,6 +120,15 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - run: docker build --target web -t opendiscord-web .
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: web
+          tags: opendiscord-web
+          load: true
+          cache-from: type=gha,scope=web-image
+          cache-to: type=gha,mode=max,scope=web-image

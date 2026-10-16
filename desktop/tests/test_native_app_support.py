@@ -383,8 +383,9 @@ class GatewayRecoveryTests(unittest.TestCase):
         context = ssl.create_default_context(cafile=tls['NATIVE_TLS_CERT'])
         process = subprocess.Popen(['node', 'desktop/tests/app_proxy.mjs'], cwd=flows.ROOT.parent,
                                    env={**os.environ, **tls}, start_new_session=True,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         gateway = None
+        readiness = {'status': None, 'transport': 'none', 'exitcode': None, 'child_error': 'none'}
 
         def health():
             try:
@@ -400,12 +401,21 @@ class GatewayRecoveryTests(unittest.TestCase):
                 end = time.monotonic() + 3
                 while True:
                     try:
-                        if health() == 502:
+                        readiness['status'] = health()
+                        if readiness['status'] == 502:
                             break
-                    except (urllib.error.URLError, TimeoutError):
-                        pass
+                    except (urllib.error.URLError, TimeoutError) as error:
+                        reason = error.reason if isinstance(error, urllib.error.URLError) else error
+                        readiness['transport'] = ('tls' if isinstance(reason, ssl.SSLError) else
+                                                  'refused' if isinstance(reason, ConnectionRefusedError) else
+                                                  'timeout' if isinstance(reason, TimeoutError) else 'other')
+                    readiness['exitcode'] = process.poll()
+                    if readiness['exitcode'] is not None:
+                        output = process.stderr.read(4096)
+                        readiness['child_error'] = next((code for code in ['EADDRINUSE', 'ENOENT', 'EACCES'] if code.encode() in output), 'other')
+                        self.fail(f'Owned gateway exited before readiness: {readiness}')
                     if time.monotonic() >= end:
-                        self.fail('Owned gateway readiness deadline exceeded')
+                        self.fail(f'Owned gateway readiness deadline exceeded: {readiness}')
                     time.sleep(.05)
                 gateway = flows.OwnedGateway()
                 old_handler = signal.signal(signal.SIGALRM, flows.deadline)
@@ -444,6 +454,7 @@ class GatewayRecoveryTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+                process.stderr.close()
 
 
 class NativeSupportTests(unittest.TestCase):

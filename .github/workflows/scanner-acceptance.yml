@@ -4,6 +4,10 @@ on:
   pull_request:
   push: { branches: [main] }
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -31,10 +35,17 @@ jobs:
       SCANNER_IMAGE: clamav/clamav@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Restore Next.js compiler cache
+        uses: actions/cache@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm db:migrate
       # Build before loading ClamAV signatures to avoid concurrent memory peaks.
       - run: pnpm build
@@ -66,7 +77,7 @@ jobs:
         run: |
           docker rm -f "$SCANNER_CONTAINER" >/dev/null 2>&1 || true
           if [[ "${ATTACHMENT_DIR:-}" == /tmp/opendiscord-scanner-* ]]; then rm -rf -- "$ATTACHMENT_DIR"; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: real-scanner-acceptance

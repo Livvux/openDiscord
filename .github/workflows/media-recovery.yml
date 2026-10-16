@@ -3,6 +3,10 @@ on:
   pull_request:
   push:
     branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
@@ -14,8 +18,8 @@ jobs:
       OPENDISCORD_ISOLATED_MEDIA_RECOVERY: '1'
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Install isolated recovery tools
@@ -23,11 +27,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y age rclone
           pnpm --filter web exec playwright install --with-deps chromium
+      - uses: docker/setup-buildx-action@v4
       - name: Build actual production web image
-        run: docker build --target web -t opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }} .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: web
+          tags: opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }}
+          load: true
+          cache-from: type=gha,scope=media-recovery-image
+          cache-to: type=gha,mode=max,scope=media-recovery-image
       - name: Rehearse exact operational archive with private media
         run: pnpm --filter web exec node scripts/verify-media-recovery.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: success()
         with:
           name: media-recovery-summary
