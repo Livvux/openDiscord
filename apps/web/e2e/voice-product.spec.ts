@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
-import { observeVoiceProductResult, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductObservationStage } from "./fixtures/voice-product-results";
+import { observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
 import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
@@ -8,6 +8,18 @@ import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUse
 
 const participant = (page: Page, name: string) => page.getByRole("listitem", { name: `Voice participant ${name}`, exact: true });
 const audience = (page: Page) => page.getByRole("region", { name: "Full Voice audience", exact: true });
+const audienceConsent = (page: Page) => audience(page).getByRole("button", { name: "Allow this audience and prepare encrypted media" });
+const presentation = (page: Page) => page.locator('[role="status"], [role="alert"]').evaluateAll(readVoiceProductPresentation);
+async function publicPhase(page: Page, phase: VoiceProductPhase | readonly VoiceProductPhase[]) {
+  // The existing readiness assertion budget covers the real ten-second attempt expiry too.
+  let observationFailed = false;
+  await expect.poll(async () => {
+    const result = await observeVoiceProductResult(() => presentation(page), { timeoutMs: 2000, stage: "diagnostic" });
+    if (!result.ok) observationFailed = true;
+    return result.ok && (typeof phase === "string" ? result.value.phase === phase : phase.includes(result.value.phase));
+  }, { timeout: 20_000 }).toBe(true);
+  expect(observationFailed).toBe(false);
+}
 const evidence = async (page: Page) => {
   const result = await observeVoiceProductResult(() => page.evaluate(() => window.__voiceProductEvidence.snapshot()), { timeoutMs: 2000, stage: "diagnostic" });
   if (!result.ok) throw new Error(`Voice product diagnostic ${result.reason}.`);
@@ -51,7 +63,7 @@ async function verifyPair(a: Page, aName: string, b: Page, bName: string, record
 }
 async function consentToAudience(pages: Page[]) {
   // Genuine UI clicks, each with its own complete canonical audience rendered.
-  await Promise.all(pages.map(page => audience(page).getByRole("button", { name: "Allow this audience and prepare encrypted media" }).click()));
+  await Promise.all(pages.map(page => audienceConsent(page).click()));
 }
 async function ready(page: Page) {
   await expect(page.getByRole("status").filter({ hasText: "Encrypted voice ready — microphone off" }).first()).toBeVisible({ timeout: 20_000 });
@@ -84,6 +96,14 @@ test.describe("genuine Next product encrypted Voice", () => {
     const stopResponseObservers: (() => void)[] = [];
     const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed" }[] = [];
     const pairCandidates: RequestSelection[] = [];
+    const phaseCheckpoints: Partial<Record<VoiceProductCheckpoint, VoiceProductObservation<Awaited<ReturnType<typeof presentation>>>[]>> = {};
+    let leaderRetryDispatched = false;
+    const checkpoint = async (name: VoiceProductCheckpoint) => {
+      const results = await Promise.all(pages.map(page => observeVoiceProductResult(() => presentation(page), { timeoutMs: 2000, stage: "diagnostic" })));
+      phaseCheckpoints[name] = results;
+      if (results.some(result => !result.ok)) observationFailed = true;
+      expect(results.every(result => result.ok)).toBe(true);
+    };
     let stage = "signup";
     const attach = async (page: Page, index: number) => {
       await page.addInitScript(installVoiceProductObserver);
@@ -165,23 +185,47 @@ test.describe("genuine Next product encrypted Voice", () => {
       await verifyPair(pages[0], names[0], pages[2], names[2], selection => { pairCandidates[1] = selection; });
       await verifyPair(pages[1], names[1], pages[2], names[2], selection => { pairCandidates[2] = selection; });
       for (const page of pages) expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0, workers: 0 });
-      stage = "full-audience-consent";
+      stage = "initial-consent";
       // Canonical ordering is read from real authorized join responses, never supplied to product control.
       await expect.poll(() => memberIds.size).toBe(3);
       const sorted = [...pages].sort((a, b) => memberIds.get(a)!.localeCompare(memberIds.get(b)!));
       // The leader and one responder consent before the last responder. No capture/publication can occur.
       await consentToAudience(sorted.slice(0, 2));
-      await sorted[0].waitForTimeout(1200);
-      for (const page of pages) expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0 });
-      await consentToAudience([sorted[2]]);
-      // The leader explicitly retries the still-visible full-roster action after the thin attempt.
-      const leaderReady = sorted[0].getByRole("status").filter({ hasText: "Encrypted voice ready" }).first();
-      if (!await leaderReady.isVisible()) {
-        const button = audience(sorted[0]).getByRole("button", { name: "Allow this audience and prepare encrypted media" });
-        if (await button.isEnabled()) await button.click();
+      await Promise.all(sorted.slice(0, 2).map(async page => { await publicPhase(page, "negotiating"); await expect(audienceConsent(page)).toBeDisabled(); }));
+      // Only this public status proves C actually consumed the thin local-consent-pending result.
+      await publicPhase(sorted[2], "consent-pending");
+      await checkpoint("initial-consent");
+      for (const page of pages) {
+        expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0, workers: 0 });
+        await expect(audience(page).getByRole("listitem", { name: /^Voice participant / })).toHaveCount(3);
       }
+      stage = "delayed-consent";
+      await consentToAudience([sorted[2]]);
+      await publicPhase(sorted[2], "negotiating");
+      await expect(audienceConsent(sorted[2])).toBeDisabled();
+      await checkpoint("delayed-consent");
+      stage = "waiting-expiry";
+      // No replacement proposal until every selected unfinished attempt has actually expired.
+      await Promise.all(sorted.map(page => publicPhase(page, "retry-required")));
+      await checkpoint("waiting-expiry");
+      for (const page of pages) {
+        await expect(audience(page).getByRole("listitem", { name: /^Voice participant / })).toHaveCount(3);
+        expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0, workers: 0 });
+      }
+      stage = "responder-retry";
+      await consentToAudience(sorted.slice(1));
+      await Promise.all(sorted.slice(1).map(async page => { await publicPhase(page, "negotiating"); await expect(audienceConsent(page)).toBeDisabled(); }));
+      await checkpoint("responder-retry");
+      stage = "leader-retry";
+      await expect(audienceConsent(sorted[0])).toBeEnabled();
+      await audienceConsent(sorted[0]).click();
+      leaderRetryDispatched = true;
+      await publicPhase(sorted[0], ["negotiating", "preparing", "ready"]);
+      await checkpoint("leader-retry");
       stage = "media-ready";
       for (const page of pages) await ready(page);
+      await checkpoint("media-ready");
+      for (const page of pages) await expect(audience(page).getByRole("listitem", { name: /^Voice participant / })).toHaveCount(3);
       await Promise.all(observation);
       expect(observationFailed).toBe(false); expect(grants).toHaveLength(3);
       for (const [index, page] of pages.entries()) {
@@ -240,7 +284,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       await owner.getByRole("button", { name: "Stop camera", exact: true }).click();
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       const summary = await Promise.all(pages.map(evidence));
-      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
+      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
       expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
@@ -263,9 +307,9 @@ test.describe("genuine Next product encrypted Voice", () => {
         await Promise.all(observation); commitsClosed = true;
         const diagnostics = await Promise.all(pages.map(page => observeVoiceProductResult(async () => {
           const stats = await evidence(page);
-          return { ...stats, workerUrl: undefined, audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
+          return { ...stats, workerUrl: undefined, ...await presentation(page), audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;

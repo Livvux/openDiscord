@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { VoiceMediaTile, VoiceSource } from "@/lib/voice/media-session";
 import { useVoice, voiceStatus } from "./voice-provider";
+import { canPrepareVoiceAudience } from "./voice-audience";
 
 function Video({ tile, name }: { tile: VoiceMediaTile; name: string }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -28,8 +29,6 @@ export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string
   const view = here ? voice.view : null;
   const active = here && (voice.joining || !!view && view.state !== "ended");
   const media = view?.media;
-  const others = view?.roster.filter(member => member.memberId !== view.selfMemberId) ?? [];
-  const allAdmitted = !!view?.keysPrepared && others.every(member => view.admittedMemberIds.includes(member.memberId));
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-5 overflow-y-auto p-4 md:p-6">
     <header className="text-center"><h2 className="text-xl font-semibold">{channel.name}</h2><p className="mt-2 text-sm text-muted-foreground" role="status">{voiceStatus(view, here && voice.joining)}</p></header>
     {view && view.state !== "ended" && <section aria-label="Full Voice audience" className="grid w-full max-w-2xl gap-3">
@@ -56,7 +55,7 @@ export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string
           </div>}
         </li>;
       })}</ul>
-      {media?.mediaState !== "ready" && <><p className="text-sm">Allow every account and exact device listed above. A changed audience stops capture and requires fresh consent. Microphone, camera and screen stay off until you activate them.</p><Button disabled={voice.busy || !allAdmitted || media?.mediaState === "keying"} onClick={() => void voice.confirmFullRoster()}>Allow this audience and prepare encrypted media</Button></>}
+      {media?.mediaState !== "ready" && <><p className="text-sm">Allow every account and exact device listed above. A changed audience stops capture and requires fresh consent. Microphone, camera and screen stay off until you activate them.</p><Button disabled={!canPrepareVoiceAudience(view, voice.busy)} onClick={() => void voice.confirmFullRoster()}>Allow this audience and prepare encrypted media</Button></>}
     </section>}
     {media?.mediaState === "ready" && <><div className="flex flex-wrap justify-center gap-2"><VoiceSourceButton source="microphone" /><VoiceSourceButton source="camera" /><VoiceSourceButton source="screen_share" /></div>{!media.sources.includes("microphone") && <p className="text-sm text-muted-foreground">You can listen here, but not speak.</p>}</>}
     {media && media.tiles.some(tile => tile.kind === "video") && <section aria-label="Video" className="grid w-full max-w-5xl gap-3 sm:grid-cols-2">{media.tiles.filter(tile => tile.kind === "video").map(tile => <Video key={tile.id} tile={tile} name={view?.roster.find(member => member.memberId === tile.memberId)?.displayName ?? "Participant"} />)}</section>}

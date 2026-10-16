@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { authClient } from "@/lib/auth-client";
 import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
 import type { VoiceSource } from "@/lib/voice/media-session";
+import { prepareCurrentVoiceAudience } from "./voice-audience";
 
 type Channel = { id: string; name: string; href: string };
 type VerificationStep = Parameters<CallSession["verificationStep"]>[1];
@@ -41,6 +42,7 @@ export function voiceStatus(view: VoiceCallView | null, joining: boolean): strin
   if (view.media.mediaState === "keying" || view.state === "agreed") return "Preparing encrypted media…";
   if (view.state === "retry-required") return "Audience attempt expired. Review everyone and retry.";
   if (view.state === "negotiating") return "Agreeing the full audience…";
+  if (view.state === "waiting" && view.localConsentPending) return "Waiting for your full audience consent.";
   if (view.state === "waiting") return "Waiting for participant setup and audience consent.";
   return "Verify every participant, then admit them separately.";
 }
@@ -145,7 +147,7 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     try { return current.current?.mountVideo(id, element) ?? (() => {}); }
     catch { return () => {}; } // A synchronous fence can invalidate a rendered tile before its effect runs.
   }, []);
-  return <VoiceContext.Provider value={{ channel, view, joining: joining && authenticated, busy: busy && authenticated, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(call => call.confirmFullRoster()), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
+  return <VoiceContext.Provider value={{ channel, view, joining: joining && authenticated, busy: busy && authenticated, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(prepareCurrentVoiceAudience), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
     {children}<div ref={audio} hidden aria-hidden="true" />
   </VoiceContext.Provider>;
 }

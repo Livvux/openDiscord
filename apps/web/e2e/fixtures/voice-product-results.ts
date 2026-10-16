@@ -1,6 +1,41 @@
 import { writeFile } from "node:fs/promises";
 import type { TestInfo } from "@playwright/test";
 
+export type VoiceProductPhase = "verifying" | "waiting" | "consent-pending" | "negotiating" | "retry-required" | "preparing" | "ready" | "stopped" | "unknown";
+export type VoiceProductReason = "none" | "control-failed" | "lease-expired" | "binding-changed" | "session-changed" | "provider-unmounted" | "context-expired" | "not-ready" | "budget-exhausted" | "generation-conflict" | "retirement-conflict" | "media-initialization-failed" | "other";
+export type VoiceProductCheckpoint = "initial-consent" | "delayed-consent" | "waiting-expiry" | "responder-retry" | "leader-retry" | "media-ready";
+
+/** Runs in the page: only fixed enums leave the DOM, never source status/alert text. */
+export function readVoiceProductPresentation(elements: Pick<Element, "getAttribute" | "textContent">[]): { phase: VoiceProductPhase; reason: VoiceProductReason } {
+  const phases = new Map<string, VoiceProductPhase>([
+    ["Verify every participant, then admit them separately.", "verifying"],
+    ["Waiting for participant setup and audience consent.", "waiting"],
+    ["Waiting for your full audience consent.", "consent-pending"],
+    ["Agreeing the full audience…", "negotiating"],
+    ["Audience attempt expired. Review everyone and retry.", "retry-required"],
+    ["Preparing encrypted media…", "preparing"],
+    ["Encrypted voice ready — microphone off", "ready"],
+    ["Encrypted voice ready — microphone on", "ready"],
+    ["Voice stopped. Join again to start a fresh call.", "stopped"],
+  ]);
+  const reasons: Exclude<VoiceProductReason, "none" | "other">[] = ["control-failed", "lease-expired", "binding-changed", "session-changed", "provider-unmounted", "context-expired", "not-ready", "budget-exhausted", "generation-conflict", "retirement-conflict", "media-initialization-failed"];
+  const templates = new Map<string, VoiceProductReason>([
+    ["The other participant is not ready yet. Wait, then explicitly retry this action.", "not-ready"],
+    ["Voice is busy. Wait a moment before retrying.", "budget-exhausted"],
+  ]);
+  for (const reason of reasons) {
+    templates.set(`Voice stopped (${reason}). Join again when ready.`, reason);
+    templates.set(`Voice: ${reason}. Review the call status before retrying.`, reason);
+  }
+  const statuses = new Set<VoiceProductPhase>(), alerts = new Set<VoiceProductReason>();
+  for (const element of elements) {
+    const role = element.getAttribute("role"), text = element.textContent?.trim() ?? "";
+    if (role === "status" && phases.has(text)) statuses.add(phases.get(text)!);
+    if (role === "alert" && text) alerts.add(templates.get(text) ?? "other");
+  }
+  return { phase: statuses.size === 1 ? [...statuses][0] : "unknown", reason: alerts.size === 0 ? "none" : alerts.size === 1 ? [...alerts][0] : "other" };
+}
+
 export type VoiceProductObservationStage = "body" | "verify" | "result" | "diagnostic" | "cleanup";
 export type VoiceProductObservation<T> = Readonly<
   { ok: true; value: T } | { ok: false; stage: VoiceProductObservationStage; reason: "timeout" | "failed" }

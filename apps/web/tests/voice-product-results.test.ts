@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { observeVoiceProductResult, withVoiceProductCleanup, writeVoiceProductEvidence } from "../e2e/fixtures/voice-product-results";
+import { observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { vi.useFakeTimers(); });
@@ -43,13 +43,57 @@ describe("bounded genuine Voice product acceptance observation", () => {
   it.each([false, true])("retains the actual allowlisted diagnostic file when attachment fails: %s", async failAttachment => {
     const directory = await mkdtemp(join(tmpdir(), "voice-product-evidence-"));
     try {
-      const path = join(directory, "voice-product-evidence-final.json"), body = JSON.stringify({ stage: "native-sas-and-admission", grantCount: 0 });
+      const path = join(directory, "voice-product-evidence-final.json");
+      const snapshot = readVoiceProductPresentation([element("status", "Waiting for your full audience consent."), element("alert", "private-error-detail")]);
+      const phaseCheckpoints: Partial<Record<VoiceProductCheckpoint, typeof snapshot[]>> = { "initial-consent": [snapshot, snapshot, snapshot] };
+      const body = JSON.stringify({ stage: "initial-consent", leaderRetryDispatched: false, phaseCheckpoints, grantCount: 0 });
       const close = vi.fn(async () => {});
       const attach = vi.fn(async () => { if (failAttachment) throw new Error("Attachment unavailable."); });
       const result = await withVoiceProductCleanup(() => writeVoiceProductEvidence({ outputPath: (...segments) => join(directory, ...segments), attach }, "voice-product-evidence-final", body), close);
       expect(await readFile(path, "utf8")).toBe(body);
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      expect(body).not.toContain("private-error-detail");
+      expect(JSON.parse(body)).toMatchObject({ leaderRetryDispatched: false, phaseCheckpoints: { "initial-consent": Array(3).fill({ phase: "consent-pending", reason: "other" }) } });
       expect(attach).toHaveBeenCalledWith("voice-product-evidence-final", { path, contentType: "application/json" });
       expect(result.ok).toBe(!failAttachment); expect(close).toHaveBeenCalledOnce();
     } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
+
+function element(role: string, textContent: string): Pick<Element, "getAttribute" | "textContent"> {
+  return { getAttribute: name => name === "role" ? role : null, textContent };
+}
+describe("fixed public Voice phase and reason diagnostics", () => {
+  const phases: [string, VoiceProductPhase][] = [
+    ["Verify every participant, then admit them separately.", "verifying"],
+    ["Waiting for participant setup and audience consent.", "waiting"],
+    ["Waiting for your full audience consent.", "consent-pending"],
+    ["Agreeing the full audience…", "negotiating"],
+    ["Audience attempt expired. Review everyone and retry.", "retry-required"],
+    ["Preparing encrypted media…", "preparing"],
+    ["Encrypted voice ready — microphone off", "ready"],
+    ["Encrypted voice ready — microphone on", "ready"],
+    ["Voice stopped. Join again to start a fresh call.", "stopped"],
+  ];
+  it.each(phases)("maps exact public status %s only to %s", (text, phase) => {
+    expect(readVoiceProductPresentation([element("status", text), element("status", text)])).toEqual({ phase, reason: "none" });
+  });
+  it.each(["control-failed", "lease-expired", "binding-changed", "session-changed", "provider-unmounted", "context-expired", "not-ready", "budget-exhausted", "generation-conflict", "retirement-conflict", "media-initialization-failed"])("maps both exact public error templates for %s", reason => {
+    for (const text of [`Voice: ${reason}. Review the call status before retrying.`, `Voice stopped (${reason}). Join again when ready.`]) {
+      expect(readVoiceProductPresentation([element("alert", text)])).toEqual({ phase: "unknown", reason });
+    }
+  });
+  it("maps the existing bounded retry messages without returning their text", () => {
+    expect(readVoiceProductPresentation([element("alert", "The other participant is not ready yet. Wait, then explicitly retry this action.")])).toEqual({ phase: "unknown", reason: "not-ready" });
+    expect(readVoiceProductPresentation([element("alert", "Voice is busy. Wait a moment before retrying.")])).toEqual({ phase: "unknown", reason: "budget-exhausted" });
+  });
+  it("drops unknown text and refuses ambiguous public states or reasons", () => {
+    const privateText = "private-id-token-or-exception";
+    expect(readVoiceProductPresentation([])).toEqual({ phase: "unknown", reason: "none" });
+    const result = readVoiceProductPresentation([element("status", privateText), element("alert", `Voice: ${privateText}. Review the call status before retrying.`)]);
+    expect(result).toEqual({ phase: "unknown", reason: "other" });
+    expect(JSON.stringify(result)).not.toContain(privateText);
+    expect(readVoiceProductPresentation([element("status", phases[0][0]), element("status", phases[1][0]), element("alert", "Voice: context-expired. Review the call status before retrying."), element("alert", privateText)])).toEqual({ phase: "unknown", reason: "other" });
+    expect(readVoiceProductPresentation([element("alert", ""), element("status", "Agreeing the full audience… suffix")])).toEqual({ phase: "unknown", reason: "none" });
   });
 });
