@@ -13,13 +13,14 @@ const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 6
 const HTTP_LIMIT = 180, PRIORITY_RESERVE = 18;
 type Priority = "ordinary" | "priority";
 export class VoiceCallSessionError extends Error {
-  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
+  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict" | "unsupported-media") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
 }
 export class VoiceRetirementConflict extends VoiceCallSessionError { constructor() { super("retirement-conflict"); this.name = "VoiceRetirementConflict"; } }
 export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" | "retry-required" | "ended";
+type VoiceSasView = Readonly<Omit<VoiceSasState, "emojiIndices"> & { emojiIndices: readonly number[] | null }>;
 export type VoiceCallView = Readonly<{
   state: VoiceCallState; roster: readonly Readonly<VoiceSnapshot["members"][number]>[];
-  generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasState[];
+  generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
   localConsentPending: boolean; error?: string;
 }>;
 export type VoiceCallOptions = {
@@ -86,7 +87,7 @@ export class CallSession {
       const { createVoiceProductOwner, VoiceGenerationInterrupted } = await import("./crypto-owner");
       session.isInterrupted = error => error instanceof VoiceGenerationInterrupted;
       session.checkCurrent();
-      session.owner = await createVoiceProductOwner({ accountId: options.accountId, guard: session.guard, snapshot, lifetime: { signal: session.lifetime.signal, assertCurrent: () => session.checkCurrent() }, transport: session.transport, onFence: () => session.emit() });
+      session.owner = await createVoiceProductOwner({ accountId: options.accountId, guard: session.guard, snapshot, lifetime: { signal: session.lifetime.signal, assertCurrent: () => session.checkCurrent() }, transport: session.transport, onFence: reason => session.ownerFence(reason) });
       session.checkCurrent();
       window.addEventListener?.("pageshow", session.resume);
       globalThis.document?.addEventListener("visibilitychange", session.resume);
@@ -98,8 +99,8 @@ export class CallSession {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private emit(): void {
     const snapshot = this.authority?.snapshot;
-    this.view = Object.freeze({ state: this.state, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? [...value.emojiIndices] : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
-    for (const listener of this.listeners) listener();
+    this.view = Object.freeze({ state: this.state, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
+    for (const listener of this.listeners) { try { listener(); } catch { /* Render observers cannot alter native control lifetime. */ } }
   }
   private assertAlive(): void {
     if (this.stopped || this.lifetime.signal.aborted) throw new VoiceCallSessionError("ended");
@@ -133,6 +134,7 @@ export class CallSession {
     if (snapshot.channelId !== this.options.channelId || own?.userId !== this.options.accountId) throw new VoiceCallSessionError("binding-changed");
     const old = this.authority?.snapshot;
     if (old && (snapshot.callId !== old.callId || snapshot.memberId !== old.memberId || snapshot.joinNonce !== old.joinNonce || snapshot.voiceUserId !== old.voiceUserId || snapshot.voiceDeviceId !== old.voiceDeviceId || snapshot.participantIdentity !== old.participantIdentity)) throw new VoiceCallSessionError("binding-changed");
+    if (old && snapshot.generation === old.generation && (snapshot.members.length !== old.members.length || snapshot.members.some(member => !old.members.some(prior => sameVoiceParty(voiceControlParty(member), voiceControlParty(prior)))))) throw new VoiceCallSessionError("binding-changed");
     const duration = Date.parse(snapshot.leaseExpiresAt) - Date.parse(snapshot.serverTime);
     const deadline = start + Math.min(30_000, Math.max(0, duration));
     if (!Number.isFinite(duration) || performance.now() >= deadline) throw new VoiceCallSessionError("lease-expired");
@@ -157,6 +159,10 @@ export class CallSession {
       promise.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
     });
   }
+  private ownerFence(reason: string): void {
+    if (["audience-selection-change", "generation-transition", "offered-context-change", "audience-context-change"].includes(reason)) { this.emit(); return; }
+    if (!this.stopped) { this.error = "control-failed"; void this.close(reason); }
+  }
   private fence(): void { this.attempt = undefined; clearTimeout(this.contextTimer); this.localConsentPending = false; if (!this.stopped) this.state = "waiting"; this.emit(); }
   private async reconcile(grant: Grant): Promise<void> {
     this.checkCurrent();
@@ -175,9 +181,11 @@ export class CallSession {
     this.transitionTarget = grant.snapshot;
     this.transitionActive = true;
     this.acceptGrant(grant);
-    const flight = this.owner.transition(grant.snapshot);
-    this.transitionFlight = flight;
-    try { await this.bounded(flight, grant.start + ATTEMPT_MS); this.checkCurrent(); }
+    try {
+      const flight = this.owner.transition(grant.snapshot);
+      this.transitionFlight = flight;
+      await this.bounded(flight, grant.start + ATTEMPT_MS); this.checkCurrent();
+    }
     catch (error) { void this.close("transition-failed"); throw error; }
     finally { this.transitionActive = false; this.transitionFlight = undefined; this.transitionTarget = undefined; this.emit(); }
   }
@@ -191,7 +199,8 @@ export class CallSession {
   }
   private readonly transport: VoiceOwnerTransport = async input => {
     this.checkCurrent();
-    const start = this.issue("ordinary");
+    let start: number;
+    try { start = this.issue("ordinary"); } catch (error) { void this.close("budget-exhausted"); throw error; }
     try {
       const value = await this.http.crypto(input.binding, input.request, this.secret, input.signal);
       this.checkCurrent();
@@ -241,7 +250,7 @@ export class CallSession {
   private async poll(): Promise<void> {
     try {
       this.checkCurrent(); this.prune();
-      if (this.transitionActive || this.actionFlight || this.requests.length + 4 > HTTP_LIMIT - PRIORITY_RESERVE) return;
+      if (this.state === "retry-required" || this.transitionActive || this.actionFlight || this.requests.length + 4 > HTTP_LIMIT - PRIORITY_RESERVE) return;
       const owner = this.owner!; this.lastPollStart = performance.now();
       const start = performance.now(), events = await owner.receiveAgreement();
       this.checkCurrent();
@@ -289,12 +298,12 @@ export class CallSession {
     let drained: VoiceOwnerControl[];
     try { drained = await this.owner!.installContext(attempt.ref); } finally { this.transitionActive = false; }
     this.assertAttempt(attempt);
-    // Control-only: do not retain material or claim media readiness. Future media
-    // owns immediate one-time consumption at this boundary, never duplicate buffers.
+    // This unactivated slice has no media consumer. Unexpected authenticated
+    // material ends the call explicitly; it cannot become silent readiness.
     for (const control of drained) this.mediaControl(control);
     attempt.installed = true; clearTimeout(this.contextTimer); this.state = "agreed"; this.emit();
   }
-  private mediaControl(_control: VoiceOwnerControl): void { this.checkCurrent(); }
+  private mediaControl(_control: VoiceOwnerControl): never { this.checkCurrent(); throw new VoiceCallSessionError("unsupported-media"); }
   private async process(events: VoiceOwnerAgreementReceived[], start: number): Promise<void> {
     let restart = false;
     // Stage every offer before pending material from this same batch. No new receive
@@ -304,8 +313,9 @@ export class CallSession {
       if (event.kind === "context-not-ready") { this.localConsentPending = true; if (!this.attempt) this.state = "waiting"; continue; }
       if (event.kind === "context" && event.contextKind === "context-offer") {
         if (!this.attempt) throw new VoiceCallSessionError("not-ready");
-        const attempt = this.attempt;
-        if (attempt.installed) throw new VoiceCallSessionError("not-ready");
+        // A genuine next leader offer may replace an installed exact context under
+        // the still-current local selection. New roster transitions clear selection.
+        const attempt = this.attempt.installed ? this.newAttempt(start) : this.attempt;
         attempt.deadline = Math.min(attempt.deadline, start + ATTEMPT_MS);
         this.assertAttempt(attempt); await this.owner!.stageOfferedContext(event.ref); this.assertAttempt(attempt);
         attempt.ref = event.ref; attempt.proposal = event.proposal;
@@ -367,7 +377,7 @@ export class CallSession {
     // Owner itself classifies obsolete completions only after an authoritative
     // transition. Current/unrecognized failures never become synthetic success.
     if (this.isInterrupted(error) && this.authority) { this.fence(); return; }
-    this.error = error instanceof VoiceHttpError ? error.code : "control-failed"; void this.close(this.error);
+    this.error = error instanceof VoiceHttpError || error instanceof VoiceCallSessionError ? error.code : "control-failed"; void this.close(this.error);
   }
   close(reason = "left"): Promise<void> {
     if (this.cleanup) return this.cleanup;
