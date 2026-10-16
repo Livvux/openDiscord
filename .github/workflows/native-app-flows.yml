@@ -112,7 +112,7 @@ jobs:
           sudo update-ca-certificates
           rm -f "$NATIVE_TLS_CERT" "$NATIVE_TLS_KEY" /tmp/native-app-server.log /tmp/native-app-proxy.log
           rm -rf "$ATTACHMENT_DIR"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: native-linux-app-${{ github.sha }}
