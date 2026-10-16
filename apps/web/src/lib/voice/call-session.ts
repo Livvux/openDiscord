@@ -342,21 +342,20 @@ export class CallSession {
     if (!attempt.ref || attempt.installed || !await this.owner!.contextAgreementComplete(attempt.ref)) return;
     this.assertAttempt(attempt);
     this.transitionActive = true;
-    let drained: VoiceOwnerControl[];
-    try { drained = await this.owner!.installContext(attempt.ref); } finally { this.transitionActive = false; }
-    this.assertAttempt(attempt);
-    const installedAt = performance.now(), revision = this.fenceRevision;
-    const deadline = Math.min(installedAt + ATTEMPT_MS, this.authority!.deadline);
-    attempt.installed = true; clearTimeout(this.contextTimer);
-    const current = () => {
-      this.checkCurrent();
-      if (this.attempt !== attempt || !attempt.installed || this.fenceRevision !== revision) throw new VoiceCallSessionError("binding-changed");
-    };
-    const snapshot = structuredClone(this.authority!.snapshot), proposal = attempt.proposal!;
-    snapshot.members.forEach(Object.freeze); snapshot.removals.forEach(Object.freeze);
-    Object.freeze(snapshot.members); Object.freeze(snapshot.removals); Object.freeze(snapshot);
-    const context: InstalledVoiceMediaContext = Object.freeze({ snapshot, epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, audience: Object.freeze(proposal.audience.map(party => Object.freeze({ ...party }))), self: Object.freeze(voiceControlParty(snapshot.members.find(member => member.memberId === snapshot.memberId)!)), deadline });
     try {
+      const drained = await this.owner!.installContext(attempt.ref);
+      this.assertAttempt(attempt);
+      const installedAt = performance.now(), revision = this.fenceRevision;
+      const deadline = Math.min(installedAt + ATTEMPT_MS, this.authority!.deadline);
+      attempt.installed = true; clearTimeout(this.contextTimer);
+      const current = () => {
+        this.checkCurrent();
+        if (this.attempt !== attempt || !attempt.installed || this.fenceRevision !== revision) throw new VoiceCallSessionError("binding-changed");
+      };
+      const snapshot = structuredClone(this.authority!.snapshot), proposal = attempt.proposal!;
+      snapshot.members.forEach(Object.freeze); snapshot.removals.forEach(Object.freeze);
+      Object.freeze(snapshot.members); Object.freeze(snapshot.removals); Object.freeze(snapshot);
+      const context: InstalledVoiceMediaContext = Object.freeze({ snapshot, epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, audience: Object.freeze(proposal.audience.map(party => Object.freeze({ ...party }))), self: Object.freeze(voiceControlParty(snapshot.members.find(member => member.memberId === snapshot.memberId)!)), deadline });
       // Type-only import above keeps SSR free of Worker/LiveKit evaluation.
       const { MediaSession } = await this.bounded(import("./media-session"), deadline); current();
       const media = new MediaSession(context, {
@@ -383,6 +382,7 @@ export class CallSession {
       for (const control of drained) { current(); await media.consume(control); current(); }
       this.state = "agreed"; this.emit();
     } catch (error) { void this.close("media-initialization-failed"); throw error; }
+    finally { this.transitionActive = false; }
   }
   private async mediaControl(control: VoiceOwnerControl): Promise<void> {
     this.checkCurrent(); const media = this.media;

@@ -3,7 +3,7 @@ import * as nativeFactory from "@/lib/voice/crypto-owner";
 import type { VoiceContextProposal } from "@/lib/voice/epoch-agreement";
 import { VOICE_CONTROL_EVENT, voiceControlParty } from "@/lib/voice/owner-control";
 import { callHttpFixture, cleanupCallUsers, closeCalls, observeCallPort, startCall, until, verifyCalls } from "./fixtures/voice-call-http";
-const consumed = vi.hoisted(() => vi.fn(async (_control: import("@/lib/voice/owner-control").VoiceOwnerControl) => {}));
+const consumed = vi.hoisted(() => vi.fn<(control: import("@/lib/voice/owner-control").VoiceOwnerControl) => Promise<void>>(async () => {}));
 // Preserve real native/cookie/service control coverage in Node; this mock makes no media claim.
 vi.mock("@/lib/voice/media-session", () => ({ MediaSession: class { start() {} consume = consumed; fence() {} } }));
 

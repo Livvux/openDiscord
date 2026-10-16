@@ -56,7 +56,7 @@ function setup(sources: ("microphone" | "camera" | "screen_share" | "screen_shar
   const snapshot: VoiceSnapshot = { callId, channelId, generation: 1, memberId: self.memberId, joinNonce: self.joinNonce, voiceUserId: self.voiceUserId, voiceDeviceId: self.voiceDeviceId, participantIdentity: self.participantIdentity, members, removals: [], serverTime: new Date(0).toISOString(), leaseExpiresAt: new Date(30000).toISOString() };
   const context: InstalledVoiceMediaContext = { snapshot, epochId: crypto.randomUUID(), proposalSequence: 3, reference: crypto.randomUUID(), audience: members.map(voiceControlParty), self: voiceControlParty(self), deadline: 10000 };
   let current = true;
-  const send = vi.fn(async (_control: VoiceOwnerControl) => {}), fatal = vi.fn();
+  const send = vi.fn<(control: VoiceOwnerControl) => Promise<void>>(async () => {}), fatal = vi.fn();
   const token = vi.fn(async () => ({ grant: { token: "deterministic-public-room-double", url: "wss://example.test", snapshot, roomName: `voice:${channelId}:${callId}:1`, participantIdentity: self.participantIdentity, sources, canPublishData: false as const, expiresAt: new Date(30000).toISOString() }, deadline: 30000 }));
   const bridge: VoiceMediaBridge = { current() { if (!current) throw new Error("Stale context."); }, send, fatal, token };
   return { context, bridge, send, fatal, token, retire() { current = false; }, peers: context.audience.slice(1) };

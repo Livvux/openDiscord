@@ -60,7 +60,7 @@ export class MediaSession {
   private run(operation: Promise<unknown>): void { void operation.catch(() => this.fail("media-failed")); }
   private others(): readonly VoiceControlParty[] { return this.context.audience.filter(party => !sameVoiceParty(party, this.context.self)); }
   private control(kind: VoiceOwnerControl["kind"], publisher: VoiceControlParty, recipient: VoiceControlParty, material: Material): VoiceOwnerControl {
-    const common = { version: 1 as const, purpose: VOICE_CONTROL_EVENT, callId: this.context.snapshot.callId, generation: this.context.snapshot.generation, epochId: this.context.epochId, proposalSequence: this.context.proposalSequence, audience: [...this.context.audience], sender: this.context.self, publisher, recipient, keyId: material.keyId, reference: material.reference, transaction: crypto.randomUUID() };
+    const common = { version: 1, purpose: VOICE_CONTROL_EVENT, callId: this.context.snapshot.callId, generation: this.context.snapshot.generation, epochId: this.context.epochId, proposalSequence: this.context.proposalSequence, audience: [...this.context.audience], sender: this.context.self, publisher, recipient, keyId: material.keyId, reference: material.reference, transaction: crypto.randomUUID() } satisfies Omit<VoiceOwnerControl, "kind" | "material">;
     return kind === "material" ? { ...common, kind, material: material.wire } : { ...common, kind };
   }
   private async send(control: VoiceOwnerControl): Promise<void> { this.current(); await this.checked(this.bridge.send(control)); }

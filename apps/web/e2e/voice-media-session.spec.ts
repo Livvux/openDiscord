@@ -78,8 +78,8 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
         handles.push(await page.evaluateHandle(async channelId => {
           // Only a static module is intercepted. Product CallSession makes every real HTTP/native operation.
           const path = "/__voice-media-ci/entry.js";
-          const module: { open(channelId: string): Promise<MediaHarness> } = await import(path);
-          return module.open(channelId);
+          const fixture: { open(channelId: string): Promise<MediaHarness> } = await import(path);
+          return fixture.open(channelId);
         }, channelId));
       }
       for (const handle of handles) await expect.poll(() => handle.evaluate(h => h.view().roster.length), { timeout: 15_000 }).toBe(3);

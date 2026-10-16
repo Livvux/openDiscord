@@ -7,7 +7,7 @@ import type { VoiceSnapshot } from "@/lib/voice/contracts";
 import type { InstalledVoiceMediaContext, VoiceMediaBridge } from "@/lib/voice/media-session";
 
 const native = vi.hoisted(() => ({ options: undefined as VoiceOwnerOptions | undefined, port: undefined as VoiceProductOwnerPort | undefined }));
-const mediaEffects = vi.hoisted(() => ({ consume: vi.fn(async (_control: VoiceOwnerControl) => {}), fence: vi.fn(), contexts: [] as InstalledVoiceMediaContext[], bridges: [] as VoiceMediaBridge[] }));
+const mediaEffects = vi.hoisted(() => ({ consume: vi.fn<(control: VoiceOwnerControl) => Promise<void>>(async () => {}), fence: vi.fn(), contexts: [] as InstalledVoiceMediaContext[], bridges: [] as VoiceMediaBridge[] }));
 // Control adapter ordering only. Real worker/media acceptance is in the browser suite.
 vi.mock("@/lib/voice/media-session", () => ({ MediaSession: class {
   constructor(context: InstalledVoiceMediaContext, bridge: VoiceMediaBridge) { mediaEffects.contexts.push(context); mediaEffects.bridges.push(bridge); }
@@ -23,7 +23,7 @@ function snapshot(generation = 1, duration = 30_000): VoiceSnapshot {
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 let call: CallSession | undefined;
 beforeEach(() => {
-  mediaEffects.consume.mockClear(); mediaEffects.fence.mockClear();
+  mediaEffects.consume.mockReset(); mediaEffects.fence.mockClear();
   mediaEffects.contexts.length = 0; mediaEffects.bridges.length = 0;
   native.options = undefined;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
@@ -46,6 +46,55 @@ function fetcher(handle?: (action: string, generation: number) => Promise<Respon
   return async (_path, init) => { const body = JSON.parse(String(init?.body)); if (body.action === "join") { nonce = body.input.joinNonce; deviceId = body.input.voiceDeviceId; return Response.json(snapshot()); } return handle?.(body.action, body.input.expectedGeneration) ?? Response.json(body.action === "heartbeat" ? snapshot() : body.action === "leave" ? { removals: [] } : { cursor: "0", events: [], oneTimeKeys: { signed_curve25519: 0 }, unusedFallbackKeys: [] }); };
 }
 describe("CallSession deterministic lifetime adapter (native port mocked, no native acceptance claim)", () => {
+  it.each(["conflict", "success"] as const)("keeps awaited drained material→prepared HTTP inside installation guard, then releases it: %s", async mode => {
+    const held = new Set<string>();
+    vi.stubGlobal("navigator", { locks: { async request(name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) {
+      if (held.has(name)) return callback(null);
+      held.add(name); try { await callback({ name }); } finally { held.delete(name); }
+    } } });
+    const remoteId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const withRemote = (value: VoiceSnapshot): VoiceSnapshot => ({ ...value, members: [...value.members, { ...value.members[0], memberId: remoteId, userId: "peer", anchorDeviceId: crypto.randomUUID(), voiceUserId: `@voice_${callId}_${remoteId}:opendiscord.local`, voiceDeviceId: remoteId, joinNonce: remoteId, participantIdentity: `v1:${remoteId}` }] });
+    let heartbeats = 0;
+    const baseFetch = fetcher(action => {
+      if (action === "heartbeat") { heartbeats++; return Response.json(withRemote(snapshot(2))); }
+      if (action === "crypto") return mode === "conflict" ? Response.json({ code: "conflict" }, { status: 409 }) : Response.json({ nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } });
+      if (action === "token") return Response.json({ code: "conflict" }, { status: 409 });
+      return Response.json({ removals: [] });
+    });
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      const response = await baseFetch(path, init);
+      return JSON.parse(String(init?.body)).action === "join" ? Response.json(withRemote(await response.json())) : response;
+    } });
+    await call.admit(remoteId);
+    const audience = call.getSnapshot().roster.map(voiceControlParty).sort((a, b) => a.memberId.localeCompare(b.memberId)), self = audience.find(party => party.memberId === memberId)!, remote = audience.find(party => party.memberId === remoteId)!;
+    const reference = crypto.randomUUID();
+    const proposal = new VoiceContextProposal({ version: 1, purpose: VOICE_CONTROL_EVENT, kind: "context-offer", callId, generation: 1, epochId: crypto.randomUUID(), sequence: 1, reference, transaction: reference, sender: self, recipient: remote, leader: self, audience });
+    const material: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "material", callId, generation: 1, epochId: proposal.epochId, proposalSequence: 1, sender: remote, recipient: self, publisher: remote, audience, keyId: crypto.randomUUID(), reference: crypto.randomUUID(), transaction: crypto.randomUUID(), material: Buffer.alloc(32, 1).toString("base64") };
+    vi.mocked(native.port!.createContextOffer).mockResolvedValue({ ref: Object.freeze({ kind: "context-offer" }), proposal });
+    vi.mocked(native.port!.contextAgreementComplete).mockResolvedValue(true);
+    vi.mocked(native.port!.installContext).mockResolvedValue([material]);
+    mediaEffects.consume.mockImplementation(async control => {
+      const prepared: VoiceOwnerControl = { version: 1, purpose: VOICE_CONTROL_EVENT, kind: "prepared", callId: control.callId, generation: control.generation, epochId: control.epochId, proposalSequence: control.proposalSequence, sender: self, recipient: control.publisher, publisher: control.publisher, audience: control.audience, keyId: control.keyId, reference: control.reference, transaction: crypto.randomUUID() };
+      await mediaEffects.bridges[0].send(prepared);
+    });
+    vi.mocked(native.port!.sendControl).mockImplementation(async control => {
+      expect(control.kind).toBe("prepared");
+      await native.options!.transport({ binding: { callId, memberId, joinNonce: nonce, expectedGeneration: 1 }, request: { kind: "send", body: {}, eventType: VOICE_CONTROL_EVENT, requestId: "prepared", nativeRequestId: "prepared", nativeTxnId: "prepared" }, signal: native.options!.lifetime.signal });
+    });
+    if (mode === "conflict") {
+      await expect(call.confirmFullRoster()).rejects.toBeInstanceOf(VoiceRetirementConflict);
+      expect(heartbeats).toBe(0); expect(native.port!.transition).not.toHaveBeenCalled();
+      expect(call.getSnapshot().state).toBe("ended"); expect(mediaEffects.fence).toHaveBeenCalled();
+      expect(() => mediaEffects.bridges[0].current()).toThrow();
+      await call.close(); expect(native.port!.close).toHaveBeenCalledOnce(); expect(held.size).toBe(0);
+    } else {
+      await call.confirmFullRoster(); expect(call.getSnapshot().state).toBe("agreed");
+      // Future media work is no longer inside installation; ordinary409 discovers once.
+      await expect(mediaEffects.bridges[0].token()).rejects.toMatchObject({ code: "conflict" });
+      expect(heartbeats).toBe(1); expect(native.port!.transition).toHaveBeenCalledOnce();
+    }
+    expect(mediaEffects.consume).toHaveBeenCalledExactlyOnceWith(material); expect(native.port!.sendControl).toHaveBeenCalledOnce();
+  });
   it("private media handoff omits Owner/ref/secret, freezes exact installed context and fences before render observers", async () => {
     call = await CallSession.create({ ...options, fetch: fetcher() }); const proposal = await installCurrent();
     const context = mediaEffects.contexts[0], bridge = mediaEffects.bridges[0];
