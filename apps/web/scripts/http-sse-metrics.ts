@@ -6,6 +6,7 @@ export class SseFrames {
     const frames: Array<{ event: string; data: string }> = [];
     let boundary: number;
     while ((boundary = this.buffer.indexOf("\n\n")) !== -1) {
+      if (boundary > 1_048_576) throw new Error("SSE frame exceeds harness bound");
       const frame = this.buffer.slice(0, boundary);
       this.buffer = this.buffer.slice(boundary + 2);
       let event = "message";
