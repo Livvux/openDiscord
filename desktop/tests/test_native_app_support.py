@@ -98,12 +98,23 @@ class NativeSupportTests(unittest.TestCase):
         self.assertNotIn('private', json.dumps(value).lower())
         self.assertEqual(sum(value['legacy'].values()) + sum(value['hyper'].values()), 3)
 
+    def test_anyhow_display_chain_exposes_only_fixed_user_and_cause_categories(self):
+        data = (b'Error serving connection: hyper::Error(User(Service), client error (SendRequest)\n'
+                b'\nCaused by:\n    operation was canceled)\n'
+                b'private unrelated log line\n')
+        value = flows.driver_error_categories(data)
+        self.assertEqual(value['hyper_user']['Service'], 1)
+        self.assertEqual(value['legacy_display']['SendRequest'], 1)
+        self.assertEqual(value['hyper_cause']['canceled'], 1)
+        self.assertNotIn('private', json.dumps(value).lower())
+        self.assertNotIn('client error', json.dumps(value))
+
     def test_preauth_contract_stops_failed_variant_without_retry_and_redacts_identifiers(self):
         calls = []
         timers = []
 
         def response(number):
-            values = [{'ready': True}, [{flows.ELEMENT: 'private-element'}], True, True]
+            values = [{'ready': True}, [{flows.ELEMENT: 'private-element'}], True, True, True]
             result = io.BytesIO(json.dumps({'value': values[number]}).encode())
             result.status = 200
             return result
@@ -139,8 +150,8 @@ class NativeSupportTests(unittest.TestCase):
                 patch.object(flows.signal, 'setitimer', side_effect=lambda *args: timers.append(args)), \
                 patch.object(flows.signal, 'signal'), \
                 patch.object(flows.time, 'monotonic', return_value=0):
-            summary = flows.transport_contract(clients)
-        self.assertEqual(len(calls), 5)
+            summary = flows.transport_contract(clients[0])
+        self.assertEqual(len(calls), 6)
         self.assertEqual(summary['variants']['urllib_tauri']['status'], 'failed')
         self.assertEqual(len(summary['variants']['urllib_tauri']['commands']), 1)
         self.assertEqual(summary['variants']['urllib_native']['status'], 'passed')

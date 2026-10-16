@@ -100,7 +100,11 @@ class Native:
             'tauri:options': {'application': str(ROOT / 'target/debug/opendiscord-desktop')}}}})
         self.session = value['sessionId']
         self.command('POST', '/timeouts', {'script': 60000, 'pageLoad': 60000, 'implicit': 0})
-        self.goto('/sign-in')
+        self.command('POST', '/url', {'url': ORIGIN + '/sign-in'})
+        if self.profile == 0:
+            metadata['preauth_transport_contract'] = transport_contract(self)
+            persist()
+        wait(lambda: self.script('return document.readyState') == 'complete')
 
     def command(self, method, path, body=None, *, timeout=40):
         return self.request(method, '/session/' + self.session + path, body, timeout=timeout)
@@ -248,20 +252,50 @@ LEGACY_ERROR_KINDS = ('Canceled', 'ChannelClosed', 'Connect', 'UserUnsupportedRe
                       'UserUnsupportedVersion', 'UserAbsoluteUriRequired', 'SendRequest')
 HYPER_ERROR_KINDS = ('Parse', 'User', 'IncompleteMessage', 'UnexpectedMessage', 'Canceled',
                      'ChannelClosed', 'Io', 'HeaderTimeout', 'Body', 'BodyWrite', 'Shutdown', 'Http2')
+HYPER_USER_KINDS = ('Body', 'BodyWriteAborted', 'InvalidConnectWithBody', 'Service',
+                    'UnexpectedHeader', 'UnsupportedStatusCode', 'NoUpgrade', 'ManualUpgrade',
+                    'DispatchGone', 'AbortedByCallback')
+HYPER_CAUSE_PHRASES = {
+    'canceled': b'operation was canceled',
+    'incomplete_message': b'connection closed before message completed',
+    'channel_closed': b'channel closed',
+    'invalid_content_length': b'invalid content-length parsed',
+    'invalid_header': b'invalid HTTP header parsed',
+    'body_read': b'error reading a body from connection',
+    'body_write': b'error writing a body to connection',
+    'shutdown': b'error shutting down connection',
+    'connection_io': b'connection error',
+}
 
 
 def driver_error_categories(data):
     categories = {'legacy': {kind: 0 for kind in LEGACY_ERROR_KINDS},
-                  'hyper': {kind: 0 for kind in HYPER_ERROR_KINDS}}
-    for line in data.splitlines():
+                  'hyper': {kind: 0 for kind in HYPER_ERROR_KINDS},
+                  'hyper_user': {kind: 0 for kind in HYPER_USER_KINDS},
+                  'legacy_display': {kind: 0 for kind in LEGACY_ERROR_KINDS},
+                  'hyper_cause': {kind: 0 for kind in HYPER_CAUSE_PHRASES}}
+    lines = data.splitlines()
+    for index, line in enumerate(lines):
         if not line.startswith(DRIVER_SIGNATURES['connection_error']):
             continue
+        # anyhow1.0.103 Debug renders Display plus indented Caused by lines.
+        block = [line]
+        for continuation in lines[index + 1:index + 13]:
+            if not continuation or continuation == b'Caused by:' or continuation.startswith((b' ', b'\t')):
+                block.append(continuation)
+            else:
+                break
+        block = b'\n'.join(block)
         for family, pattern in [('legacy', rb'hyper_util::client::legacy::Error\(([A-Za-z]+)[,)]'),
-                                ('hyper', rb'hyper::Error\(([A-Za-z]+)[(,)]')]:
-            for match in re.finditer(pattern, line):
+                                ('hyper', rb'hyper::Error\(([A-Za-z]+)[(,)]'),
+                                ('hyper_user', rb'hyper::Error\(User\(([A-Za-z]+)\)'),
+                                ('legacy_display', rb'client error \(([A-Za-z]+)\)')]:
+            for match in re.finditer(pattern, block):
                 name = match.group(1).decode('ascii')
                 if name in categories[family]:
                     categories[family][name] += 1
+        for kind, phrase in HYPER_CAUSE_PHRASES.items():
+            categories['hyper_cause'][kind] += block.count(phrase)
     return categories
 
 
@@ -269,7 +303,7 @@ class ContractDeadline(TimeoutError):
     pass
 
 
-def transport_contract(clients, budget=20):
+def transport_contract(client, budget=20):
     """Pre-auth read-only diagnostic; never changes/replaces the main transport."""
     names = ('urllib_tauri', 'urllib_native', 'persistent_tauri')
     outcomes = {name: {'status': 'not-run'} for name in names}
@@ -283,8 +317,7 @@ def transport_contract(clients, budget=20):
     limit = min(budget, old_remaining) if old_remaining > 0 else budget
     signal.setitimer(signal.ITIMER_REAL, limit)
     try:
-        for index, name in enumerate(names):
-            client = clients[index]
+        for name in names:
             outcome = {'status': 'running', 'commands': []}
             outcomes[name] = outcome
             connection = None
@@ -325,6 +358,9 @@ def transport_contract(clients, budget=20):
                 enabled = request('GET', prefix + '/element/' + identifier + '/enabled')
                 if displayed is not True or enabled is not True:
                     raise ValueError('Public email control contract failed')
+                executed = request('POST', prefix + '/execute/sync', {'script': 'return true', 'args': []})
+                if executed is not True:
+                    raise ValueError('Public read-only script contract failed')
                 outcome['status'] = 'passed'
             except ContractDeadline:
                 outcome['status'] = 'deadline_exceeded'
@@ -569,8 +605,6 @@ def main():
                     client.script('localStorage.setItem("native-profile",arguments[0]);return true', str(index))
                 assert [c.script('return localStorage.getItem("native-profile")') for c in clients] == ['0', '1', '2']
                 # Probe real application file input after enrollment below; never synthetic inputs.
-            metadata['preauth_transport_contract'] = transport_contract(clients)
-            persist()
             alice, bob, recovered = clients
             with stage('signup_login'):
                 email = alice.signup('Native Alice')
