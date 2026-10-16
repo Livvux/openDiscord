@@ -40,7 +40,8 @@ test("Voice HTTP uses the real browser session and registered enrollment without
   expect(result).toMatchObject({ registered: 200, joined: 200, heartbeat: 200, sync: 200, empty: true, denied: 403, deniedCode: "forbidden", left: 200, caches: Array(5).fill("private, no-store") });
   for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND"]) {
     const response = await page.context().request.fetch("/api/voice/control", { method });
-    expect(response.status()).toBe(405);
+    // Next16.4 resolveHandler rejects unrecognized methods with400 before userland.
+    expect(response.status()).toBe(method === "PROPFIND" ? 400 : 405);
     const cacheDirectives = (response.headers()["cache-control"] ?? "").split(",").map(value => value.trim());
     expect(cacheDirectives).toEqual(expect.arrayContaining(["private", "no-store"]));
     expect(response.headers()["access-control-allow-origin"]).toBeUndefined();
