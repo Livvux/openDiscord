@@ -34,7 +34,7 @@ jobs:
       LIVEKIT_API_KEY: devkey
       LIVEKIT_API_SECRET: secret
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
@@ -106,6 +106,8 @@ jobs:
             apps/web/test-results/**/trace.zip
             apps/web/test-results/**/error-context.md
             apps/web/test-results/**/signup-diagnostics.json
+            apps/web/test-results/**/community-scroll-diagnostic.json
+            apps/web/test-results/**/error-context-initial-sync.md
           retention-days: 3
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
@@ -120,7 +122,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
