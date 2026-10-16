@@ -5,6 +5,23 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Page } from "@playwright/test";
 
+/** Preserve every nested output path; never follow links or serve a directory. */
+export async function readVoiceMediaAssets(directory: string): Promise<Map<string, Buffer>> {
+  const assets = new Map<string, Buffer>();
+  async function visit(prefix: string): Promise<void> {
+    const entries = await readdir(join(directory, prefix), { withFileTypes: true });
+    for (const entry of entries) {
+      if (!/^[A-Za-z0-9_.-]+$/.test(entry.name) || entry.name === "." || entry.name === ".." || entry.isSymbolicLink()) throw new Error("Unexpected static asset path.");
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await visit(name);
+      else if (entry.isFile()) assets.set(name, await readFile(join(directory, name)));
+      else throw new Error("Unexpected static asset type.");
+    }
+  }
+  await visit("");
+  return assets;
+}
+
 /** Isolated CI-only static bundle. No app/proof route or HTTP transport replacement. */
 export async function buildVoiceMediaHarness() {
   // Playwright loads these Node-only TS helpers as CJS in this package.
@@ -19,12 +36,9 @@ export async function buildVoiceMediaHarness() {
     build: { target: "esnext", outDir: directory, emptyOutDir: true, assetsInlineLimit: 0, sourcemap: false,
       rolldownOptions: { input: resolve("e2e/fixtures/voice-media-session.ts"), preserveEntrySignatures: "strict", output: { entryFileNames: "entry.js", chunkFileNames: "chunk-[name].js", assetFileNames: "[name][extname]" } } },
   });
-  const names = await readdir(directory);
+  const assets = await readVoiceMediaAssets(directory);
+  const names = [...assets.keys()];
   if (!names.includes("entry.js") || !names.some(name => name.endsWith(".wasm")) || !names.some(name => name.includes("e2ee") && name.endsWith(".mjs"))) throw new Error("Actual worker/WASM bundle assets missing.");
-  const assets = new Map(await Promise.all(names.map(async name => {
-    if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error("Unexpected static asset path.");
-    return [name, await readFile(join(directory, name))] as const;
-  })));
   return {
     async serve(page: Page) {
       const origin = new URL(page.url()).origin;
