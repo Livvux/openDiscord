@@ -4,12 +4,14 @@ import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
 import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
 import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
+import { decryptionDiagnostic, publicShieldCode, publicShieldColor, type DecryptionDiagnostic, type DecryptionStage, type ShieldDiagnostic } from "./decryption-diagnostics";
 
 type SDK = typeof Matrix;
 type Outgoing = Matrix.KeysUploadRequest | Matrix.KeysQueryRequest | Matrix.KeysClaimRequest | Matrix.ToDeviceRequest | Matrix.SignatureUploadRequest | Matrix.RoomMessageRequest | Matrix.KeysBackupRequest;
 type Metadata = { id: string; secret: string; storeKey: string };
 export type TrustedDevice = { userId: string; id: string; verified: boolean; fingerprint: string };
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
+export type PrivateMessageView = { id: string; own: boolean; createdAt: string; senderId: string } & ({ body: string; error?: never; diagnostic?: never } | { body: null; error: string; diagnostic: DecryptionDiagnostic });
 const metadataSchema = z.object({ id: z.uuid(), secret: z.string().regex(/^[a-f0-9]{64}$/), storeKey: z.string().min(32) });
 const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(2), origin: z.url(), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
 const receiptSchema = z.object({ id: z.uuid(), recipient: z.uuid() }).strict();
@@ -259,30 +261,43 @@ export class PrivateMessaging {
       await dmFetch("/api/dm", { action: "send", id: conversation, input: { transactionId: transaction, content } }, this.metadata);
     });
   }
-  async decrypt(envelopes: DirectEnvelope[], conversation: string, peer: string): Promise<{ id: string; body: string | null; error?: string; own: boolean; createdAt: string; senderId: string }[]> {
+  async decrypt(envelopes: DirectEnvelope[], conversation: string, peer: string): Promise<PrivateMessageView[]> {
     return this.serial(async () => {
-      const result = [];
+      const result: PrivateMessageView[] = [];
       let historyChanged = false;
       for (const envelope of envelopes) {
         const base = { id: envelope.id, own: envelope.senderId === this.userId, createdAt: envelope.createdAt, senderId: envelope.senderId };
+        let stage: DecryptionStage = "envelope";
+        let shieldDiagnostic: ShieldDiagnostic | undefined;
         try {
           if (envelope.conversationId !== conversation || ![this.userId, peer].includes(envelope.senderId)) throw new Error("Unexpected message sender.");
           const event = { type: "m.room.encrypted", event_id: `$${envelope.id}`, sender: matrixUser(envelope.senderId), origin_server_ts: new Date(envelope.createdAt).getTime(), content: envelope.content };
+          stage = "sdk_decrypt";
           const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
-          if (decrypted.shieldState(true).color !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
+          stage = "shield";
+          const shield = decrypted.shieldState(true);
+          const shieldColor = shield.color;
+          shieldDiagnostic = { shieldColor: publicShieldColor(shieldColor, this.C), shieldCode: publicShieldCode(shield.code, this.C) };
+          if (shieldColor !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
+          stage = "sender_binding";
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
+          stage = "device_trust";
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device?.isVerified() && !(envelope.senderId === this.userId && decrypted.senderDevice.toString() === this.deviceId)) throw new Error("Verify the sender's device to read this message.");
+          stage = "plaintext_schema";
           const plain = plainMessageSchema.parse(z.object({ content: z.unknown() }).parse(JSON.parse(decrypted.event)).content);
+          stage = "message_binding";
           if (plain.conversation !== conversation || plain.transaction !== envelope.transactionId) throw new Error("Message binding mismatch.");
+          stage = "history_schema";
           const verified = historyEntrySchema.parse({ envelope, message: plain, verifiedAt: new Date().toISOString() });
+          stage = "replay_storage";
           await this.historyStore.acceptEvent(verified.envelope);
           result.push({ ...base, body: plain.body });
           if (!this.verifiedHistory.has(envelope.id)) {
             this.verifiedHistory.set(envelope.id, verified);
             historyChanged = true;
           }
-        } catch { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup." }); }
+        } catch (error: unknown) { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.", diagnostic: decryptionDiagnostic(stage, error, this.C, shieldDiagnostic) }); }
       }
       if (historyChanged) {
         this.verifiedHistory = new Map(boundedHistory([...this.verifiedHistory.values()]).map((entry) => [entry.envelope.id, entry]));
