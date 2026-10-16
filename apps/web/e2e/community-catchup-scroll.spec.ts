@@ -13,8 +13,8 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     await createCommunity(writer, "Catchup scroll");
     const channelUrl = writer.url();
     const channelId = new URL(channelUrl).pathname.split("/").at(-1)!;
-    for (let index = 0; index < 4; index++) {
-      await sendMessage(writer, `History ${index}: ${"A long message keeps this channel scrollable. ".repeat(40)}`.trim());
+    for (let index = 0; index < 3; index++) {
+      await sendMessage(writer, `History ${index}: ${"A long message keeps this channel scrollable. ".repeat(60)}`.trim());
     }
     reader = await joinAsNewUser(browser, "Scroll Reader", await createInviteLink(writer));
     await reader.goto("/app");
@@ -31,7 +31,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     });
     await reader.goto(channelUrl);
     const log = reader.getByRole("log", { name: "Messages in #general" });
-    await expect(log.getByRole("listitem")).toHaveCount(4);
+    await expect(log.getByRole("listitem")).toHaveCount(3);
     await expect(log.locator("xpath=ancestor::*[@data-realtime][1]")).toHaveAttribute("data-realtime", "open");
     await expect.poll(() => held).toBe(1);
     expect(forwarded).toBe(0);
@@ -47,7 +47,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     expect(await (await response).finished()).toBeNull();
     // Let React commit and its layout effect settle after the real response body finishes.
     await reader.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect(log.getByRole("listitem")).toHaveCount(5);
+    await expect(log.getByRole("listitem")).toHaveCount(4);
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeLessThan(2);
     expect(forwarded).toBe(1);
     await scroller.hover();
@@ -56,6 +56,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     await expect.poll(bottomGap).toBeLessThan(2);
     await sendMessage(writer, "Live at the bottom");
     await expect(log.getByText("Live at the bottom", { exact: true })).toBeVisible();
+    await expect(log.getByRole("listitem")).toHaveCount(5);
     await expect.poll(bottomGap).toBeLessThan(2);
     expect(errors).toEqual([]);
     await reader.screenshot({ path: testInfo.outputPath("community-catchup-scroll.png"), fullPage: true });
