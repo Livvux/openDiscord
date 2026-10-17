@@ -191,7 +191,7 @@ export function MessageItem(props: MessageItemProps) {
             {/* Imported authors share the importer's account, so colour them by name instead. */}
             {message.authorImported ? <span className={`font-medium ${nameColor(message.authorName)}`}>{message.authorName}</span> : (
               <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} openOnClick>
-                <button type="button" aria-label={`Actions for ${message.authorName}`} className={`rounded text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring ${nameColor(message.authorId)}`}>{message.authorName}</button>
+                <button type="button" aria-label={`Actions for ${message.authorName}`} className={`min-h-6 rounded text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring ${nameColor(message.authorId)}`}>{message.authorName}</button>
               </UserContextMenu>
             )}
             {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
