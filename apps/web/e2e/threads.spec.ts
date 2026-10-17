@@ -28,8 +28,8 @@ test.describe("threads", () => {
     await expect(ownerRoot.getByRole("button", { name: /1 reply/ })).toBeVisible();
     await expect(owner.getByRole("log", { name: /Messages in/ }).getByText("Me! Saturday works")).toHaveCount(0);
     await ownerRoot.getByRole("button", { name: /1 reply/ }).click();
-    await expect(owner.getByRole("complementary").getByText("Me! Saturday works")).toBeVisible();
+    await expect(owner.getByRole("complementary", { name: "Thread by Theo Thread" }).getByText("Me! Saturday works")).toBeVisible();
     await owner.keyboard.press("Escape");
-    await expect(owner.getByRole("complementary")).toHaveCount(0);
+    await expect(owner.getByRole("complementary", { name: "Thread by Theo Thread" })).toHaveCount(0);
   });
 });
