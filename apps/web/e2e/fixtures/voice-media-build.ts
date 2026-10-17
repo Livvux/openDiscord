@@ -33,7 +33,8 @@ export async function buildVoiceMediaHarness() {
   const vite: { build(config: Record<string, unknown>): Promise<unknown> } = await import(pathToFileURL(vitePath).href);
   const directory = await mkdtemp(join(tmpdir(), "opendiscord-media-ci-"));
   await vite.build({
-    configFile: false, root: resolve("."), base: "/__voice-media-ci/", logLevel: "warn",
+    // publicDir off: copying public/ (~4,000 twemoji SVGs) meant ~4,000 page.route calls per page and a test near its timeout.
+    configFile: false, publicDir: false, root: resolve("."), base: "/__voice-media-ci/", logLevel: "warn",
     resolve: { alias: { "@": resolve("src") } },
     build: { target: "esnext", outDir: directory, emptyOutDir: true, assetsInlineLimit: 0, sourcemap: false,
       rolldownOptions: { input: resolve("e2e/fixtures/voice-media-session.ts"), preserveEntrySignatures: "strict", output: { entryFileNames: "entry.js", chunkFileNames: "chunk-[name].js", assetFileNames: "[name][extname]" } } },
