@@ -133,7 +133,9 @@ export function PrivateMessages({ userId, userName, target, targetIsFriend = fal
   async function loadEarlier() {
     if (!client || !active || !envelopes.length) return;
     const data = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${active.id}&before=${envelopes[0].id}`);
-    const all = [...data.messages, ...envelopes];
+    // The polling refresh may be in flight or stalled; never decrypt against a stale peer identity.
+    await client.sync(active.peerId);
+    const all = [...new Map([...data.messages, ...history.current].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
     const decoded = await client.decrypt(all, active.id, active.peerId);
     if (selectedRef.current !== active.id) return;
     history.current = all;

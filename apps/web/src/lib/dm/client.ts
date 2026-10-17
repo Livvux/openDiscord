@@ -119,12 +119,17 @@ export class PrivateMessaging {
       await dmFetch("/api/dm", { action: "register", input: { id: metadata.id, secret: metadata.secret, name: "Web browser" } });
       await client.flush();
       await client.query([userId]);
-      const identity = await machine.getIdentity(new C.UserId(matrixUser(userId)));
-      if (!identity) await client.bootstrap().catch(async (error: unknown) => {
+      const own = new C.UserId(matrixUser(userId));
+      const identity = await machine.getIdentity(own);
+      // We hold the identity but never signed this device: an earlier setup lost a response. Re-run it (tests/dm-matrix).
+      const device = identity && await machine.getDevice(own, new C.DeviceId(metadata.id));
+      const unsigned = !!device && (await machine.crossSigningStatus()).hasMaster && !device.isCrossSignedByOwner();
+      if (!identity || unsigned) await client.bootstrap().catch(async (error: unknown) => {
         // Another browser won a concurrent first setup. The SDK drops our mismatched private keys on the
         // next query (tests/dm-matrix), so continue as an unverified second device that must be verified.
-        await client.query([userId]);
-        if (!(await machine.getIdentity(new C.UserId(matrixUser(userId))))) throw error;
+        // Still holding the master key means the identity is ours and the failure was real, e.g. the network.
+        await client.query([userId]).catch(() => { throw error; });
+        if ((await machine.crossSigningStatus()).hasMaster || !(await machine.getIdentity(own))) throw error;
       });
       window.addEventListener("pagehide", () => client.close(), { once: true });
       window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
@@ -310,7 +315,7 @@ export class PrivateMessaging {
           stage = "sender_binding";
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           stage = "device_trust";
-          // Cached state is enough: refresh() runs sync(peer), which re-queries the peer, before every decrypt,
+          // Cached state is enough: refresh() and loadEarlier() run sync(peer), which re-queries the peer, before every decrypt,
           // and a device first seen after that query is unknown here, so the message fails closed until then.
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device || await this.identityChanged(envelope.senderId) || !(await this.acceptsDevice(envelope.senderId, device))) throw new Error("Verify the sender's device to read this message.");

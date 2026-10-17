@@ -64,7 +64,7 @@ describe("per-message processing failure boundaries", () => {
   const machine = {
     outgoingRequests: vi.fn(async () => []),
     queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
-    markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})),
+    markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})), crossSigningStatus: vi.fn(async () => ({ hasMaster: false })),
     decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
     shareRoomKey: vi.fn(async () => []), close: vi.fn(),
   };
@@ -85,6 +85,8 @@ describe("per-message processing failure boundaries", () => {
     vi.stubGlobal("localStorage", { getItem: () => JSON.stringify({ id: randomUUID(), secret: "a".repeat(64), storeKey: "b".repeat(64) }), setItem: vi.fn() });
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
     client = await PrivateMessaging.open(user);
+    // open() inspects its own device once; the assertions below concern decrypt only.
+    machine.getDevice.mockClear();
     envelope = { id: randomUUID(), conversationId: conversation, senderId: peer, deviceId: device, transactionId: transaction, createdAt: new Date().toISOString(),
       content: { algorithm: "m.megolm.v1.aes-sha2", sender_key: "a".repeat(43), device_id: device, session_id: "b".repeat(43), ciphertext: "c".repeat(64) } };
   });

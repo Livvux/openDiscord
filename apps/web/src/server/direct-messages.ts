@@ -187,6 +187,8 @@ function parseDeviceEvent(type: string, input: unknown): Record<string, unknown>
   if (type.startsWith("m.key.verification.") && verification) return parse(verification, input);
   const common = { action: z.enum(["request", "request_cancellation"]), requesting_device_id: uuid, request_id: transaction };
   if (type === "m.secret.request") return parse(z.object({ ...common, name: z.enum(["m.cross_signing.master", "m.cross_signing.self_signing", "m.cross_signing.user_signing", "m.megolm_backup.v1"]).optional() }).strict(), input);
+  // Matrix spec: room_id and session_id may be absent for m.no_olm.
+  if (type === "m.room_key.withheld") return parse(z.object({ algorithm: z.literal("m.megolm.v1.aes-sha2"), code: z.enum(["m.blacklisted", "m.unverified", "m.unauthorised", "m.unavailable", "m.no_olm"]), reason: z.string().max(256).optional(), from_device: uuid.optional(), room_id: z.string().max(128).optional(), sender_key: base64Schema.max(64), session_id: base64Schema.max(128).optional() }).strict(), input);
   if (type === "m.room_key_request") return parse(z.object({ ...common, body: z.object({ algorithm: z.literal("m.megolm.v1.aes-sha2"), room_id: z.string().max(128), sender_key: base64Schema.max(64), session_id: base64Schema.max(128) }).strict().optional() }).strict(), input);
   throw invalid("Unsupported device event.");
 }
@@ -346,7 +348,8 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       }
       result = { one_time_keys, failures: {} };
     } else {
-      if (!["m.room.encrypted", "m.secret.request", "m.room_key_request"].includes(data.eventType) && !/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(data.eventType)) throw invalid("Only encrypted or verification device events are supported.");
+      // m.room_key.withheld: the SDK tells an excluded (e.g. unverified own) device why it got no key; metadata only.
+      if (!["m.room.encrypted", "m.secret.request", "m.room_key_request", "m.room_key.withheld"].includes(data.eventType) && !/^m\.key\.verification\.(request|ready|start|accept|key|mac|done|cancel)$/.test(data.eventType)) throw invalid("Only encrypted or verification device events are supported.");
       const recipients = record(body.messages);
       if (Object.keys(recipients).length > 20) throw invalid("Too many recipients.");
       let deliveries = 0;
