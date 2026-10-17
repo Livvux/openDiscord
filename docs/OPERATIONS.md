@@ -61,7 +61,7 @@ is written only after a complete encrypted off-host readback. It does not contin
 the object remains available later. Monitor state suppresses repeat emails for one hour and sends
 a recovery email after a notified failure resolves.
 
-The owner-only JSON configuration contains `mode` (`health`, `backup` or activation-only `voice`), `smtp_url`, `from`, and
+The owner-only JSON configuration contains `mode` (`health`, `backup`, activation-only `voice` or `scanner`), `smtp_url`, `from`, and
 `to`; the file must belong to the executing user and have no group/other permissions. SMTP uses
 verified TLS (implicit TLS for `smtps`, mandatory STARTTLS for `smtp`). Credentials are never
 included in check output or exception logs. State is stored in `/var/lib/opendiscord-monitor`.
@@ -308,3 +308,20 @@ SDK, settle its claim and exit with its pool closed. No claim lease is shortened
 children, proxy connections, fixture rows and exact room are cleaned up under the CI step's
 outer deadline. This proves the isolated process-kill/lease-recovery path, not production timer
 cadence, host/container-daemon failure, real media or authenticated browser acceptance.
+
+
+### Private scanner operations (not installed by source)
+
+The dedicated [scanner operations artifact](../ops/scanner/README.md) pins a private ClamAV daemon,
+persistent freshclam definitions, a 4 GiB ordinary Compose cap and five-minute operator monitoring.
+Its source alone does not prove production activation. Self-hosted integration stays optional;
+the official instance adopts mandatory scanning only after the documented freshness/network/real
+upload/import gates. Missing engine then closes new uploads/imports while existing downloads remain
+unchanged. Loaded definitions older than 48 hours alarm; current app code has no age rejection gate.
+
+The encrypted backup job calls adjacent `capture-scanner-recovery.py`. The documented optional
+`OPENDISCORD_SCANNER_COMPOSE_DIR` becomes required when the captured running app has `CLAMAV_HOST`.
+It captures exact scanner Compose/environment, actual app scanner endpoint and installed monitor
+configuration/units, never signature databases. Install both backup scripts together; configure the
+variable through the existing protected backup service EnvironmentFile. Restore private scanner
+configuration and fresh definitions before app acceptance; retain failclosed policy during recovery.
