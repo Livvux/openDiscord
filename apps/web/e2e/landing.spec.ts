@@ -23,6 +23,34 @@ test("landing page renders without errors and links to sign-up", async ({ page }
   expect(errors).toEqual([]);
 });
 
+test("landing page is available in other languages with hreflang alternates", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+
+  await page.goto("/de");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Communities gehören allen.");
+  await expect(page.locator("main").locator("xpath=ancestor::*[@lang][1]")).toHaveAttribute("lang", "de");
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", /\/fr$/);
+  await page.getByRole("tab", { name: "Gehostet" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("Community gründen");
+  await expectNoA11yViolations(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  // The footer lists every language; switching goes to the localized page.
+  await page.getByRole("contentinfo").getByRole("link", { name: "Español" }).click();
+  await expect(page).toHaveURL(/\/es$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Las comunidades son de todos.");
+  expect(errors).toEqual([]);
+
+  // English stays canonical at `/`; unknown locales render the not-found page, marked noindex
+  // (with cacheComponents the response has already streamed, so the status stays 200).
+  for (const path of ["/en", "/xx"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: "This page could not be found" })).toBeVisible();
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+  }
+});
+
 test("sends the security headers on every page, with or without a TLS proxy in front", async ({ request }) => {
   const headers = (await request.get("/")).headers();
   expect(headers["strict-transport-security"]).toBe("max-age=31536000");

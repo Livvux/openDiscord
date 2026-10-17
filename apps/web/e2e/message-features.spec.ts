@@ -30,7 +30,7 @@ test.describe("replies, reactions, pins and markdown", () => {
     // Reactions sync live and toggle.
     await rules.hover();
     await rules.getByRole("button", { name: "Add reaction" }).click();
-    await member.getByRole("button", { name: "React with 🎉" }).click();
+    await member.getByRole("button", { name: /party popper/i }).click();
     const ownerRules = owner.getByRole("log").getByRole("listitem").filter({ hasText: "Rules" }).first();
     await expect(ownerRules.getByRole("button", { name: "🎉 1 reaction" })).toBeVisible();
     await ownerRules.getByRole("button", { name: "🎉 1 reaction" }).click();
