@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { CopyIcon, FlagIcon, HashIcon, SmilePlusIcon } from "lucide-react";
 import { EmojiSelector } from "../emoji-selector";
+import { GifSelector } from "../gif-selector";
+import { GifEmbed } from "../gif-embed";
+import { gifSource } from "@/lib/gifs";
 import { EmojiText } from "../emoji-text";
 import { insertEmoji } from "@/lib/emoji";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -40,7 +43,8 @@ function PrivateMessageItem({ message, peerName, onError, onReport }: {
     <ContextMenu onOpenChange={(open) => { if (open) handoffFocus.current = false; }}>
       <ContextMenuTrigger render={<li />} className={`max-w-2xl rounded-lg border p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring ${message.own ? "ml-auto bg-muted/40" : "mr-auto"}`}>
         <p className="mb-1 text-xs text-muted-foreground">{message.own ? "You" : peerName} · <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></p>
-        <p className="whitespace-pre-wrap break-words" data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>
+        {/* A GIF embed can't live inside <p>; text keeps <p>, which native acceptance reads. */}
+        {message.body && gifSource(message.body) ? <div className="whitespace-pre-wrap break-words"><GifEmbed url={message.body} /></div> : <p className="whitespace-pre-wrap break-words" data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>}
         {!message.own && message.body && <Button className="mt-2" variant="ghost" size="sm" onClick={onReport}>Report private message</Button>}
         {notice && <p role="status" className="mt-1 text-xs text-muted-foreground">{notice}</p>}
       </ContextMenuTrigger>
@@ -194,12 +198,18 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
       </div>
       {active?.status === "accepted" && !active.blocked && <form className="grid gap-2 border-t p-4" onSubmit={(e) => { e.preventDefault(); if (client && text.trim()) void run(async () => { await client.send(active.id, active.peerId, text); setText(""); }); }}>
         {!peersReady && <p className="text-xs text-muted-foreground">Verify all active devices in <button type="button" className="underline" onClick={() => setSecurity(true)}>Devices and recovery</button> before sending.</p>}
-        <label className="sr-only" htmlFor="private-message">Encrypted message</label><textarea ref={textarea} id="private-message" className={`${field} min-h-20 resize-y`} maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)} disabled={!client || busy} placeholder="Write an encrypted message" /><div className="flex items-center justify-between"><EmojiSelector returnFocusTo={textarea}
+        <label className="sr-only" htmlFor="private-message">Encrypted message</label><textarea ref={textarea} id="private-message" className={`${field} min-h-20 resize-y`} maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)} disabled={!client || busy} placeholder="Write an encrypted message" /><div className="flex items-center justify-between"><div className="flex items-center gap-1"><EmojiSelector returnFocusTo={textarea}
           trigger={<Button type="button" variant="ghost" size="icon" aria-label="Choose emoji" disabled={!client || busy}><SmilePlusIcon /></Button>}
           onPick={(emoji) => {
             const result = insertEmoji(text, emoji, textarea.current?.selectionStart ?? text.length, textarea.current?.selectionEnd ?? text.length, DM_MAX_TEXT);
             if (result) { pendingCaret.current = result.caret; setText(result.value); }
-          }} /><Button type="submit" disabled={!client || busy || !peersReady || !text.trim()}>Send encrypted message</Button></div>
+          }} />
+          <GifSelector returnFocusTo={textarea} disabled={!client || busy || !peersReady}
+            onPick={(url) => {
+              if (!client || !active || busy || !peersReady) return;
+              void run(async () => { await client.send(active.id, active.peerId, url); });
+            }} />
+          </div><Button type="submit" disabled={!client || busy || !peersReady || !text.trim()}>Send encrypted message</Button></div>
       </form>}
     </section>
   </div>;

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
+import "gif-picker-react/style.css";
 
 const inter = Inter({
   variable: "--font-inter",

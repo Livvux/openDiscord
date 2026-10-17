@@ -11,6 +11,7 @@ import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
 import { assetShortcode, encodeAssetShortcodes, type AssetRef } from "@/lib/community-assets";
 import { EmojiSelector } from "../emoji-selector";
+import { GifSelector } from "../gif-selector";
 import { insertEmoji } from "@/lib/emoji";
 
 interface ComposerProps {
@@ -281,6 +282,12 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
             pendingCaret.current = result.caret;
             setDraft(result.value);
             setMentionAt(null);
+          }} />
+        <GifSelector returnFocusTo={textarea}
+          disabled={sending || uploading || !!failed || (!!isPublic && !publicAcknowledged)}
+          onPick={(url) => {
+            if (sending || uploading || failed || (isPublic && !publicAcknowledged)) return;
+            void onSend(url, [], []);
           }} />
         {mediaEnabled && (
           <>
