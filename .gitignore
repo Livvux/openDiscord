@@ -3,3 +3,4 @@ node_modules
 .DS_Store
 backups/
 apps/web/load-characterization.json
+apps/web/http-sse-characterization.json

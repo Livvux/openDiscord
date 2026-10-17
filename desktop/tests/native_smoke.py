@@ -12,10 +12,11 @@ import threading
 import time
 import urllib.request
 
-from native_support import cleanup, has_complete_bytes
+from native_support import cleanup, has_complete_bytes, native_save_dialog
 
 EVIDENCE = pathlib.Path('native-evidence')
 EVIDENCE.mkdir(exist_ok=True)
+save_diagnostics = {}
 
 
 class Fixture(http.server.BaseHTTPRequestHandler):
@@ -79,6 +80,13 @@ def eventually(check, message):
     raise AssertionError(message)
 
 
+def complete_download(path, expected, closed, diagnostic):
+    exact = has_complete_bytes(path, expected, diagnostic.setdefault('download', {}))
+    dialog_closed = closed()
+    diagnostic['phase'] = 'complete' if exact and dialog_closed else 'await_file' if dialog_closed else 'await_closed'
+    return exact and dialog_closed
+
+
 try:
     for _ in range(60):
         try:
@@ -108,29 +116,26 @@ try:
     cancelled = home / 'cancel.txt'
     default_cancelled = home / 'Downloads' / 'native-cancel.txt'
     # A download must display a native Save dialog before any bytes are written.
-    script("var a=document.createElement('a'); a.href='/download'; a.download='native-proof.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Save dialog absent')
-    subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
-    assert not saved.exists(), 'Destination written before Save consent'
-    subprocess.run(['xdotool', 'type', str(saved)], check=True)
-    subprocess.run(['xdotool', 'key', 'Return'], check=True)
-    eventually(lambda: has_complete_bytes(saved, b'OpenDiscord native download acceptance\n'), 'Download bytes incomplete')
-    script("var a=document.createElement('a'); a.href='/cancel'; a.download='native-cancel.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Cancel Save dialog absent')
-    subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
-    subprocess.run(['xdotool', 'type', str(cancelled)], check=True)
-    assert not cancelled.exists() and not default_cancelled.exists(), 'Destination written before consent'
-    subprocess.run(['xdotool', 'key', 'Escape'], check=True)
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode != 0, 'Save cancellation failed')
+    save_diagnostics['http_download'] = {}
+    saved_closed = native_save_dialog(saved,
+        lambda: script("var a=document.createElement('a'); a.href='/download'; a.download='native-proof.txt'; document.body.append(a); a.click(); return true"),
+        eventually, save_diagnostics['http_download'])
+    eventually(lambda: complete_download(saved, b'OpenDiscord native download acceptance\n', saved_closed,
+                                         save_diagnostics['http_download']), 'Download bytes incomplete or Save dialog still open')
+    save_diagnostics['cancellation'] = {}
+    cancelled_closed = native_save_dialog(cancelled,
+        lambda: script("var a=document.createElement('a'); a.href='/cancel'; a.download='native-cancel.txt'; document.body.append(a); a.click(); return true"),
+        eventually, save_diagnostics['cancellation'], cancel=True, also_absent=(default_cancelled,))
+    eventually(cancelled_closed, 'Save cancellation failed')
+    save_diagnostics['cancellation']['phase'] = 'complete'
     assert script('return document.readyState') == 'complete', 'WebView did not resume after cancellation'
     assert not cancelled.exists() and not default_cancelled.exists(), 'Cancelled transfer wrote a file'
-    script("var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['native blob export'],{type:'application/octet-stream'})); a.download='native-blob.txt'; document.body.append(a); a.click(); return true")
-    eventually(lambda: subprocess.run(['xdotool', 'search', '--name', 'Save OpenDiscord download'], capture_output=True, check=False).returncode == 0, 'Blob Save dialog absent')
-    subprocess.run(['xdotool', 'key', 'ctrl+a'], check=True)
-    assert not blob_saved.exists(), 'Blob written before consent'
-    subprocess.run(['xdotool', 'type', str(blob_saved)], check=True)
-    subprocess.run(['xdotool', 'key', 'Return'], check=True)
-    eventually(lambda: has_complete_bytes(blob_saved, b'native blob export'), 'Blob export bytes incomplete')
+    save_diagnostics['blob_download'] = {}
+    blob_closed = native_save_dialog(blob_saved,
+        lambda: script("var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['native blob export'],{type:'application/octet-stream'})); a.download='native-blob.txt'; document.body.append(a); a.click(); return true"),
+        eventually, save_diagnostics['blob_download'])
+    eventually(lambda: complete_download(blob_saved, b'native blob export', blob_closed,
+                                         save_diagnostics['blob_download']), 'Blob export bytes incomplete or Save dialog still open')
     # A subsequent completed transfer is a processing barrier for the prior cancellation.
     assert not cancelled.exists() and not default_cancelled.exists(), 'Cancelled transfer later wrote a file'
     (EVIDENCE / 'results.json').write_text(json.dumps({
@@ -139,5 +144,8 @@ try:
         'scope': 'Linux fixture only; no application, macOS, Windows or physical-device parity claim'
     }, indent=2))
 finally:
-    cleanup(lambda: command('DELETE', '') if session else None,
-            driver, server, log, sys.exception(), sandbox.cleanup)
+    try:
+        (EVIDENCE / 'save-diagnostic.json').write_text(json.dumps(save_diagnostics, indent=2))
+    finally:
+        cleanup(lambda: command('DELETE', '') if session else None,
+                driver, server, log, sys.exception(), sandbox.cleanup)
