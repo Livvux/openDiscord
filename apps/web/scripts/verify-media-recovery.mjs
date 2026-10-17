@@ -240,7 +240,7 @@ try {
   assert.throws(() => run('age', ['-d', '-i', identity], { input: damaged }));
   const decrypted = run('age', ['-d', '-i', identity], { input: encrypted });
   const members = run('tar', ['-tzf', '-'], { input: decrypted }).toString().trim().split('\n');
-  const expected = ['database.dump', 'manifest.txt', 'media/', `media/${refs[0].key}`, 'media/attachments/', 'config/', 'config/app.env', 'config/app-compose.yml', 'config/voice.env', 'config/voice-compose.yml', 'config/traefik.yml', 'config/traefik-turn.yml', 'config/firewall.nft'];
+  const expected = ['database.dump', 'manifest.txt', 'media/', `media/${refs[0].key}`, 'media/attachments/', 'config/', 'config/app.env', 'config/app-compose.yml', 'config/voice.env', 'config/voice-compose.yml', 'config/voice-maintenance/', 'config/traefik.yml', 'config/traefik-turn.yml', 'config/firewall.nft'];
   assert.deepEqual([...members].sort(), expected.sort());
   const extracted = join(work, 'extracted'); mkdirSync(extracted, { mode: 0o700 });
   run('tar', ['-xzf', '-', '-C', extracted], { input: decrypted });
