@@ -1,5 +1,6 @@
 // The profile card behind a clicked name or avatar. Only for accounts you can already see: a shared
-// community, a friendship (or request) or a direct conversation. Blocked pairs get the bare name.
+// community, a friendship (or request) or a direct conversation. Blocked pairs get the bare name;
+// suspended or gated accounts aren't shown at all (as in people search).
 import { and, eq, ne, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -7,11 +8,15 @@ import { db } from "@/db";
 import { community, dmConversation, friendship, member, user, userBlock, userPresence, userProfile } from "@/db/schema";
 import type { PresenceStatus } from "@/lib/presence";
 import { notFound } from "./errors";
+import { consume } from "./limits";
+import { AccountBlocked, assertActiveUser } from "./instance-policy";
 import type { FriendView } from "./friends";
 import { ONLINE_WINDOW_MS } from "./presence";
 import { parse } from "./validation";
 
 const MUTUAL_LIMIT = 10;
+/** Own bucket: opening popovers while reading must not use up the mutation burst limit. */
+export const PROFILE_CARD_LIMIT = { max: 60, windowMs: 60_000 };
 const accountId = z.string().trim().min(1).max(64);
 
 export interface ProfileCard {
@@ -31,9 +36,11 @@ const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]) as [string, str
 
 export async function getProfileCard(viewerId: string, rawTarget: unknown): Promise<ProfileCard> {
   const targetId = parse(accountId, rawTarget);
+  await consume(`profile-card:${viewerId}`, PROFILE_CARD_LIMIT.max, PROFILE_CARD_LIMIT.windowMs);
   const [first, second] = pair(viewerId, targetId);
   const shared = alias(member, "profile_shared");
-  const [[person], mutual, [friend], [conversation], blocks] = await Promise.all([
+  const active = assertActiveUser(targetId).then(() => true, (e: unknown) => (e instanceof AccountBlocked ? false : Promise.reject(e)));
+  const [[person], mutual, [friend], [conversation], blocks, isActive] = await Promise.all([
     db
       .select({ name: user.name, createdAt: user.createdAt, bio: userProfile.bio, customStatus: userProfile.customStatus, visible: userPresence.visible, status: userPresence.status, lastSeenAt: userPresence.lastSeenAt })
       .from(user)
@@ -54,9 +61,10 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
       .select({ blockerId: userBlock.blockerId })
       .from(userBlock)
       .where(or(and(eq(userBlock.blockerId, viewerId), eq(userBlock.blockedId, targetId)), and(eq(userBlock.blockerId, targetId), eq(userBlock.blockedId, viewerId)))),
+    active,
   ]);
   const self = viewerId === targetId;
-  if (!person || (!self && !mutual.length && !friend && !conversation)) throw notFound("Profile not found.");
+  if (!person || (!self && (!isActive || (!mutual.length && !friend && !conversation)))) throw notFound("Profile not found.");
   const relation: ProfileCard["relation"] = !friend ? null : friend.status === "accepted" ? "friend" : friend.requestedBy === viewerId ? "outgoing" : "incoming";
   const blocked = blocks.some((b) => b.blockerId === viewerId);
   const base = { id: targetId, name: person.name, memberSince: person.createdAt.toISOString(), relation, blocked };

@@ -1,9 +1,13 @@
 // Requires a migrated database at DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { applicationRateLimit, userSuspension } from "@/db/schema";
 import { blockUser } from "@/server/blocks";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { sendFriendRequest } from "@/server/friends";
-import { getProfileCard } from "@/server/profile-card";
+import { getProfileCard, PROFILE_CARD_LIMIT } from "@/server/profile-card";
+import { hashRateLimitKey } from "@/server/rate-limit-store";
 import { updateProfile } from "@/server/profile";
 import { testUsers } from "./helpers";
 
@@ -34,5 +38,18 @@ describe("profile card", () => {
     const card = await getProfileCard(ada, bo);
     expect(card).toMatchObject({ bio: "", customStatus: "", presence: null, mutualCommunities: [], blocked: false });
     expect((await getProfileCard(bo, ada)).blocked).toBe(true);
+  });
+
+  it("hides suspended accounts but still shows your own card", async () => {
+    await db.insert(userSuspension).values({ userId: bo, reason: "profile card test" });
+    await expect(getProfileCard(ada, bo)).rejects.toThrow("Profile not found.");
+    await expect(getProfileCard(bo, bo)).resolves.toMatchObject({ id: bo });
+    await db.delete(userSuspension).where(eq(userSuspension.userId, bo));
+  });
+
+  it("has its own rate-limit bucket", async () => {
+    await db.delete(applicationRateLimit).where(eq(applicationRateLimit.key, hashRateLimitKey(`profile-card:${ada}`)));
+    for (let i = 0; i < PROFILE_CARD_LIMIT.max; i++) await getProfileCard(ada, ada);
+    await expect(getProfileCard(ada, ada)).rejects.toThrow("too often");
   });
 });

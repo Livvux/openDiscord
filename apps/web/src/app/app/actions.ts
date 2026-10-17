@@ -97,7 +97,9 @@ export const setPresenceStatus = async (choice: string) => run((u) => presence.s
 export const updateProfile = async (input: { bio: string; customStatus: string }) => run((u) => profile.updateProfile(u, input));
 export const setCustomStatus = async (text: string) => run((u) => profile.setCustomStatus(u, text));
 
-export const getProfileCard = async (userId: string) => run((u) => profileCard.getProfileCard(u, userId), false);
+// A read: the service applies its own rate limit instead of the mutation burst limit.
+export const getProfileCard = async (userId: string) =>
+  toResult(async () => profileCard.getProfileCard((await requireUser()).id, userId));
 export const sendFriendRequest = async (target: string) => run((u) => friends.sendFriendRequest(u, target));
 export const respondToFriendRequest = async (otherId: string, accept: boolean) => run((u) => friends.respondToFriendRequest(u, otherId, accept));
 export const removeFriend = async (otherId: string) => run((u) => friends.removeFriend(u, otherId));
