@@ -16,7 +16,7 @@ type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[numbe
 type Attempt = { readonly input: VoiceCryptoRequest; readonly binding: VoiceBinding; readonly revision: number; readonly key: string; promise?: Promise<void> };
 type Entry = { readonly id: string; readonly type: C.RequestType; readonly body: string; readonly digest: string; readonly firstObservedGeneration: number; readonly request: NativeRequest; state: "pending" | "in-flight" | "completing" | "completed"; attempts: Map<string, Attempt>; activeAttempt?: Attempt };
 type Flow = { handle: string; peer: VoiceControlParty; generation: number; request: C.VerificationRequest; sas?: C.Sas; confirmed: boolean };
-export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: string; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; emojiIndices: number[] | null };
+export type VoiceSasState = { handle: string; peer: VoiceControlParty; flowId: string; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; emojiIndices: number[] | null; emoji?: { symbol: string; description: string }[] | null; weStarted?: boolean; hasSas?: boolean; sasAccepted?: boolean };
 export type VoiceOwnerTransport = (input: Readonly<{ binding: VoiceBinding; request: VoiceCryptoRequest; signal: AbortSignal }>) => Promise<unknown>;
 export class VoiceGenerationInterrupted extends Error { constructor() { super("Voice generation interrupted."); } }
 export type VoiceOwnerOptions = { accountId: string; guard: VoiceOwnerGuard; snapshot: VoiceSnapshot; lifetime: { assertCurrent(): void; signal: AbortSignal }; transport: VoiceOwnerTransport; onFence(reason: string): void };
@@ -323,7 +323,7 @@ export class VoiceCryptoOwner {
     return this.serial(() => [...this.flows.keys()].map(handle => {
       const flow = this.flow(handle), sas = flow.request.getVerification();
       if (sas instanceof C.Sas) flow.sas = sas;
-      return { handle, peer: { ...flow.peer }, flowId: flow.request.flowId, ready: flow.request.isReady(), done: flow.confirmed && flow.request.isDone() && !!flow.sas?.isDone(), cancelled: flow.request.isCancelled(), confirmed: flow.confirmed, emojiIndices: flow.sas?.emojiIndex() ? Array.from(flow.sas.emojiIndex()!) : null };
+      return { handle, peer: { ...flow.peer }, flowId: flow.request.flowId, ready: flow.request.isReady(), done: flow.confirmed && flow.request.isDone() && !!flow.sas?.isDone(), cancelled: flow.request.isCancelled(), confirmed: flow.confirmed, weStarted: flow.request.weStarted(), hasSas: !!flow.sas, sasAccepted: flow.sas?.hasBeenAccepted() ?? false, emoji: flow.sas?.emoji()?.map(value => ({ symbol: value.symbol, description: value.description })) ?? null, emojiIndices: flow.sas?.emojiIndex() ? Array.from(flow.sas.emojiIndex()!) : null };
     }));
   }
   /** Separate deliberate admission, never implied by transport delivery or native verified status. */

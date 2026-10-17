@@ -1,67 +1,39 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
+import { createCommunity, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
+import { observeVoiceProductResult } from "./fixtures/voice-product-results";
 
-const LIVEKIT_HTTP = (process.env.LIVEKIT_URL ?? "ws://localhost:7880").replace(/^ws/, "http");
-
-test.describe("voice channels", () => {
-  test.skip(({ isMobile }) => isMobile, "desktop flow");
-  test.beforeAll(async () => {
-    const up = await fetch(LIVEKIT_HTTP).then((r) => r.ok, () => false);
-    test.skip(!up, `LiveKit isn't running at ${LIVEKIT_HTTP}`);
-  });
-
-  test("two people talk; losing Connect removes someone from the call", async ({ browser }) => {
-    const owner = await newUserPage(browser);
-    await owner.context().grantPermissions(["microphone", "camera"]);
-    await signUp(owner, "Vera Voice");
-    await createCommunity(owner, "Talk Club");
-    // Headless Chromium's fake microphone hangs on the first capture made inside the app; open it once up front.
-    await owner.evaluate(() => navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then((s) => s.getTracks().forEach((t) => t.stop())));
-    const invitePath = await createInviteLink(owner);
-
-    await owner.getByRole("button", { name: "Create channel" }).click();
-    await owner.getByLabel("Channel name").fill("hangout");
-    await owner.getByRole("radio", { name: /Voice/ }).check();
-    await owner.getByRole("dialog").getByRole("button", { name: "Create channel" }).click();
-    await expect(owner.getByRole("heading", { level: 2, name: "hangout" })).toBeVisible();
-    const voiceUrl = owner.url();
-    await owner.getByRole("button", { name: "Join voice" }).click();
-    await expect(owner.getByText("You're connected.")).toBeVisible({ timeout: 15_000 });
-    await expect(owner.getByRole("button", { name: "Mute", exact: true })).toBeVisible({ timeout: 20_000 });
-
-    const member = await joinAsNewUser(browser, "Walt Wave", invitePath);
-    await member.context().grantPermissions(["microphone"]);
-    await member.evaluate(() => navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop())));
-    await member.goto(voiceUrl);
-    await expect(member.getByRole("list", { name: "People in hangout" }).getByText("Vera Voice")).toBeVisible();
-    await member.getByRole("button", { name: "Join voice" }).click();
-    await expect(member.getByText("You're connected.")).toBeVisible({ timeout: 15_000 });
-    await expect(owner.getByRole("list", { name: "People in hangout" }).getByText("Walt Wave")).toBeVisible();
-    await expectNoA11yViolations(member);
-
-    // Camera: the member sees the owner's video.
-    await owner.getByRole("button", { name: "Camera", exact: true }).click();
-    await expect(owner.getByRole("button", { name: "Stop camera" })).toBeVisible({ timeout: 15_000 });
-    await expect(member.getByRole("region", { name: "Video" }).getByText("Vera Voice")).toBeVisible({ timeout: 15_000 });
-    await owner.getByRole("button", { name: "Stop camera" }).click();
-    await expect(member.getByRole("region", { name: "Video" })).toHaveCount(0, { timeout: 15_000 });
-
-    // Screen sharing.
-    await owner.getByRole("button", { name: "Share screen" }).click();
-    await expect(member.getByRole("region", { name: "Video" }).getByText("Vera Voice · screen")).toBeVisible({ timeout: 15_000 });
-    await owner.getByRole("button", { name: "Stop sharing" }).click();
-    await expect(member.getByRole("region", { name: "Video" })).toHaveCount(0, { timeout: 15_000 });
-
-    // The call survives navigating to a text channel, with controls in the sidebar.
-    await member.getByRole("link", { name: "general" }).click();
-    await expect(member.getByRole("region", { name: "Voice connection" })).toContainText("Voice connected");
-    await member.getByRole("button", { name: "Mute microphone" }).click();
-    await expect(member.getByRole("button", { name: "Unmute microphone" })).toBeVisible();
-
-    // The owner takes away Connect: the member is removed from the room.
-    await owner.getByRole("button", { name: "Channel settings" }).click();
-    await owner.getByRole("dialog").getByLabel("Connect for everyone").selectOption("deny");
-    await expect(member.getByRole("alert").filter({ hasText: "disconnected from voice" })).toBeVisible({ timeout: 15_000 });
-    await expect(member.getByRole("region", { name: "Voice connection" })).toHaveCount(0);
-  });
+test("Voice requires deliberate join consent and existing messaging setup", async ({ browser, isMobile }) => {
+  const page = await newUserPage(browser);
+  let primaryFailure = false;
+  try {
+    await signUp(page, "Voice Prerequisite"); await createCommunity(page, "Voice consent");
+    const navigation = page.getByRole("button", { name: "Open navigation", exact: true });
+    if (isMobile) {
+      if (await navigation.getAttribute("aria-expanded") === "false") await navigation.click();
+      await expect(page.getByRole("navigation", { name: "Channels", exact: true })).toBeVisible();
+    }
+    await page.getByRole("button", { name: "Create channel", exact: true }).click();
+    await page.getByLabel("Channel name").fill("consent");
+    await page.getByRole("radio", { name: /Voice/ }).check();
+    await page.getByRole("dialog").getByRole("button", { name: "Create channel" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "consent" })).toBeVisible();
+    if (isMobile) {
+      if (await navigation.getAttribute("aria-expanded") === "true") await page.keyboard.press("Escape");
+      await expect(navigation).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByRole("navigation", { name: "Channels", exact: true })).toBeHidden();
+    }
+    await page.getByRole("button", { name: "Join voice", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Voice join consent" })).toBeVisible();
+    await page.getByRole("button", { name: "Cancel joining Voice" }).click();
+    await expect(page.getByRole("region", { name: "Full Voice audience" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Join voice", exact: true }).click();
+    await page.getByRole("button", { name: "Create temporary device and join" }).click();
+    await expect(page.getByRole("link", { name: "Open encrypted messages — Devices and recovery" })).toBeVisible();
+    await expectNoA11yViolations(page);
+  } catch (error) {
+    primaryFailure = true; throw error;
+  } finally {
+    const closed = await observeVoiceProductResult(() => page.context().close(), { timeoutMs: 2000, stage: "cleanup" });
+    if (!primaryFailure && !closed.ok) throw new Error("Voice prerequisite context cleanup failed.");
+  }
 });

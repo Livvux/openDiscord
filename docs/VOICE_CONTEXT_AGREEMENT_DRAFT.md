@@ -10,4 +10,4 @@ The pure ledger retains a single proposal with thin accept/material slots, measu
 
 New focused tests cover pure replay/consent/order/bounds and three independent Node Owners using real PostgreSQL handleVoiceCrypto, real public SDK SAS comparison before confirmation and separate explicit admissions. These are Node native/service tests, not authenticated browser/media or production acceptance. The inherited sixteen real eight-party whole-request size assertions and six positive-before-negative native codec regressions remain unchanged.
 
-Verification is exclusively canonical remote GitHub CI. No local heavy builds, type-checks, tests, SDK/native probes or Docker are run. Parent and final exact-head full CI plus independent Root code/security reviews remain gates before any further activation work. Migrations 0030–0032 remain isolated CI only.
+Verification is exclusively canonical remote GitHub CI. No local heavy builds, type-checks, tests, SDK/native probes or Docker are run. Parent and final exact-head full CI plus independent Root code/security reviews remain gates before any further activation work. Migrations 0031–0033 remain isolated CI only.

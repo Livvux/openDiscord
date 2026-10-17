@@ -1,0 +1,84 @@
+name: Voice product acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  voice-product:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opendiscord
+          POSTGRES_PASSWORD: opendiscord
+          POSTGRES_DB: opendiscord
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
+    env:
+      CI: 'true'
+      # Prevent failure prompts/ARIA dumps from recording transient native SAS comparison data.
+      PLAYWRIGHT_NO_COPY_PROMPT: '1'
+      DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/opendiscord
+      BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+      BETTER_AUTH_URL: http://localhost:3000
+      ATTACHMENT_DIR: /tmp/opendiscord-voice-product-attachments
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Collect product acceptance before expensive validation
+        run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts --list
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm db:migrate
+      - name: Call and presentation regression checks
+        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-product-candidates.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
+      - name: Build genuine Next product including worker assets
+        run: pnpm build
+      - name: Start pinned SFU with generation-only room creation
+        run: |
+          cat > /tmp/opendiscord-voice-product-livekit.yaml <<'CONFIG'
+          port: 7880
+          development: true
+          bind_addresses: ["0.0.0.0"]
+          rtc:
+            node_ip: 127.0.0.1
+            tcp_port: 7881
+            port_range_start: 50000
+            port_range_end: 50100
+          keys:
+            devkey: secret
+          room:
+            auto_create: false
+          CONFIG
+          docker run -d --name opendiscord-product-livekit --network host -v /tmp/opendiscord-voice-product-livekit.yaml:/etc/livekit.yaml:ro livekit/livekit-server:v1.13.10 --config /etc/livekit.yaml
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://localhost:7880/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - name: Three real UI accounts on the production Next server
+        run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts
+      - name: SFU listener startup only
+        if: always()
+        run: docker logs opendiscord-product-livekit 2>&1 | sed -n '/starting LiveKit server/p'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-product-evidence
+          path: |
+            apps/web/test-results/**/*.png
+            apps/web/test-results/**/voice-product-evidence*.json
+            apps/web/test-results/**/attachments/*voice-product-evidence*
+          if-no-files-found: ignore
+          retention-days: 3

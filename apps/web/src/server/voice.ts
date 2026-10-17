@@ -4,14 +4,13 @@
 import { and, eq } from "drizzle-orm";
 import { AccessToken, RoomServiceClient, TokenVerifier, TrackSource } from "livekit-server-sdk";
 import { db } from "@/db";
-import { channel, user } from "@/db/schema";
-import { loadChannelAuthority, requireChannel } from "./access";
+import { channel } from "@/db/schema";
+import { loadChannelAuthority } from "./access";
 import { AppError } from "./errors";
 import { has, Permission } from "./permissions";
 import { grantBoundVoiceMedia } from "./voice-control";
 import { assertOwnedVoiceRoomActive, consumeVoiceRooms, createOwnedVoiceRoom, createVoiceRoomBudget, retireOwnedVoiceRoom, voiceRoomService } from "./voice-sfu";
 import type { VoiceMediaSource } from "@/lib/voice/contracts";
-import { parse, uuid } from "./validation";
 
 const url = process.env.LIVEKIT_URL;
 const apiKey = process.env.LIVEKIT_API_KEY;
@@ -34,13 +33,6 @@ function rooms(): RoomServiceClient {
   return voiceRoomService() ?? new RoomServiceClient(apiUrl!, apiKey!, apiSecret!, { requestTimeout: 0.5, failover: false });
 }
 
-export interface VoiceJoin {
-  url: string;
-  token: string;
-  canSpeak: boolean;
-  canVideo: boolean;
-}
-
 /** What a member may publish, from their channel permissions. */
 function publishSources(authority: Parameters<typeof has>[0]): TrackSource[] {
   return [
@@ -49,32 +41,7 @@ function publishSources(authority: Parameters<typeof has>[0]): TrackSource[] {
   ];
 }
 
-export async function createVoiceToken(userId: string, rawChannelId: unknown): Promise<VoiceJoin> {
-  if (!voiceEnabled) throw new AppError("not_found", "Voice isn't set up on this instance.");
-  const channelId = parse(uuid, rawChannelId);
-  const { channel: ch, authority } = await requireChannel(db, channelId, userId, Permission.Connect);
-  if (ch.kind !== "voice") throw new AppError("invalid", "This isn't a voice channel.");
-  const [me] = await db.select({ name: user.name }).from(user).where(eq(user.id, userId));
-  const sources = publishSources(authority);
-  const at = new AccessToken(apiKey, apiSecret, { identity: userId, name: me?.name, ttl: TOKEN_TTL_SECONDS });
-  at.addGrant({
-    room: ch.id,
-    roomJoin: true,
-    canSubscribe: true,
-    canPublish: sources.length > 0,
-    canPublishSources: sources,
-    // No data channel: chat stays in text channels, where it is moderated.
-    canPublishData: false,
-  });
-  return {
-    url: url!,
-    token: await at.toJwt(),
-    canSpeak: sources.includes(TrackSource.MICROPHONE),
-    canVideo: sources.includes(TrackSource.CAMERA),
-  };
-}
-
-/** Unreachable product preparation. Signing happens only after the locked grant commits.
+/** Bound product media issuer. Signing happens only after the locked grant commits.
  * A later revoke can race signing/delivery; generation-room/key lifecycle is required at activation. */
 export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) {
   if (!voiceEnabled) throw new AppError("not_found", "Voice isn't set up on this instance.");
@@ -106,20 +73,6 @@ export async function createBoundVoiceToken(rawAuth: unknown, binding: unknown) 
   });
   if (typeof claims.exp !== "number" || !Number.isSafeInteger(claims.exp) || claims.exp > Math.floor(expiresAt / 1000) || claims.exp * 1000 <= Date.now() || Date.now() >= signingDeadline || performance.now() > budget.deadline) throw new AppError("forbidden", "This voice enrollment has ended.");
   return { url: url!, token: jwt, ...grant };
-}
-
-export interface VoiceParticipant {
-  id: string;
-  name: string;
-}
-
-/** Who is in a voice channel right now (for people who can see it). */
-export async function listVoiceParticipants(userId: string, rawChannelId: unknown): Promise<VoiceParticipant[]> {
-  const channelId = parse(uuid, rawChannelId);
-  const { channel: ch } = await requireChannel(db, channelId, userId);
-  if (!voiceEnabled || ch.kind !== "voice") return [];
-  const participants = await rooms().listParticipants(ch.id).catch(() => []);
-  return participants.map((p) => ({ id: p.identity, name: p.name || "Member" }));
 }
 
 /**

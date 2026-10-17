@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useVoice } from "@/components/app/voice/voice-provider";
 import { authClient } from "@/lib/auth-client";
 import { dmFetch, forgetDmDevice } from "@/lib/dm/client";
 import type { DmResetState } from "@/lib/dm/contracts";
 
 export function IdentityReset({ userId }: { userId: string }) {
+  const voice = useVoice();
   const [state, setState] = useState<DmResetState | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -22,6 +24,7 @@ export function IdentityReset({ userId }: { userId: string }) {
   async function signInAgain() {
     setBusy(true); setError(null);
     try {
+      voice.leave();
       const result = await authClient.signOut();
       if (result.error) throw new Error(result.error.message ?? "Could not sign out. Try again.");
       window.location.assign(new URL("/sign-in?next=/app/messages", window.location.origin).href);
@@ -31,6 +34,7 @@ export function IdentityReset({ userId }: { userId: string }) {
     if (!state?.identity || !confirmed) return;
     setBusy(true); setError(null);
     try {
+      voice.leave();
       await dmFetch("/api/dm/reset", { identity: state.identity, password, ...(state.twoFactorEnabled ? { code } : {}), confirmed });
       forgetDmDevice(userId);
       window.location.assign(new URL("/sign-in?next=/app/messages", window.location.origin).href);

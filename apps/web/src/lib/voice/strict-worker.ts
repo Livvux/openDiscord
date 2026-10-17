@@ -8,11 +8,16 @@ export class StrictVoiceWorker extends Worker {
   private readonly enabled = new Set<string>();
   private failed = false;
   private readonly waiters = new Map<string, Set<() => void>>();
+  private readonly submitted = new Set<string>();
 
-  constructor(url: URL, identities: readonly string[], private readonly onFailure: (reason: string) => void) {
+  constructor(url: URL, identities: readonly string[], private readonly onFailure: (reason: string) => void, private readonly keys?: { ownIdentity: string; expected: ReadonlyMap<string, CryptoKey> }) {
     super(url, { type: "module" });
     this.admitted = new Set(identities);
+    if (keys && (!this.admitted.has(keys.ownIdentity) || keys.expected.size !== this.admitted.size || [...this.admitted].some(id => !keys.expected.has(id)))) {
+      this.fail("Incomplete encryption key table.");
+    }
     this.addEventListener("message", (event: MessageEvent<unknown>) => {
+      if (this.failed) return;
       const message = event.data;
       if (!object(message)) return;
       if (message.kind === "error") { this.fail("Native encryption worker failed."); return; }
@@ -20,6 +25,9 @@ export class StrictVoiceWorker extends Worker {
       const { participantIdentity, enabled } = message.data;
       if (typeof participantIdentity !== "string" || enabled !== true || !this.admitted.has(participantIdentity)) {
         this.fail("Unexpected encryption acknowledgement."); return;
+      }
+      if (this.keys && participantIdentity === this.keys.ownIdentity && this.submitted.size !== this.admitted.size) {
+        this.fail("Encryption acknowledgement preceded complete key submission."); return;
       }
       this.enabled.add(participantIdentity);
       this.waiters.get(participantIdentity)?.forEach((done) => done());
@@ -46,9 +54,16 @@ export class StrictVoiceWorker extends Worker {
       if (message.kind === "enable" || message.kind === "encode" || message.kind === "decode" || message.kind === "updateCodec" || message.kind === "setKey") {
         const id = data?.participantIdentity;
         if (typeof id !== "string" || !this.admitted.has(id)) { this.fail("Unadmitted media identity."); return; }
+        if (message.kind === "setKey" && this.keys) {
+          if (data?.keyIndex !== 0 || data.key !== this.keys.expected.get(id)) { this.fail("Unexpected encryption key submission."); return; }
+          this.submitted.add(id);
+        }
         if (message.kind === "enable" && data?.enabled !== true) { this.fail("Encryption downgrade refused."); return; }
         if ((message.kind === "encode" || message.kind === "decode" || message.kind === "updateCodec") && !this.enabled.has(id)) {
           this.fail("Media started before encryption acknowledgement."); return;
+        }
+        if (this.keys && (message.kind === "encode" || message.kind === "decode" || message.kind === "updateCodec") && data?.codec !== undefined && data.codec !== "vp8") {
+          this.fail("Unsupported media codec."); return;
         }
       }
     }
