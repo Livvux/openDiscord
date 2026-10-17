@@ -18,7 +18,7 @@ from typing import Literal, TypedDict
 
 
 class MonitorConfig(TypedDict):
-    mode: Literal["health", "backup"]
+    mode: Literal["health", "backup", "voice"]
     smtp_url: str
     from_: str
     to: str
@@ -36,9 +36,9 @@ def load_config(path: Path) -> MonitorConfig:
     if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise ValueError("Monitor configuration must be owner-only")
     config = json.loads(path.read_text())
-    if config["mode"] not in ("health", "backup"):
+    if config["mode"] not in ("health", "backup", "voice"):
         raise ValueError("Invalid monitor mode")
-    return {"mode": "health" if config["mode"] == "health" else "backup",
+    return {"mode": config["mode"],
             "smtp_url": str(config["smtp_url"]), "from_": str(config["from"]), "to": str(config["to"])}
 
 
@@ -54,6 +54,28 @@ def check(config: MonitorConfig, now: float) -> str | None:
                         return "public-" + route + "-unavailable"
             except (OSError, ValueError, http.client.HTTPException):
                 return "public-" + route + "-unavailable"
+        return None
+    if config["mode"] == "voice":
+        try:
+            status = json.loads(Path("/var/lib/opendiscord-voice-maintenance/status.json").read_text())
+            age = now - status["finished_at"]
+            if age < -30 or age > 120:
+                return "voice-invocations-stale"
+            if status["sdk_failure_streak"] >= 6:
+                return "voice-sdk-failures-sustained"
+            if status["ok"] is not True:
+                return "voice-job-failed"
+            if status["limited_streak"] >= 6:
+                return "voice-scheduling-pressure-sustained"
+        except (OSError, ValueError, KeyError, TypeError):
+            return "voice-status-unavailable"
+        try:
+            result = subprocess.run(["systemctl", "show", "opendiscord-voice-maintenance.service", "--property=Result", "--value"],
+                                    capture_output=True, text=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return "voice-status-unavailable"
+        if result.returncode or result.stdout.strip() != "success":
+            return "voice-job-failed"
         return None
     try:
         marker = Path("/var/backups/opendiscord/last-success").read_text().split()[0]
@@ -119,7 +141,7 @@ def main() -> None:
         return
     state_dir = Path("/var/lib/opendiscord-monitor")
     state_dir.mkdir(mode=0o700, exist_ok=True)
-    with (state_dir / "monitor.lock").open("a") as lock:
+    with (state_dir / (config["mode"] + ".lock")).open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         path = state_dir / (config["mode"] + ".json")
         state: MonitorState = json.loads(path.read_text()) if path.exists() else {}

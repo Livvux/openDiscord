@@ -58,6 +58,17 @@ async function peer(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("durable room lifecycle", () => {
+  it("exposes real consumer failure counts through an empty eligible-call sweep", async () => {
+    const f = await fixture(), grant = await grantBoundVoiceMedia(f.auth, f.binding);
+    await retireOwnedVoiceRoom(grant.roomName);
+    vi.mocked(RoomServiceClient.prototype.deleteRoom).mockRejectedValue(new Error("isolated SDK failure"));
+    const result = await sweepVoiceLifecycle({ apply: true, now: new Date("2002-01-01"), batchSize: 8, maxBatches: 1 });
+    expect(result.scanned).toBe(0);
+    expect(result.rooms.claimed).toBeGreaterThanOrEqual(1);
+    expect(result.rooms.failed).toBeGreaterThanOrEqual(1);
+    expect(result.rooms.unavailable).toBe(0);
+  });
+
   it("commits ownership before SDK creation, revalidates after creation, and bounds actual JWT expiry by the reservation", async () => {
     const f = await fixture();
     expect(await db.$count(voiceSfuRoom, eq(voiceSfuRoom.callId, f.snapshot.callId))).toBe(0);

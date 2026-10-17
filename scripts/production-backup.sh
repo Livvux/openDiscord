@@ -77,6 +77,24 @@ if test -f /etc/dokploy/traefik/dynamic/opendiscord-turn.yml; then
   cp /etc/dokploy/traefik/dynamic/opendiscord-turn.yml "$work/config/traefik-turn.yml"
 fi
 cp /etc/nftables.d/dokploy-public-ingress.nft "$work/config/firewall.nft"
+# Optional installed scheduling/configuration belongs in the same encrypted recovery bundle.
+mkdir "$work/config/voice-maintenance"
+for path in /etc/systemd/system/opendiscord-voice-maintenance.service \
+  /etc/systemd/system/opendiscord-voice-maintenance.timer \
+  /etc/systemd/system/opendiscord-voice-monitor.service \
+  /etc/systemd/system/opendiscord-voice-monitor.timer \
+  /usr/local/sbin/opendiscord-voice-maintenance \
+  /usr/local/sbin/opendiscord-operator-monitor \
+  /etc/opendiscord-voice-maintenance/environment \
+  /etc/opendiscord-monitor/voice.json \
+  /var/lib/opendiscord-voice-maintenance/status.json; do
+  if test -f "$path"; then
+    cp --parents "$path" "$work/config/voice-maintenance/"
+  fi
+done
+if test -f "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml"; then
+  cp "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml" "$work/config/voice-maintenance/compose.yml"
+fi
 # Stream tar directly to age: there is no unencrypted archive on persistent disk.
 tar -C "$work" -czf - database.dump media config manifest.txt | age -R "$recipient" -o "$work/recovery.tar.gz.age"
 bytes=$(stat -c %s "$work/recovery.tar.gz.age")
