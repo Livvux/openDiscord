@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type Request, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
-import { classifyVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
+import { classifyVoiceProductConsole, fingerprintVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
 import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
@@ -89,7 +89,7 @@ test.describe("genuine Next product encrypted Voice", () => {
     const verifier = new TokenVerifier("devkey", "secret");
     const pages: Page[] = [], names = ["UI Voice Publisher", "UI Voice Listener One", "UI Voice Listener Two"];
     const runtimeErrors: string[] = [];
-    const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean; observed: "pending" | "ok" | "failed"; transport: ReturnType<typeof readVoiceProductConsoleArgument>[] })[] = [];
+    const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean; observed: "pending" | "ok" | "failed"; fingerprint?: string; transport: ReturnType<typeof readVoiceProductConsoleArgument>[] })[] = [];
     const consoleObservations: Promise<void>[] = [];
     let revocationDenials = 0;
     const workerResponses: { page: number; status: number; javascript: boolean }[] = [];
@@ -120,7 +120,7 @@ test.describe("genuine Next product encrypted Voice", () => {
         const diagnostic = classifyVoiceProductConsole(message.text(), message.location().url, page.url());
         // This test deliberately revokes Connect; the authenticated control endpoint must deny it.
         if (stage === "connect-revocation" && diagnostic.kind === "http-resource" && diagnostic.status === 403 && diagnostic.endpoint === "voice-control") { revocationDenials++; return; }
-        const entry: (typeof consoleErrors)[number] = { page: index, revoking: stage === "connect-revocation", observed: "pending", transport: [], ...diagnostic };
+        const entry: (typeof consoleErrors)[number] = { page: index, revoking: stage === "connect-revocation", observed: "pending", transport: [], ...diagnostic, ...(diagnostic.code === "other" && diagnostic.kind === "other" ? { fingerprint: fingerprintVoiceProductConsole(message.text()) } : {}) };
         consoleErrors.push(entry);
         const observation = observeVoiceProductResult(() => Promise.all(message.args().slice(0, 3).map(argument => argument.evaluate(readVoiceProductConsoleArgument))), { timeoutMs: 2000, stage: "diagnostic" });
         consoleObservations.push(observation.then(result => {

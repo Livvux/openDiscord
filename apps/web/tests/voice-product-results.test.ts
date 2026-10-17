@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
+import { classifyVoiceProductConsole, fingerprintVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductPhase } from "../e2e/fixtures/voice-product-results";
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { vi.useFakeTimers(); });
@@ -149,4 +149,9 @@ it("retains only public RTC cause enums and bounded numeric codes from console a
   expect(JSON.stringify(result)).not.toContain("private");
   expect(readVoiceProductConsoleArgument({ errorDetail: "private", sctpCauseCode: Infinity, name: "private" })).toEqual({ name: "other", detail: "other", cause: null });
   expect(readVoiceProductConsoleArgument("private")).toEqual({ name: "none", detail: "none", cause: null });
+});
+
+it("fingerprints unknown console text by leading words with identifiers masked", () => {
+  expect(fingerprintVoiceProductConsole("could not do thing for PA_x9Yz room wss://h.test/rtc?access_token=eyJ.a.b trailing words")).toBe("could not do thing for #");
+  expect(fingerprintVoiceProductConsole("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig v=0 o=- 4611731400430051336")).toBe("token # # # #");
 });

@@ -43,6 +43,11 @@ export function classifyVoiceProductConsole(text: string, location: string, page
   return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint, code };
 }
 
+/** Unknown-class evidence only: first six words; any word with digits, slashes, quotes or over 24 chars (IDs, URLs, JWTs, SDP) is masked. */
+export function fingerprintVoiceProductConsole(text: string) {
+  return text.split(/\s+/, 6).map(word => /^[A-Za-z][A-Za-z'.:,()-]{0,23}$/.test(word) ? word : "#").join(" ");
+}
+
 /** Runs in the console argument's realm; returns no message, identifiers or arbitrary properties. */
 export function readVoiceProductConsoleArgument(value: unknown) {
   const outer = value !== null && typeof value === "object" ? value : {};
