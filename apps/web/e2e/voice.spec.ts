@@ -7,6 +7,9 @@ test("Voice requires deliberate join consent and existing messaging setup", asyn
   let primaryFailure = false;
   try {
     await signUp(page, "Voice Prerequisite"); await createCommunity(page, "Voice consent");
+    // Home sets up this browser's DM device on its own; drop it once ready to reach the no-messaging-setup state.
+    await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith("opendiscord.dm.ready:"))), { timeout: 20_000 }).toBe(true);
+    await page.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.startsWith("opendiscord.dm.")) localStorage.removeItem(key); });
     const navigation = page.getByRole("button", { name: "Open navigation", exact: true });
     if (isMobile) {
       if (await navigation.getAttribute("aria-expanded") === "false") await navigation.click();
