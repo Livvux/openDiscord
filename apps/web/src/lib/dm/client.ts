@@ -257,6 +257,8 @@ export class PrivateMessaging {
   async send(conversation: string, peer: string, text: string): Promise<void> {
     return this.serial(async () => {
       await this.query([this.userId, peer]);
+      // identityBasedStrategy also shares with own devices signed by our identity, so that identity must be the one we hold or verified.
+      if (!(await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId))))?.isVerified()) throw new Error("Verify this browser with your other device in Devices and recovery before sending.");
       const identities = [this.userId, peer];
       const roster: string[] = [];
       for (const user of identities) {

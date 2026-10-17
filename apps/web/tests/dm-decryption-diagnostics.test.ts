@@ -66,7 +66,7 @@ describe("per-message processing failure boundaries", () => {
     queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
     markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})),
     decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
-    close: vi.fn(),
+    shareRoomKey: vi.fn(async () => []), close: vi.fn(),
   };
   const history = {
     cached: vi.fn(async () => []), archives: vi.fn(async () => []), pendingIdentity: vi.fn(async () => null),
@@ -184,6 +184,12 @@ describe("per-message processing failure boundaries", () => {
     const [row] = await client.decrypt([envelope], conversation, peer);
     expect(row.body).toBeNull();
     expect(row.diagnostic).toEqual({ stage: "device_trust", code: "unknown" });
+  });
+
+  it("refuses to send before sharing keys when this account's own identity isn't trusted", async () => {
+    machine.getIdentity.mockResolvedValueOnce({ isVerified: () => false });
+    await expect(client.send(conversation, peer, "hi")).rejects.toThrow(/Verify this browser/);
+    expect(machine.shareRoomKey).not.toHaveBeenCalled();
   });
 
   it("keeps failures per envelope and drops their classification on a later successful refresh", async () => {
