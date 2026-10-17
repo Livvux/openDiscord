@@ -10,8 +10,8 @@ import { getProfile } from "./profile";
 import { ownAvatar } from "./avatars";
 import { notFound } from "./errors";
 
-/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. 10: profile picture. */
-export const EXPORT_FORMAT_VERSION = 10;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. 10: profile picture. 11: private message read markers. */
+export const EXPORT_FORMAT_VERSION = 11;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }

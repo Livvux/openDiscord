@@ -39,7 +39,7 @@ describe("explicitly public text channels", () => {
     await unpublishChannel(own.owner, own.id);
 
     const exported = await exportUserData(own.owner);
-    expect(exported.version).toBe(10);
+    expect(exported.version).toBe(11);
     expect(exported.profile.name).toBe("Changed private profile name");
     expect(exported.publicPosts).toEqual([expect.objectContaining({ messageId: posted.id, channelId: own.id,
       authorName: "Public author snapshot", content: "Own public snapshot", editedAt: null })]);

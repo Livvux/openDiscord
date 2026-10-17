@@ -66,7 +66,8 @@ test.describe("private community images", () => {
     const picker = chat.getByRole("dialog", { name: "Add a reaction", exact: true });
     await picker.getByRole("button", { name: "Show all Emojis" }).click();
     await picker.getByRole("textbox").fill("test_emoji");
-    await picker.getByRole("gridcell", { name: "test_emoji", exact: true }).click();
+    // Also listed under "Frequently Used" once used; pick it from its own section.
+    await picker.getByRole("rowgroup", { name: "Community" }).getByRole("gridcell", { name: "test_emoji", exact: true }).click();
     await expect(row.getByRole("button", { name: /:test_emoji: 1 reaction/ })).toBeVisible();
     await expectNoA11yViolations(chat);
     expect(await chat.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

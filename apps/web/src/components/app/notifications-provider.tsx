@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { MentionNotice } from "@/app/api/me/events/route";
+import type { DmNotice, MentionNotice } from "@/app/api/me/events/route";
+import type { DirectConversation } from "@/lib/dm/contracts";
 
 export interface UnreadSummary {
   unread: boolean;
@@ -19,7 +20,17 @@ interface NotificationsValue {
   report: (communityId: string, summary: UnreadSummary) => void;
   /** Do not disturb: badges stay, desktop notifications stop. */
   setQuiet: (quiet: boolean) => void;
+  /** Latest DM list from /api/dm; null until the first live refetch (server-rendered data is used until then). */
+  direct: DirectConversation[] | null;
+  refreshDirect: () => void;
 }
+
+/** Dispatched on window so mounted views (Home, the open conversation) can refetch their own data. */
+export const DM_CHANGED_EVENT = "opendiscord:dm";
+export const FRIENDS_CHANGED_EVENT = "opendiscord:friends";
+/** Fallback while the stream is down or events were missed; normally the stream triggers refetches. */
+const DIRECT_POLL_MS = 30_000;
+
 
 const NotificationsContext = createContext<NotificationsValue | null>(null);
 
@@ -33,6 +44,23 @@ export function useReportCommunityUnread() {
 
 export function useSetQuiet() {
   return useContext(NotificationsContext)?.setQuiet;
+}
+
+export function useDirectConversations(): Pick<NotificationsValue, "direct" | "refreshDirect"> {
+  const value = useContext(NotificationsContext);
+  return { direct: value?.direct ?? null, refreshDirect: value?.refreshDirect ?? (() => {}) };
+}
+
+function desktopNotifyDm(notice: DmNotice, onClick: () => void) {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (localStorage.getItem(DESKTOP_NOTIFICATIONS_KEY) !== "on") return;
+  // The server only knows who wrote; the text stays encrypted until this browser opens the conversation.
+  const n = new Notification(notice.senderName ?? "Private message", { body: "New encrypted message", tag: `dm:${notice.senderId}` });
+  n.onclick = () => {
+    window.focus();
+    onClick();
+    n.close();
+  };
 }
 
 function desktopNotify(notice: MentionNotice, onClick: () => void) {
@@ -49,12 +77,42 @@ function desktopNotify(notice: MentionNotice, onClick: () => void) {
   };
 }
 
-/** One personal event stream per tab: mentions from every community. */
+/** One personal event stream per tab: mentions from every community, DM and friend changes. */
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [live, setLive] = useState<ReadonlyMap<string, UnreadSummary>>(new Map());
   const quiet = useRef(false);
   const setQuiet = useCallback((value: boolean) => { quiet.current = value; }, []);
+  const [direct, setDirect] = useState<DirectConversation[] | null>(null);
+  const directLoading = useRef(false);
+  const directAgain = useRef(false);
+  const refreshDirect = useCallback(() => {
+    // Coalesce bursts of events into at most one request in flight plus one follow-up.
+    if (directLoading.current) { directAgain.current = true; return; }
+    directLoading.current = true;
+    void (async () => {
+      try {
+        do {
+          directAgain.current = false;
+          const response = await fetch("/api/dm", { cache: "no-store" });
+          if (!response.ok) return;
+          const data = (await response.json()) as { conversations?: unknown };
+          if (Array.isArray(data.conversations)) setDirect(data.conversations as DirectConversation[]);
+        } while (directAgain.current);
+      } catch {
+        // Offline or rate limited: keep the last list; the next event or poll retries.
+      } finally {
+        directLoading.current = false;
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const poll = () => { if (document.visibilityState === "visible") refreshDirect(); };
+    const timer = window.setInterval(poll, DIRECT_POLL_MS);
+    document.addEventListener("visibilitychange", poll);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", poll); };
+  }, [refreshDirect]);
 
   const report = useCallback((communityId: string, summary: UnreadSummary) => {
     setLive((m) => {
@@ -68,10 +126,30 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const es = new EventSource("/api/me/events");
     let connected = false;
     // The stream reconnects every few minutes; mentions in the gap are only in the server counts.
+    const changed = () => {
+      refreshDirect();
+      window.dispatchEvent(new CustomEvent(DM_CHANGED_EVENT));
+      window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT));
+    };
     es.addEventListener("ready", () => {
-      if (connected) router.refresh();
+      if (connected) { router.refresh(); changed(); }
+      // Subscribe, then fetch: changes between the server render and this subscription are not lost.
+      else refreshDirect();
       connected = true;
     });
+    es.addEventListener("dm", (e) => {
+      const notice = JSON.parse((e as MessageEvent<string>).data) as DmNotice;
+      refreshDirect();
+      window.dispatchEvent(new CustomEvent<DmNotice>(DM_CHANGED_EVENT, { detail: notice }));
+      // Requests change server-rendered Home badges.
+      if (notice.reason === "request") window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT));
+      if (notice.reason !== "message" || !notice.senderId) return;
+      const params = new URLSearchParams(window.location.search);
+      const watching = window.location.pathname === "/app/messages" && params.get("to") === notice.senderId && document.visibilityState === "visible";
+      const url = `/app/messages?to=${encodeURIComponent(notice.senderId)}`;
+      if (!watching && !quiet.current) desktopNotifyDm(notice, () => router.push(url));
+    });
+    es.addEventListener("friends", () => window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT)));
     es.addEventListener("mention", (e) => {
       const notice = JSON.parse((e as MessageEvent<string>).data) as MentionNotice;
       const channelPath = `/app/c/${notice.communityId}/${notice.channelId}`;
@@ -88,10 +166,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       }
     });
     // Missed events: the server-rendered counts are authoritative again.
-    es.addEventListener("resync", () => router.refresh());
+    es.addEventListener("resync", () => { router.refresh(); changed(); });
     return () => es.close();
-  }, [router]);
+  }, [router, refreshDirect]);
 
-  const value = useMemo(() => ({ live, report, setQuiet }), [live, report, setQuiet]);
+  const value = useMemo(() => ({ live, report, setQuiet, direct, refreshDirect }), [live, report, setQuiet, direct, refreshDirect]);
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
 }

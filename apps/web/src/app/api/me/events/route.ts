@@ -1,8 +1,8 @@
-// The signed-in person's own event stream (mentions across all communities). Community streams carry
+// The signed-in person's own event stream (mentions across all communities, DM and friend changes). Community streams carry
 // channel traffic; this one only carries events addressed to one person.
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { community } from "@/db/schema";
+import { community, user } from "@/db/schema";
 import { loadChannelAuthority } from "@/server/access";
 import { errorResponse } from "@/server/http";
 import { getMessageForBroadcast, type MessageView } from "@/server/messages";
@@ -25,6 +25,14 @@ export interface MentionNotice {
   excerpt: string;
   /** The person muted this community: badge only, no desktop notification. */
   muted: boolean;
+}
+
+/** A conversation changed. `senderId` is set only for a new incoming message; never any content. */
+export interface DmNotice {
+  conversationId: string;
+  reason: "message" | "request" | "read";
+  senderId: string | null;
+  senderName: string | null;
 }
 
 const excerpt = (message: MessageView) => excerptOf(message.content, message.mentions, EXCERPT_LENGTH);
@@ -83,6 +91,13 @@ export async function GET(request: Request) {
 
       const onEvent = async (event: HubEvent) => {
         if (event.type === "resync") return send("resync", {});
+        // Ids only: the tab refetches through the normal authorized endpoints.
+        if (event.type === "dm.changed") {
+          if (!(await sessionValid())) return;
+          const [sender] = event.senderId ? await db.select({ name: user.name }).from(user).where(eq(user.id, event.senderId)) : [];
+          return send("dm", { conversationId: event.conversationId, reason: event.reason, senderId: event.senderId ?? null, senderName: sender?.name ?? null } satisfies DmNotice);
+        }
+        if (event.type === "friends.changed") return (await sessionValid()) && send("friends", {});
         if (event.type !== "mention.created" || !(await sessionValid())) return;
         const notice = await mentionNotice(userId, event);
         if (notice) send("mention", notice);

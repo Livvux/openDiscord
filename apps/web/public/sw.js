@@ -1,4 +1,4 @@
-// Service worker for Web Push only (no caching). Shows mention notifications unless a visible
+// Service worker for Web Push only (no caching). Shows mention and DM notifications unless a visible
 // openDiscord tab is already focused, and opens the channel when one is clicked.
 self.addEventListener("push", (event) => {
   let data = {};

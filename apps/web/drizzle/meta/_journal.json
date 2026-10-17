@@ -246,6 +246,13 @@
       "when": 1792249096552,
       "tag": "0034_user_avatars",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792254414634,
+      "tag": "0035_dm_read_state",
+      "breakpoints": true
     }
   ]
 }

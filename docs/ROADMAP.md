@@ -1,6 +1,6 @@
 # Roadmap and gap analysis
 
-Status as of 2026-10-16, reconciled against `main` at `e810b2cc4db088fd0c4de74e5b5427aa6b58b8d1`.
+Status as of 2026-10-17, reconciled against `main` at `4c1cf37` plus the DM unread/realtime change (migration `0035`).
 Implementation, automated acceptance, deployment and external review are separate evidence states.
 A checkmark describes the stated implementation/test scope; it does not establish production readiness
 or an external audit. See the [evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md#main-acceptance-checkpoint-2026-10-16).
@@ -21,21 +21,26 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-The closed-alpha production revision last verified by the operator is
-`4386e07173b89ee3332d7805ca1794c929507d1f` (30 applied migrations, `0000`–`0029`).
-Main `e810b2c` adds accepted test/fixture increments; it has not been deployed at this checkpoint.
-Production automatic deployment is paused. The ledger distinguishes earlier releases from this snapshot.
+The production revision verified on 2026-10-17 is `847ecee` (profile pictures, PR #103) with 35 applied
+migrations (`0000`–`0034`, matching the journal); `/api/health` returns `ok` and `/api/ready` `ready`.
+`main` `4c1cf37` adds only test fixes (#104). DM unread markers, live social updates and DM push add
+migration `0035` and are not deployed at this checkpoint. Production deployment stays a manual operator step.
+Discover currently lists no public channels on the official instance: not a defect, but newcomers now get
+a Home "Get started" panel (invite link, create community, add friend) instead.
 
 Encrypted DMs, private complete archives, custom emoji/stickers, explicit public channels/discovery,
 operator policies, 16-year signup self-attestation, funding disclosure and auth-key rotation support
 are implemented. Desktop/mobile automated web acceptance passes. Real HTTP/SSE characterization,
 real ClamAV-engine rejection and populated operational-backup recovery now have isolated CI evidence.
-The official instance still uses R2 without a configured scanner.
+The official instance runs a healthy private ClamAV daemon (fresh definitions, reachable from the app
+network as `opendiscord-private-scanner`, verified 2026-10-17), but the app's `CLAMAV_HOST` is empty, so
+uploads are not scanned yet. Remaining activation steps (app variable, backup `OPENDISCORD_SCANNER_COMPOSE_DIR`,
+monitor timer, real clean/EICAR upload through the browser) follow [ops/scanner](../ops/scanner/README.md).
 
 Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
-Voice E2EE remains a draft integration: isolated crypto/control proofs do not establish actual product
-media/listener acceptance or activate an E2EE label. Native desktop bundles are preview artifacts;
-full native application-flow acceptance remains open. Physical-device media, actual inbox/push delivery,
+Voice E2EE passes the three-account product acceptance workflow in CI (synthetic Chromium media).
+Physical devices, additional browsers and a production activation record remain open. Native desktop bundles are preview artifacts;
+full native application-flow acceptance remains open. Physical-device media, actual inbox delivery, real push-service delivery,
 manual screen-reader acceptance and independent security/crypto/legal/license reviews remain open.
 
 ## Requirements matrix
@@ -109,7 +114,7 @@ encrypted (the SFU relays DTLS-SRTP).
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
-| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery; optional fail-closed ClamAV tested with real clean/EICAR/unavailable upload/import cases (#68). Official production scanner unconfigured (THREAT-MODEL T23) |
+| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery; optional fail-closed ClamAV tested with real clean/EICAR/unavailable upload/import cases (#68). Official scanner daemon deployed and healthy, app integration not yet switched on (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |
@@ -170,7 +175,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
-| Unread state, @mentions, notifications | ✅ | Unread markers per channel and community; mentions notify only members who can read the channel; opt-in desktop notifications |
+| Unread state, @mentions, notifications | ✅ | Unread markers per channel, community and private conversation; mentions notify only members who can read the channel; new DMs notify by sender only (desktop and Web Push, never text); opt-in desktop notifications |
 | Blocking, anti-raid, invite controls | ✅ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
 | Production readiness | ✅ | Lint, types, unit/integration, build, Playwright, `pnpm audit` and Docker build green; full Compose stack smoke-tested locally (fresh migrations, TLS, sign-up, export, SSE through Caddy); HSTS sent by the app behind any proxy. Rolling the release out to opendiscord.app is an operator step |
 
@@ -179,7 +184,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (official TURN/TLS relay on TCP443 accepted with synthetic two-client Chromium media; physical devices and voice E2EE remain open) |
-| Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback |
+| Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback. Unread counts, live list/Home updates over the personal event stream and content-free push added 2026-10-17. Group DMs, encrypted files and direct calls are not implemented |
 | Search | ✅ | Postgres full-text search limited to readable channels |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |

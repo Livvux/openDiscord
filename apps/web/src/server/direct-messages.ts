@@ -2,11 +2,12 @@ import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { cache } from "react";
 import { z } from "zod";
 import { db } from "@/db";
-import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
+import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReadState, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
 import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
 import { avatarOf } from "./avatars";
 import { AppError, forbidden, invalid, notFound } from "./errors";
@@ -15,6 +16,7 @@ import { requireInstanceAdmin, type AdminActor } from "./instance-admin";
 import { areFriends } from "./friends";
 import { assertActiveUser } from "./instance-policy";
 import { parse, uuid } from "./validation";
+import { publish } from "./realtime";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const object = z.record(z.string(), z.unknown());
@@ -33,6 +35,14 @@ function fromMatrix(value: string): string {
   return parse(z.string().min(1).max(64), value.slice(1, -suffix.length));
 }
 const pair = (actor: string, target: string) => [actor, target].sort();
+/** Tells both people's open tabs to refetch; carries ids only. Delivery is best effort. */
+async function announce(conversationId: string, userIds: string[], reason: "message" | "request" | "read", senderId?: string): Promise<void> {
+  try {
+    for (const userId of userIds) await publish({ type: "dm.changed", userId, conversationId, reason, ...(senderId ? { senderId } : {}) });
+  } catch (error) {
+    console.error("[realtime] dm event failed", error);
+  }
+}
 async function blocked(tx: Tx | typeof db, actor: string, target: string): Promise<boolean> {
   return !!(await tx.select({ id: userBlock.blockerId }).from(userBlock).where(or(and(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, target)), and(eq(userBlock.blockerId, target), eq(userBlock.blockedId, actor)))).limit(1))[0];
 }
@@ -78,7 +88,7 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
   const target = parse(z.string().min(1).max(64), rawTarget);
   if (actor === target) throw invalid("Choose another person.");
   await consume(`dm-request:${actor}`, 10, 3_600_000);
-  return db.transaction(async (tx) => {
+  const { id, changed } = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor}, 31))`);
     await reachable(tx, actor, target);
     await assertActiveUser(target, tx);
@@ -87,35 +97,59 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
     const friends = await areFriends(tx, actor, target);
     if (existing && existing.status !== "accepted" && friends) {
       await tx.update(dmConversation).set({ status: "accepted" }).where(eq(dmConversation.id, existing.id));
-      return existing.id;
+      return { id: existing.id, changed: true };
     }
     if (existing?.status === "rejected") throw forbidden("This person is not accepting this request.");
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, changed: false };
     if (await tx.$count(dmConversation, or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))) >= 500) throw invalid("You have reached the conversation limit.");
     // Friends already agreed to hear from each other, so there's no separate message request.
     const status = friends ? "accepted" : "pending";
     const [created] = await tx.insert(dmConversation).values({ firstId, secondId, requestedBy: actor, status }).onConflictDoNothing().returning({ id: dmConversation.id });
-    if (created) return created.id;
+    if (created) return { id: created.id, changed: true };
     const [raced] = await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId)));
-    return raced.id;
+    return { id: raced.id, changed: false };
   });
+  // Re-opening an existing conversation must not let anyone make the other side's tabs refetch.
+  if (changed) await announce(id, [target, actor], "request");
+  return id;
 }
 export async function respondToDirectRequest(actor: string, id: string, rawStatus: unknown): Promise<void> {
   const status = parse(z.enum(["accepted", "rejected"]), rawStatus);
-  await db.transaction(async (tx) => {
+  const peer = await db.transaction(async (tx) => {
     const row = await conversationFor(tx, actor, id);
     if (row.requestedBy === actor || row.status !== "pending") throw forbidden("Only the recipient can answer a pending request.");
     if (await blocked(tx, actor, row.peer)) throw forbidden();
     const changed = await tx.update(dmConversation).set({ status }).where(and(eq(dmConversation.id, id), eq(dmConversation.status, "pending"))).returning({ id: dmConversation.id });
     if (!changed.length) throw conflict("This request has already been answered.");
+    return row.peer;
   });
+  await announce(id, [peer, actor], "request");
 }
-export async function listDirectConversations(actor: string): Promise<DirectConversation[]> {
+/** Cached per server render: the rail and Home both need it. */
+export const listDirectConversations = cache(async (actor: string): Promise<DirectConversation[]> => {
   const rows = await db.select().from(dmConversation).where(or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))).orderBy(desc(dmConversation.id));
   if (!rows.length) return [];
   const peers = await db.select({ id: user.id, name: user.name, avatar: avatarOf(user.id) }).from(user).where(inArray(user.id, rows.map((r) => r.firstId === actor ? r.secondId : r.firstId)));
   const blocks = await db.select().from(userBlock).where(or(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, actor)));
-  return rows.map((r) => { const peerId = r.firstId === actor ? r.secondId : r.firstId; return { id: r.id, peerId, peerName: peers.find((p) => p.id === peerId)?.name ?? "Deleted account", peerAvatar: peers.find((p) => p.id === peerId)?.avatar ?? null, requestedBy: r.requestedBy, status: r.status, blocked: blocks.some((b) => b.blockedId === peerId || b.blockerId === peerId), ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId) }; });
+  const unread = new Map((await db.select({ id: dmMessage.conversationId, total: count() }).from(dmMessage)
+    .leftJoin(dmReadState, and(eq(dmReadState.conversationId, dmMessage.conversationId), eq(dmReadState.userId, actor)))
+    .where(and(inArray(dmMessage.conversationId, rows.map((r) => r.id)), ne(dmMessage.senderId, actor), or(isNull(dmReadState.lastReadId), gt(dmMessage.id, dmReadState.lastReadId))))
+    .groupBy(dmMessage.conversationId)).map((r) => [r.id, r.total]));
+  return rows.map((r) => { const peerId = r.firstId === actor ? r.secondId : r.firstId; const blocked = blocks.some((b) => b.blockedId === peerId || b.blockerId === peerId); return { id: r.id, peerId, peerName: peers.find((p) => p.id === peerId)?.name ?? "Deleted account", peerAvatar: peers.find((p) => p.id === peerId)?.avatar ?? null, requestedBy: r.requestedBy, status: r.status, blocked, ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId), unread: blocked ? 0 : unread.get(r.id) ?? 0 }; });
+});
+/** Moves the person's read marker forward to a message of this conversation; never backwards. */
+export async function markDirectConversationRead(actor: string, id: string, rawMessageId: unknown): Promise<void> {
+  const messageId = parse(uuid, rawMessageId);
+  const row = await conversationFor(db, actor, id);
+  const [found] = await db.select({ id: dmMessage.id }).from(dmMessage).where(and(eq(dmMessage.id, messageId), eq(dmMessage.conversationId, row.id)));
+  if (!found) throw notFound("Message not found.");
+  if (await advanceRead(db, row.id, actor, messageId)) await announce(row.id, [actor], "read");
+}
+async function advanceRead(tx: Tx | typeof db, conversationId: string, userId: string, messageId: string): Promise<boolean> {
+  const changed = await tx.insert(dmReadState).values({ conversationId, userId, lastReadId: messageId })
+    .onConflictDoUpdate({ target: [dmReadState.conversationId, dmReadState.userId], set: { lastReadId: messageId }, setWhere: lt(dmReadState.lastReadId, messageId) })
+    .returning({ id: dmReadState.conversationId });
+  return changed.length > 0;
 }
 export async function listDirectMessages(actor: string, id: string, before?: string) {
   await conversationFor(db, actor, id);
@@ -125,19 +159,30 @@ export async function listDirectMessages(actor: string, id: string, before?: str
 export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input: unknown) {
   const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema }).strict(), input);
   await consume(`dm-send:${auth.userId}`, 5, 5000);
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     const device = await deviceFor(tx, auth);
-    await conversationFor(tx, auth.userId, id, true);
+    const { peer } = await conversationFor(tx, auth.userId, id, true);
     if (data.content.device_id !== device.id || record(device.keys?.keys)[`curve25519:${device.id}`] !== data.content.sender_key) throw invalid("The encrypted sender does not match this device.");
     const [existing] = await tx.select().from(dmMessage).where(and(eq(dmMessage.deviceId, device.id), eq(dmMessage.transactionId, data.transactionId)));
     if (existing) {
       if (existing.conversationId !== id || !same(existing.content, data.content)) throw conflict("A message transaction cannot be reused.");
-      return { id: existing.id };
+      return { id: existing.id, peer: null };
     }
     const [created] = await tx.insert(dmMessage).values({ conversationId: id, senderId: auth.userId, deviceId: device.id, transactionId: data.transactionId, content: data.content }).returning({ id: dmMessage.id });
-    return created;
+    // Replying means the sender has seen everything before it (Discord semantics), even from a stale device.
+    await advanceRead(tx, id, auth.userId, created.id);
+    return { id: created.id, peer };
   });
+  if (result.peer) {
+    await announce(id, [result.peer], "message", auth.userId);
+    await announce(id, [auth.userId], "message");
+    // Loaded lazily (push imports the message modules); never decrypts: the server has no keys.
+    const peer = result.peer;
+    void import("./push").then(({ pushDirectMessage }) => pushDirectMessage(peer, auth.userId))
+      .catch((error: unknown) => console.error("[push] direct message push failed", error));
+  }
+  return { id: result.id };
 }
 export async function registerDmDevice(actor: string, sessionId: string, input: unknown): Promise<void> {
   const data = parse(z.object({ id: deviceIdSchema, secret: deviceSecretSchema, name: z.string().trim().min(1).max(60) }).strict(), input);
@@ -426,11 +471,12 @@ export async function resolveDirectReport(actor: AdminActor, rawId: unknown): Pr
 export async function exportDirectData(actor: string) {
   const conversations = await listDirectConversations(actor);
   const ids = conversations.map((c) => c.id);
-  const [devices, identity, backups, messages, reports] = await Promise.all([
+  const [devices, identity, backups, messages, reports, readMarkers] = await Promise.all([
     listDmDevices(actor), db.select().from(dmIdentity).where(eq(dmIdentity.userId, actor)),
     db.select().from(dmBackup).where(eq(dmBackup.userId, actor)),
     ids.length ? db.select().from(dmMessage).where(inArray(dmMessage.conversationId, ids)).orderBy(asc(dmMessage.id)) : [],
     db.select({ messageId: dmReport.messageId, reason: dmReport.reason, excerpt: dmReport.excerpt, createdAt: dmReport.createdAt, resolvedAt: dmReport.resolvedAt }).from(dmReport).where(eq(dmReport.reporterId, actor)),
+    db.select({ conversationId: dmReadState.conversationId, lastReadId: dmReadState.lastReadId }).from(dmReadState).where(eq(dmReadState.userId, actor)),
   ]);
-  return { conversations, devices, publicIdentity: identity[0]?.keys ?? null, encryptedBackups: backups.map((b) => ({ id: b.id, ciphertext: b.ciphertext, createdAt: b.createdAt })), encryptedMessages: messages, reports };
+  return { conversations, devices, publicIdentity: identity[0]?.keys ?? null, encryptedBackups: backups.map((b) => ({ id: b.id, ciphertext: b.ciphertext, createdAt: b.createdAt })), encryptedMessages: messages, reports, readMarkers };
 }

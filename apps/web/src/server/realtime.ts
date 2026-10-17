@@ -18,6 +18,9 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("community.deleted"), communityId: z.string() }),
   // Personal events go to the person's own stream (`userTopic`), not to the community.
   z.object({ type: z.literal("mention.created"), userId: z.string(), communityId: z.string(), channelId: z.string(), messageId: z.string() }),
+  // Metadata only: a conversation of this person changed (new message, request, read marker). No content.
+  z.object({ type: z.literal("dm.changed"), userId: z.string(), conversationId: z.string(), reason: z.enum(["message", "request", "read"]), senderId: z.string().optional() }),
+  z.object({ type: z.literal("friends.changed"), userId: z.string() }),
 ]);
 
 export type RealtimeEvent = z.infer<typeof eventSchema>;
@@ -26,7 +29,8 @@ export type HubEvent = RealtimeEvent | { type: "resync"; communityId: string };
 
 /** Topic of a person's own stream; community streams use the community id. */
 export const userTopic = (userId: string) => `user:${userId}`;
-const topicOf = (event: RealtimeEvent) => (event.type === "mention.created" ? userTopic(event.userId) : event.communityId);
+const topicOf = (event: RealtimeEvent) =>
+  event.type === "mention.created" || event.type === "dm.changed" || event.type === "friends.changed" ? userTopic(event.userId) : event.communityId;
 type Listener = (event: HubEvent) => void;
 
 export async function publish(event: RealtimeEvent, handle: Pick<typeof db, "execute"> = db): Promise<void> {

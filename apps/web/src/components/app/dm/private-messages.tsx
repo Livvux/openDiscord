@@ -10,6 +10,8 @@ import { blockUser, unblockUser } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MobileNavToggle } from "../mobile-nav";
 import { PresenceAvatar } from "../presence-avatar";
+import type { DmNotice } from "@/app/api/me/events/route";
+import { DM_CHANGED_EVENT } from "../notifications-provider";
 import { UserContextMenu } from "../user-context-menu";
 import { PrivateMessageItem, type MessageView } from "./dm-message";
 import { IdentityReset } from "./identity-reset";
@@ -70,6 +72,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; textarea.current?.focus(); } }, [busy]);
   const selectedRef = useRef(selected);
   const history = useRef<DirectEnvelope[]>([]);
+  const markedRead = useRef<string | null>(null);
   useEffect(() => { selectedRef.current = selected; history.current = []; }, [selected]);
   const ready = !!client;
 
@@ -109,7 +112,15 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
         const timeline = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${current.id}`);
         const all = [...new Map([...history.current, ...timeline.messages].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
         const decoded = await client.decrypt(all, current.id, current.peerId);
-        if (selection === selectedRef.current) { history.current = all; setMessages(decoded); setEnvelopes(all); if (all.length <= 50) setHasMore(timeline.hasMore); }
+        if (selection === selectedRef.current) {
+          history.current = all; setMessages(decoded); setEnvelopes(all); if (all.length <= 50) setHasMore(timeline.hasMore);
+          // Seen only when it is on screen; the server keeps the marker monotonic.
+          const latest = all.at(-1);
+          if (latest && latest.senderId !== userId && markedRead.current !== latest.id && document.visibilityState === "visible") {
+            markedRead.current = latest.id;
+            void dmFetch("/api/dm", { action: "read", id: current.id, message: latest.id }).catch(() => { markedRead.current = null; });
+          }
+        }
       }
       setStatus("Encrypted messaging ready.");
     } catch (e) { setError(errorText(e)); setStatus("Connection or verification needs attention."); }
@@ -118,7 +129,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   useEffect(() => {
     const initial = window.setTimeout(() => { void refresh(); }, 0);
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
-    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
+    // New messages arrive through the personal stream; the interval also drives crypto sync.
+    // Our own read markers need no crypto refresh.
+    const changed = (event: Event) => { if ((event as CustomEvent<DmNotice | undefined>).detail?.reason !== "read") void refresh(); };
+    window.addEventListener(DM_CHANGED_EVENT, changed);
+    document.addEventListener("visibilitychange", changed);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); window.removeEventListener(DM_CHANGED_EVENT, changed); document.removeEventListener("visibilitychange", changed); };
   }, [refresh, selected]);
 
   async function run(fn: () => Promise<void>) {

@@ -6,6 +6,7 @@ import { ActiveNow } from "@/components/app/home/active-now";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { listBlocked } from "@/server/blocks";
 import { homeFriends } from "@/server/home";
+import { listPublicChannels } from "@/server/public-channels";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Friends" };
@@ -31,9 +32,11 @@ async function Friends({ searchParams }: Pick<PageProps<"/app">, "searchParams">
   const [friends, blocked, params] = await Promise.all([homeFriends(user.id), listBlocked(user.id), searchParams]);
   // Nothing is sent until the person confirms the prefilled code.
   const add = typeof params.add === "string" && params.add.length <= 64 && params.add !== user.id ? params.add : "";
+  // Only newcomers see the getting-started links; skip the query for everyone else.
+  const hasPublicChannels = friends.length === 0 && (await listPublicChannels()).channels.length > 0;
   return (
     <div className="flex min-h-0 flex-1">
-      <FriendsView key={add} userId={user.id} friends={friends} blocked={blocked} initialCode={add} />
+      <FriendsView key={add} userId={user.id} friends={friends} blocked={blocked} initialCode={add} hasPublicChannels={hasPublicChannels} />
       <ActiveNow userId={user.id} friends={friends.filter((f) => f.state === "friend" && f.presence)} />
     </div>
   );

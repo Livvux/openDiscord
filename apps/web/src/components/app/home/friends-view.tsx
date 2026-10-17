@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import type { BlockedUser } from "@/server/blocks";
 import type { FriendView, PersonResult } from "@/server/friends";
 import { BlockedList } from "../settings/blocked-list";
+import { GettingStarted } from "./getting-started";
 import { PresenceAvatar } from "../presence-avatar";
 import { UserContextMenu } from "../user-context-menu";
 import { UserProfilePopover } from "../user-profile";
@@ -27,9 +28,10 @@ interface FriendsViewProps {
   friends: FriendView[];
   blocked: BlockedUser[];
   initialCode: string;
+  hasPublicChannels?: boolean;
 }
 
-export function FriendsView({ userId, friends, blocked, initialCode }: FriendsViewProps) {
+export function FriendsView({ userId, friends, blocked, initialCode, hasPublicChannels = false }: FriendsViewProps) {
   const accepted = friends.filter((f) => f.state === "friend");
   const pending = friends.filter((f) => f.state !== "friend");
   const [filter, setFilter] = useState<Filter>(initialCode ? "add" : pending.some((f) => f.state === "incoming") ? "pending" : "all");
@@ -75,6 +77,8 @@ export function FriendsView({ userId, friends, blocked, initialCode }: FriendsVi
             Add Friend
           </button>
         </div>
+
+        {friends.length === 0 && (filter === "all" || filter === "online") && <GettingStarted onAddFriend={() => setFilter("add")} hasPublicChannels={hasPublicChannels} />}
 
         {filter === "add" ? <AddFriend userId={userId} initialCode={initialCode} /> : filter === "blocked" ? <BlockedList blocked={blocked} currentUserId={userId} /> : (
         <section aria-label="Your friends" className="grid gap-3">

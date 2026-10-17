@@ -5,8 +5,9 @@ import { db } from "@/db";
 import { community, dmDevice, dmMessage, dmSignature, session, user } from "@/db/schema";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
 import { blockUser } from "@/server/blocks";
-import { createDirectConversation, respondToDirectRequest, listDirectConversations, listDirectMessages, appendDirectMessage, registerDmDevice, handleCryptoRequest, revokeDmDevice, saveDmBackup, getDmBackup, reportDirectMessage, exportDirectData } from "@/server/direct-messages";
+import { markDirectConversationRead, createDirectConversation, respondToDirectRequest, listDirectConversations, listDirectMessages, appendDirectMessage, registerDmDevice, handleCryptoRequest, revokeDmDevice, saveDmBackup, getDmBackup, reportDirectMessage, exportDirectData } from "@/server/direct-messages";
 import { assertDmOrigin } from "@/server/dm-http";
+import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
@@ -78,6 +79,27 @@ describe("private encrypted conversations", () => {
     await expect(listDirectMessages(outsider, conversation)).rejects.toThrow("not found");
     expect((await db.select().from(dmMessage).where(eq(dmMessage.conversationId, conversation)))[0].content).toEqual(envelope);
   });
+  it("counts unread peer messages from a monotonic per-person read marker and announces only ids", async () => {
+    const unreadOf = async (who: string) => (await listDirectConversations(who)).find((c) => c.id === conversation)!.unread;
+    const events: HubEvent[] = [];
+    const unsubscribe = hub.subscribe(userTopic(bob), (e) => events.push(e));
+    await new Promise((r) => setTimeout(r, 300));
+    const before = await unreadOf(bob);
+    const sent = await appendDirectMessage(authA(), conversation, { transactionId: randomUUID(), content: envelope });
+    expect(await unreadOf(bob)).toBe(before + 1);
+    expect(await unreadOf(alice)).toBe(0);
+    await expect.poll(() => events.find((e) => e.type === "dm.changed" && e.reason === "message")).toEqual({ type: "dm.changed", userId: bob, conversationId: conversation, reason: "message", senderId: alice });
+    unsubscribe();
+    const second = await appendDirectMessage(authA(), conversation, { transactionId: randomUUID(), content: envelope });
+    await markDirectConversationRead(bob, conversation, second.id);
+    expect(await unreadOf(bob)).toBe(0);
+    // An older marker never moves it back.
+    await markDirectConversationRead(bob, conversation, sent.id);
+    expect(await unreadOf(bob)).toBe(0);
+    await expect(markDirectConversationRead(outsider, conversation, second.id)).rejects.toThrow("not found");
+    await expect(markDirectConversationRead(bob, conversation, randomUUID())).rejects.toThrow("not found");
+    expect(await listDirectConversations(outsider)).toEqual([]);
+  });
   it("mailbox retries are idempotent and explicit acknowledgments remove only consumed items", async () => {
     const request = { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.request", body: { messages: { [matrix(bob)]: { [bDevice]: { from_device: aDevice, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } };
     await handleCryptoRequest(authA(), request);
@@ -101,6 +123,7 @@ describe("private encrypted conversations", () => {
     expect(exported).not.toContain(aSecret);
     expect(exported).not.toContain("secretHash");
     expect(exported).toContain("encryptedBackups");
+    expect(exported).toContain("readMarkers");
   });
   it("rejects cross-origin mutations, plaintext device payloads and transaction replay changes", async () => {
     expect(() => assertDmOrigin(new Request("https://local.invalid/api/dm", { method: "POST", headers: { origin: "https://foreign.invalid", "content-type": "application/json" } }))).toThrow();
