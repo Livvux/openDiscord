@@ -18,7 +18,7 @@ test("global administration works without 2FA and applies reports and suspension
   page.setDefaultTimeout(15_000);
   chatter.setDefaultTimeout(15_000);
   const admin = page.getByRole("main");
-  const reports = admin.getByRole("region", { name: "Reports", exact: true });
+  const reports = admin.getByRole("region", { name: "Abuse reports", exact: true });
   const users = admin.getByRole("region", { name: "Users", exact: true });
   const communities = admin.getByRole("region", { name: "Communities", exact: true });
   const runtimeErrors: string[] = [];

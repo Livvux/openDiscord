@@ -3,7 +3,7 @@
 This dependent slice integrates accepted PR62 (`f22df5d`), three-browser proof parent
 (`4386e07`) and native-generation proof PR57 (`f0ac454`) over the S5 HTTP transport
 candidate. Those individual proofs do not replace final integrated CI or S5 approval.
-Migrations0030–0032 remain isolated-CI only; production has0000–0029.
+Migrations0031–0033 remain isolated-CI only; production has0000–0029.
 
 Before implementing the reviewed Owner extension, the first test measures full
 `JSON.stringify(VoiceCryptoRequest)` UTF-8 bytes, including native and transport IDs,

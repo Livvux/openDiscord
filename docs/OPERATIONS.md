@@ -98,9 +98,9 @@ hosted installation uses a path-triggered oneshot running `scripts/secure-dokplo
 owner-only access after replacement. It reads only the file mode, never its contents, and does no
 work when the mode is already 0600. Keep its path unit scoped to the app's exact `.env`; do not
 change the permissions or runtime settings of unrelated deployments.
-## 0031 compatible writer rollout
+## 0032 compatible writer rollout
 
-Migration `0031` and compatible application/operator code form one deployment boundary. Old
+Migration `0032` and compatible application/operator code form one deployment boundary. Old
 admin/bootstrap writers take the admin advisory lock before auth writes; the new statement guards
 take DM `810025`, then Voice `810030`. Mixing old and new writers can deadlock even without Voice
 calls. Old import and maintenance paths introduce further inversions. This procedure is a rollout
@@ -124,7 +124,7 @@ gate, not evidence of deployment or Voice/E2EE activation.
    have drained. If they cannot drain within the budget, abort the upgrade. Do not blindly terminate
    connections; termination requires a separate operational decision.
 4. Only then execute the exact pinned migrate image once under the same exclusion. Verify the
-   migration journal includes `0031`; all seven enabled BEFORE STATEMENT guards on `user`, `session`,
+   migration journal includes `0032`; all seven enabled BEFORE STATEMENT guards on `user`, `session`,
    `account`, `verification`, `two_factor`, `passkey` and `dm_device` invoke
    `voice_auth_statement_guard`, whose order is `810025` then `810030`. Verify the enabled AFTER DELETE
    member backstop invokes `voice_member_delete_generation`. Trigger DDL can block. On timeout or
@@ -145,14 +145,14 @@ gate, not evidence of deployment or Voice/E2EE activation.
 For recovery, quiesce and drain all compatible writers and schedules again first, explicitly
 stopping both hourly and Voice repair timers/services and the Voice monitor timer/service.
 Preserve labelled running containers until drained or explicitly stopped under the recovery plan. Prefer a known
-compatible fix-forward image. Never routinely start old images against `0031` guards. Full restore
+compatible fix-forward image. Never routinely start old images against `0032` guards. Full restore
 requires preserving the current database, the verified pre-upgrade backup and matching old
 application/operator images, explicit acknowledgement of loss of all post-backup writes, and
 restore/readiness/auth/admin/maintenance readback before reopening. Rehearse auth/config/key
 compatibility. Never silently drop triggers or edit the migration journal; a reverse migration is a
 separate reviewed change including its journal consistency and loss of generation protection.
 
-### Unactivated generation-room ownership (migration 0032)
+### Unactivated generation-room ownership (migration 0033)
 
 The internal bound-token path reserves an exact `voice:<channel UUID>:<call UUID>:<generation>`
 room in `voice_sfu_room` under the Voice transaction lock before any SFU create or JWT delivery.
@@ -221,9 +221,9 @@ cross-system atomic fence against already validated joins or late create complet
 ### Activation-only frequent Voice repair
 
 Current production basic Voice and migrations 0000–0029 do **not** imply this job is installed or
-safe to start. Migrations 0030/0031/0032, compatible writers, coherent product activation and all
+safe to start. Migrations 0031/0032/0033, compatible writers, coherent product activation and all
 separate acceptance gates must be reviewed together. Do not install/enable these timers against
-current production merely because their templates exist. In particular, 0031 requires the complete
+current production merely because their templates exist. In particular, 0032 requires the complete
 writer/timer quiescence and compatible image readback above.
 
 `pnpm --filter web maintenance:voice` is dry-run by default. `--apply` invokes exactly one existing
