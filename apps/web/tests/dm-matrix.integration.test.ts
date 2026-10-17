@@ -141,4 +141,47 @@ describe("Matrix and PostgreSQL integration", () => {
       expect((await loser.machine.crossSigningStatus()).hasMaster).toBe(false);
     } finally { winner.machine.close(); loser.machine.close(); }
   });
+  it("an unverified second device of the sender gets a withheld notice instead of the room key, and sending still works", async () => {
+    await C.initAsync();
+    const [alice, bob] = await Promise.all([users.create("SDK Withheld Alice"), users.create("SDK Withheld Bob")]);
+    const { communityId } = await createCommunity(alice, "SDK withheld");
+    await acceptInvite(bob, await createInvite(alice, communityId, { expiresInHours: 24, maxUses: null }));
+    const conversation = await createDirectConversation(alice, bob);
+    await respondToDirectRequest(bob, conversation, "accepted");
+    const a = await Endpoint.open(alice), unverified = await Endpoint.open(alice, false), b = await Endpoint.open(bob);
+    try {
+      await a.query([alice, bob]);
+      const claim = await a.machine.getMissingSessions([new C.UserId(matrixUser(alice)), new C.UserId(matrixUser(bob))]);
+      if (claim) await a.out(claim);
+      // The production strategy (lib/dm/client.ts): only devices signed by their owner's identity get keys.
+      const settings = new C.EncryptionSettings(); settings.sharingStrategy = C.CollectStrategy.identityBasedStrategy();
+      const requests = await a.machine.shareRoomKey(new C.RoomId(matrixRoom(conversation)), [new C.UserId(matrixUser(alice)), new C.UserId(matrixUser(bob))], settings);
+      expect(requests.map((r) => r.event_type).sort()).toEqual(["m.room.encrypted", "m.room_key.withheld"]);
+      for (const request of requests) await a.out(request);
+      const mailbox = syncSchema.parse(await handleCryptoRequest(unverified.auth, { kind: "sync" }));
+      expect(mailbox.events.map((e) => e.type)).toEqual(["m.room_key.withheld"]);
+      // Strict shape: the notice cannot carry anything else, such as plaintext.
+      const notice = mailbox.events[0].content as Record<string, unknown>;
+      const resend = (content: Record<string, unknown>) => handleCryptoRequest(a.auth, { kind: "send", requestId: randomUUID(), eventType: "m.room_key.withheld", body: { messages: { [matrixUser(alice)]: { [unverified.auth.deviceId]: content } } } });
+      await expect(resend(notice)).resolves.toBeDefined();
+      await expect(resend({ ...notice, body: "smuggled plaintext" })).rejects.toMatchObject({ code: "invalid" });
+      await expect(resend({ ...notice, code: "m.custom" })).rejects.toMatchObject({ code: "invalid" });
+    } finally { a.machine.close(); unverified.machine.close(); b.machine.close(); }
+  });
+  it("re-running bootstrap after a lost signing response signs this device with the identity already stored", async () => {
+    await C.initAsync();
+    const owner = await users.create("SDK Lost Response");
+    const device = await Endpoint.open(owner, false);
+    try {
+      const first = await device.machine.bootstrapCrossSigning(false);
+      if (first.uploadKeysRequest instanceof C.KeysUploadRequest) await device.out(first.uploadKeysRequest);
+      // The server stores the signing keys; the response, and so the device signature upload, never happens.
+      await handleCryptoRequest(device.auth, { kind: "signing", body: JSON.parse(first.uploadSigningKeysRequest.body) });
+      const own = async () => { await device.query([owner]); return device.machine.getDevice(new C.UserId(matrixUser(owner)), new C.DeviceId(device.auth.deviceId)); };
+      expect((await own())?.isCrossSignedByOwner()).toBe(false);
+      expect((await device.machine.crossSigningStatus()).hasMaster).toBe(true);
+      await device.bootstrap();
+      expect((await own())?.isCrossSignedByOwner()).toBe(true);
+    } finally { device.machine.close(); }
+  });
 });
