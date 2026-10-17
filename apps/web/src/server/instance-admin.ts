@@ -1,3 +1,5 @@
+import { lockVoiceLifecycle } from "./voice-locks";
+import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { and, count, desc, eq, gt, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
@@ -27,8 +29,9 @@ function audit(tx: Db, actor: AdminActor, action: string, targetId: string, reas
 }
 
 /** Serializes admin membership/suspension changes, including concurrent last-admin attempts. */
-async function mutate<T>(actor: AdminActor, fn: (tx: Db) => Promise<T>) {
+async function mutate<T>(actor: AdminActor, fn: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
   return db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx, "auth");
     await tx.execute(sql`select pg_advisory_xact_lock(187412, 1)`);
     await requireInstanceAdmin(actor, tx);
     return fn(tx);
@@ -97,6 +100,7 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
     // Administrators must first be demoted; this protects the last admin and prevents self-lockout.
     if (enabled && await isInstanceAdmin(targetId, tx)) throw forbidden("Remove this account's instance administrator rights before suspending it.");
     if (enabled) {
+      await invalidateVoiceMembership(tx, { userId: targetId }, "account-suspended");
       await tx.insert(userSuspension).values({ userId: targetId, reason }).onConflictDoUpdate({
         target: userSuspension.userId, set: { reason, createdAt: new Date() },
       });
@@ -117,6 +121,7 @@ export async function revokeUserSessions(actor: AdminActor, rawId: unknown, rawR
   await mutate(actor, async (tx) => {
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId));
     if (!target) throw notFound("Account not found.");
+    await invalidateVoiceMembership(tx, { userId: targetId }, "sessions-revoked");
     await tx.delete(session).where(eq(session.userId, targetId));
     await audit(tx, actor, "user.sessions.revoke", targetId, reason);
   });
@@ -127,6 +132,7 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
   const enabled = parse(z.boolean(), suspended);
   const reason = parse(requiredReason, rawReason);
   await mutate(actor, async (tx) => {
+    if (enabled) await invalidateVoiceMembership(tx, { communityId: id }, "community-suspended");
     const rows = await tx.update(community).set({ suspendedAt: enabled ? new Date() : null, suspensionReason: enabled ? reason : null })
       .where(eq(community.id, id)).returning({ id: community.id });
     if (!rows.length) throw notFound("Community not found.");
@@ -144,6 +150,7 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
   await mutate(actor, async (tx) => {
     const [c] = await tx.select({ id: community.id }).from(community).where(eq(community.id, id)).for("update");
     if (!c) throw notFound("Community not found.");
+    const beforeVoice = await captureVoiceCapabilities(tx, { communityId: id });
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email)).for("update");
     if (!target) throw notFound("Account not found.");
     await assertActiveUser(target.id, tx);
@@ -153,6 +160,7 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
     const settings = await getInstanceSettings(tx);
     if (owned >= settings.ownedCommunities) throw forbidden("The new owner has reached the community ownership limit.");
     await tx.update(community).set({ ownerId: target.id }).where(eq(community.id, id));
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, "community.transfer", id, `${reason} (new owner: ${target.id})`);
   });
   await publish({ type: "channels.changed", communityId: id });
@@ -164,6 +172,7 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
   const grant = parse(z.boolean(), enabled);
   const reason = parse(requiredReason, rawReason);
   await mutate(actor, async (tx) => {
+    const beforeVoice = await captureVoiceCapabilities(tx, { userId: id });
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
     if (!target) throw notFound("Account not found.");
     if (grant) {
@@ -176,6 +185,7 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
       if (total <= 1 && await isInstanceAdmin(id, tx)) throw forbidden("The last instance administrator cannot be removed.");
       await tx.delete(instanceAdmin).where(eq(instanceAdmin.userId, id));
     }
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, grant ? "admin.grant" : "admin.revoke", id, reason);
   });
 }
@@ -203,6 +213,7 @@ export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision
     if (!row) throw notFound("Account not found.");
     if (row.status === decision) throw new AppError("conflict", `This account is already ${decision}.`);
     if (decision === "rejected" && row.status !== "pending") throw new AppError("conflict", "Only pending accounts can be rejected. Suspend active accounts instead.");
+    if (decision === "rejected") await invalidateVoiceMembership(tx, { userId: targetId }, "account-rejected");
     await tx.update(user).set({ approvalStatus: decision }).where(eq(user.id, targetId));
     if (decision === "rejected") await tx.delete(session).where(eq(session.userId, targetId));
     await audit(tx, actor, decision === "approved" ? "user.approve" : "user.reject", targetId, reason);
@@ -219,7 +230,9 @@ export async function setClosedAlpha(actor: AdminActor, rawEnabled: unknown, raw
   const closedAlpha = parse(z.boolean(), rawEnabled);
   const reason = parse(requiredReason, rawReason);
   await mutate(actor, async (tx) => {
+    const beforeVoice = await captureVoiceCapabilities(tx);
     await tx.insert(instanceSettings).values({ closedAlpha }).onConflictDoUpdate({ target: instanceSettings.id, set: { closedAlpha } });
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, closedAlpha ? "instance.closed_alpha.enable" : "instance.closed_alpha.disable", "instance", reason);
   });
 }
@@ -254,6 +267,7 @@ export async function resolveReport(actor: AdminActor, rawId: unknown, rawOutcom
           sql`${message.channelId} in (select ${channel.id} from ${channel} where ${channel.communityId} = ${report.communityId})`))
           .returning({ channelId: message.channelId, id: message.id });
       } else {
+        await invalidateVoiceMembership(tx, { communityId: report.communityId }, "community-suspended");
         await tx.update(community).set({ suspendedAt: new Date(), suspensionReason: reason }).where(eq(community.id, report.communityId));
       }
     }

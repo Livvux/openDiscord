@@ -1,3 +1,5 @@
+import { lockVoiceLifecycle } from "./voice-locks";
+import { sweepVoiceLifecycle } from "./voice-control";
 import { and, eq, isNotNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { abuseReport, banAppeal, applicationRateLimit, auditLog, authRateLimit, instanceAuditLog, session, streamLease, verification } from "@/db/schema";
@@ -40,7 +42,7 @@ export async function runMaintenance({ apply = false, now = new Date(), batchSiz
     }
     counts[name] = 0;
     for (let batch = 0; batch < maxBatches; batch++) {
-      const result = await db.execute(sql`
+      const deleteBatch = (tx: Pick<typeof db, "execute">) => tx.execute(sql`
         with expired as (
           select ${key} as row_key from ${table} where ${condition}
           limit ${batchSize} for update skip locked
@@ -48,6 +50,9 @@ export async function runMaintenance({ apply = false, now = new Date(), batchSiz
         delete from ${table} using expired where ${key} = expired.row_key and ${condition}
         returning ${key}
       `);
+      const result = name === "sessions" || name === "verifications"
+        ? await db.transaction(async tx => { await lockVoiceLifecycle(tx, "auth"); return deleteBatch(tx); })
+        : await deleteBatch(db);
       const removed = result.rowCount ?? 0;
       counts[name] += removed;
       if (removed < batchSize) break;
@@ -63,6 +68,7 @@ export async function runMaintenance({ apply = false, now = new Date(), batchSiz
   } else {
     for (let batch = 0; batch < maxBatches; batch++) {
       const changed = await db.transaction(async (tx) => {
+        await lockVoiceLifecycle(tx, "auth");
         const rows = await tx.select({ id: session.id, agent: session.userAgent }).from(session)
           .where(legacyMetadata).limit(batchSize).for("update", { skipLocked: true });
         for (const row of rows) {
@@ -75,5 +81,8 @@ export async function runMaintenance({ apply = false, now = new Date(), batchSiz
       if (batch === maxBatches - 1) limited.push("sessionMetadata");
     }
   }
+  const voice = await sweepVoiceLifecycle({ apply, now, batchSize, maxBatches });
+  counts.voiceCallsScanned = voice.scanned; counts.voiceCallsClosed = voice.closed; counts.voiceMembersRemoved = voice.removed;
+  if (voice.limited) limited.push("voiceLifecycle");
   return { apply, at: now.toISOString(), auditRetentionDays: AUDIT_RETENTION_DAYS, counts, limited };
 }

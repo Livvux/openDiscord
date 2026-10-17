@@ -225,6 +225,13 @@
       "when": 1792144989627,
       "tag": "0031_voice_call_control",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792144989628,
+      "tag": "0032_voice_lifecycle_guards",
+      "breakpoints": true
     }
   ]
 }

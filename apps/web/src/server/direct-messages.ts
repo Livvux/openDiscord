@@ -1,3 +1,5 @@
+import { lockVoiceLifecycle } from "./voice-locks";
+import { invalidateVoiceMembership } from "./voice-control";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -140,7 +142,7 @@ export async function registerDmDevice(actor: string, sessionId: string, input: 
   const [known] = await db.select({ id: dmDevice.id }).from(dmDevice).where(eq(dmDevice.id, data.id));
   if (!known) await consume(`dm-device:${actor}`, 12, 3_600_000);
   await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    await lockVoiceLifecycle(tx, "auth");
     await activeSession(tx, actor, sessionId);
     const [existing] = await tx.select().from(dmDevice).where(eq(dmDevice.id, data.id));
     if (existing) { await deviceFor(tx, { userId: actor, sessionId, deviceId: data.id, secret: data.secret }); return; }
@@ -154,9 +156,10 @@ export async function listDmDevices(actor: string, target = actor): Promise<Devi
 }
 export async function revokeDmDevice(actor: string, id: string): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    await lockVoiceLifecycle(tx, "auth");
     const [device] = await tx.update(dmDevice).set({ revokedAt: new Date() }).where(and(eq(dmDevice.id, parse(uuid, id)), eq(dmDevice.userId, actor))).returning({ id: dmDevice.id });
     if (!device) throw notFound("Device not found.");
+    await invalidateVoiceMembership(tx, { anchorDeviceId: device.id }, "anchor-revoked");
     await tx.delete(dmKey).where(eq(dmKey.deviceId, id));
     await tx.delete(dmMailbox).where(eq(dmMailbox.deviceId, id));
     await tx.delete(dmCryptoReceipt).where(eq(dmCryptoReceipt.deviceId, id));
@@ -219,6 +222,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
   return db.transaction(async (tx) => {
     // Short DB-only critical section: atomic claims, receipt replay and mailbox commit/cursor ordering.
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    if (data.kind === "upload") await lockVoiceLifecycle(tx, "auth");
     const own = await deviceFor(tx, auth), ownUser = matrixUser(auth.userId);
     if (data.kind === "sync") {
       const blocks = await tx.select().from(userBlock).where(or(eq(userBlock.blockerId, auth.userId), eq(userBlock.blockedId, auth.userId)));
