@@ -198,6 +198,9 @@ importers:
       emoji-regex:
         specifier: ^10.6.0
         version: 10.6.0
+      gif-picker-react:
+        specifier: 2.0.0
+        version: 2.0.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       livekit-client:
         specifier: 2.22.4
         version: 2.22.4(@types/dom-mediacapture-record@1.0.22)
@@ -2609,6 +2612,12 @@ packages:
 
   emoji-regex@9.2.2:
     resolution: {integrity: sha512-L18DaJsXSUk2+42pv8mLs5jJT2hqFkFE4j21wOmgbUqsZ2hL72NsUU785g9RXgo3s0ZNgVl42TiHp3ZtOv/Vyg==}
+
+  gif-picker-react@2.0.0:
+    resolution: {integrity: sha512-kY5969XCJFPRKj1gF+LMY6OyLV5HNXZkR4h0fWBBYrJUKuh5ntcJetget8MBgKX/n+2kuu/hXW5IG0Yn9xgtDA==}
+    peerDependencies:
+      react: '>=17'
+      react-dom: '>=17'
 
   encodeurl@2.0.0:
     resolution: {integrity: sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==}
@@ -6635,6 +6644,11 @@ snapshots:
   emoji-regex@10.6.0: {}
 
   emoji-regex@9.2.2: {}
+
+  gif-picker-react@2.0.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+    dependencies:
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
 
   encodeurl@2.0.0: {}
 

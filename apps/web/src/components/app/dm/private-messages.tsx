@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { SendHorizontalIcon, ShieldCheckIcon, SmilePlusIcon } from "lucide-react";
 import { EmojiSelector } from "../emoji-selector";
+import { GifSelector } from "../gif-selector";
 import { insertEmoji } from "@/lib/emoji";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blockUser, unblockUser } from "@/app/app/actions";
@@ -201,6 +202,11 @@ export function PrivateMessages({ userId, userName, target, targetIsFriend = fal
             onPick={(emoji) => {
               const result = insertEmoji(text, emoji, textarea.current?.selectionStart ?? text.length, textarea.current?.selectionEnd ?? text.length, DM_MAX_TEXT);
               if (result) { pendingCaret.current = result.caret; setText(result.value); }
+            }} />
+          <GifSelector returnFocusTo={textarea} disabled={!client || busy}
+            onPick={(url) => {
+              if (!client || busy) return;
+              void run(async () => { await client.send(active.id, active.peerId, url); });
             }} />
           <label className="sr-only" htmlFor="private-message">Encrypted message</label>
           <textarea ref={textarea} id="private-message" rows={1} className="max-h-48 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-zinc-500" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)}

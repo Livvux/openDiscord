@@ -6,6 +6,8 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import type { PrivateMessaging } from "@/lib/dm/client";
 import { Avatar, nameColor } from "../avatar";
 import { EmojiText } from "../emoji-text";
+import { GifEmbed } from "../gif-embed";
+import { gifSource } from "@/lib/gifs";
 
 export type MessageView = Awaited<ReturnType<PrivateMessaging["decrypt"]>>[number];
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
@@ -38,7 +40,8 @@ export function PrivateMessageItem({ message, authorName, onError, onReport }: {
           <span aria-hidden className="text-zinc-500">·</span>{" "}
           <time dateTime={message.createdAt} className="text-[11px] whitespace-nowrap text-zinc-400" suppressHydrationWarning>{dateTimeFormat.format(created)}</time>
         </p>
-        <p className={`break-words whitespace-pre-wrap ${message.body ? "text-zinc-300" : "text-sm text-destructive"}`} data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>
+        {/* A GIF embed can't live inside <p>; text keeps <p>, which native acceptance reads. */}
+        {message.body && gifSource(message.body) ? <div><GifEmbed url={message.body} /></div> : <p className={`break-words whitespace-pre-wrap ${message.body ? "text-zinc-300" : "text-sm text-destructive"}`} data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>}
         {!message.own && message.body && <button type="button" className="mt-0.5 min-h-6 w-fit rounded text-xs text-zinc-400 hover:text-zinc-100 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={onReport}>Report private message</button>}
         {notice && <p role="status" className="mt-1 text-xs text-muted-foreground">{notice}</p>}
       </ContextMenuTrigger>
