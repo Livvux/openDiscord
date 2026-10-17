@@ -36,6 +36,15 @@ Optional integrations (see `.env.example`):
   then an account token (`cf accounts tokens create`) with *Workers R2 Storage Bucket Item Write*
   scoped to that bucket. The access key ID is the token ID; the secret is the SHA-256 hex of the token value.
 
+## Optional attachment scanning
+
+A trusted private ClamAV service can be enabled with `CLAMAV_HOST` and `CLAMAV_PORT=3310`.
+Use the [dedicated operations guide](../ops/scanner/README.md) for a pinned image, persistent
+signature updater, private network, monitoring and recovery. Budget an additional 4 GiB for the
+scanner plus update/reload headroom and disk. Once configured, engine failure rejects new
+uploads/imports; existing downloads are unchanged. No configured host means scanning is bypassed.
+Signature age is monitored, not automatically enforced by the app; scanning cannot guarantee safe files.
+
 ## Security notes
 
 - `web` is not published on a host port; only Caddy is. Keep it that way: rate limiting trusts the
