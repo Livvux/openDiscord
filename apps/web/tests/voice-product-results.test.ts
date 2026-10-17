@@ -122,6 +122,12 @@ it.each([
   ["AbortError: The play() request was interrupted private", "playback-interrupted"],
   ["Native encryption worker failed private", "worker"],
   ["WebSocket is already in CLOSING or CLOSED state.", "closed-transport"],
+  ["error reading from signal stream private detail", "signal-read"],
+  ["unable to subscribe because MediaStreamTrack is ended. Do not call MediaStreamTrack.stop() private detail", "ended-track-subscription"],
+  ["unable to set answer private detail", "session-description"],
+  ["missing track resolver for private", "missing-track-resolver"],
+  ["unsupported data type private detail", "unsupported-data"],
+  ["Received encrypted packet but E2EE not set up", "missing-e2ee"],
 ])("classifies a public failure prefix without retaining its detail", (text, code) => {
   const result = classifyVoiceProductConsole(text, "", "https://example.test/app");
   expect(result.code).toBe(code);
