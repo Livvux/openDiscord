@@ -2,39 +2,42 @@ import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { GITHUB_URL } from "@/lib/site";
 import { LanguageSwitcher } from "./language-switcher";
+import { MobileMenu } from "./mobile-menu";
 import { localePath, type Locale, type Messages } from "./i18n";
+import { button, container, size } from "./ui";
 
 export function Nav({ t, locale }: { t: Messages["nav"]; locale: Locale }) {
   const links = [
     [t.features, "#features"],
     [t.selfHost, "#self-host"],
     [t.roadmap, "#roadmap"],
+    ["GitHub", GITHUB_URL],
   ] as const;
+  const linkClass = "rounded-lg px-3 py-2 transition-colors hover:bg-ink/5";
   return (
-    <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-brand-charcoal/75 backdrop-blur-xl backdrop-saturate-150">
-      <div className="mx-auto flex h-16 max-w-6xl items-center gap-8 px-6">
-        <Logo href={localePath(locale)} />
-        <nav aria-label={t.primary} className="hidden gap-1 text-sm text-slate-300 md:flex">
+    <header className="sticky top-0 z-40 bg-canvas">
+      <div className={`${container} flex h-16 items-center gap-6`}>
+        <div className="shrink-0">
+          <Logo tone="light" href={localePath(locale)} />
+        </div>
+        <nav aria-label={t.primary} className="hidden gap-0.5 text-[15px] md:flex">
           {links.map(([label, href]) => (
-            <a key={href} href={href} className="rounded-full px-3 py-1.5 transition hover:bg-white/5 hover:text-white">
+            <a key={href} href={href} className={linkClass}>
               {label}
             </a>
           ))}
-          <a href={GITHUB_URL} className="rounded-full px-3 py-1.5 transition hover:bg-white/5 hover:text-white">
-            GitHub
-          </a>
         </nav>
-        <div className="ml-auto flex items-center gap-2 text-sm whitespace-nowrap">
-          <LanguageSwitcher locale={locale} label={t.language} />
-          <Link href="/sign-in" className="hidden rounded-full px-3 py-1.5 text-slate-300 transition hover:text-white sm:block">
+        <div className="ml-auto flex items-center gap-2 text-sm">
+          <div className="max-sm:hidden">
+            <LanguageSwitcher locale={locale} label={t.language} />
+          </div>
+          <Link href="/sign-in" className={`${button.outline} ${size.sm} max-sm:hidden`}>
             {t.signIn}
           </Link>
-          <Link
-            href="/sign-up"
-            className="rounded-full bg-indigo-600 px-4 py-2 font-medium shadow-[0_0_0_1px_rgba(255,255,255,0.12)_inset,0_8px_24px_-8px_rgba(99,102,241,0.7)] transition hover:bg-indigo-500"
-          >
+          <Link href="/sign-up" className={`${button.primary} ${size.sm}`}>
             {t.join}
           </Link>
+          <MobileMenu label={t.primary} items={[...links.map(([label, href]) => ({ label, href })), { label: t.signIn, href: "/sign-in", internal: true }]} />
         </div>
       </div>
     </header>
