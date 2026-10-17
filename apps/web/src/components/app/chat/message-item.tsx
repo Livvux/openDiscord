@@ -21,6 +21,8 @@ import { assetText, assetTokens, decodeAssetTokens, encodeAssetShortcodes, type 
 import { CommunityAssetImage } from "../community-asset-image";
 import { EmojiSelector } from "../emoji-selector";
 import { EmojiText } from "../emoji-text";
+import { GifEmbed } from "../gif-embed";
+import { gifSource } from "@/lib/gifs";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -33,6 +35,7 @@ function formatBytes(bytes: number): string {
 
 /** Renders stored content: the Markdown subset, with `<@id>` tokens as readable, highlighted names. */
 export function MessageContent({ content, mentions, currentUserId, assets = [] }: { content: string; mentions: readonly Mention[]; currentUserId?: string; assets?: readonly AssetView[] }) {
+  if (gifSource(content)) return <GifEmbed url={content} />;
   const names = new Map(mentions.map((m) => [m.id, m.name]));
   return renderMarkdown(content, (id, key) => (
     <span

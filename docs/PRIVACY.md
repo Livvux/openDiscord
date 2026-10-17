@@ -53,12 +53,19 @@ not end-to-end. See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [DECISIONS.md
 | Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; 180-day retention through the operator maintenance job. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
-There are no analytics, tracking pixels, advertising identifiers or third-party fonts. The Content
-Security Policy blocks requests to other origins, with one optional exception: if the operator enables
-Cloudflare Turnstile, the sign-up page loads Cloudflare's challenge script, and Cloudflare processes
-the visitor's IP address and browser signals to tell people from bots. No other page loads it. If
-the operator enables image attachments on Cloudflare R2, images are stored with Cloudflare as a
-processor; visitors never contact R2 directly.
+There are no built-in analytics, tracking pixels, advertising identifiers or third-party fonts.
+The Content Security Policy restricts third-party requests. If the operator enables Cloudflare
+Turnstile, the sign-up page contacts Cloudflare, which processes the visitor's IP address and
+browser signals. If image attachments use Cloudflare R2, the server accesses R2 privately;
+visitors never contact the storage bucket directly.
+
+If the operator configures KLIPY or GIPHY, opening the GIF picker sends search terms, IP
+address and browser request metadata to the selected provider. KLIPY may receive a GIF
+share interaction. GIF messages are stored as externally hosted URLs (and E2EE direct
+messages encrypt the URL); the GIF file is not uploaded to the instance. Loading an
+external GIF requires an explicit click before the provider receives the viewer's IP
+address and request metadata. Provider privacy terms apply; their GIFs may become
+unavailable independently of the instance.
 
 ## Your rights (GDPR)
 

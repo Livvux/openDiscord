@@ -35,6 +35,13 @@ Optional integrations (see `.env.example`):
   which checks channel membership. With the `cf` CLI: `cf r2 buckets create --name opendiscord-media`,
   then an account token (`cf accounts tokens create`) with *Workers R2 Storage Bucket Item Write*
   scoped to that bucket. The access key ID is the token ID; the secret is the SHA-256 hex of the token value.
+- **GIF search:** Set `KLIPY_APP_KEY` (https://klipy.com/developers), `GIPHY_API_KEY`
+  (https://developers.giphy.com), or both in `.env`. They are browser API keys available
+  to signed-in users at runtime. Each provider has separate usage limits and attribution
+  requirements; configure the KLIPY app without sponsored results because the picker
+  does not display advertisements. GIF messages contain provider CDN URLs, not uploaded
+  media. Opening the picker contacts the selected provider. Receiving a message does not
+  automatically contact the provider: members must click to load an external GIF.
 
 ## Security notes
 
