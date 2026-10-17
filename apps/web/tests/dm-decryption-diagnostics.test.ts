@@ -65,7 +65,7 @@ describe("per-message processing failure boundaries", () => {
     outgoingRequests: vi.fn(async () => []),
     queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
     markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})),
-    decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true })),
+    decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
     close: vi.fn(),
   };
   const history = {
@@ -76,7 +76,7 @@ describe("per-message processing failure boundaries", () => {
   beforeEach(async () => {
     decrypted = decryptedFixture();
     machine.decryptRoomEvent.mockResolvedValue(decrypted);
-    machine.getDevice.mockResolvedValue({ isVerified: () => true });
+    machine.getDevice.mockResolvedValue({ isVerified: () => true, isCrossSignedByOwner: () => false });
     history.acceptEvent.mockResolvedValue(undefined);
     fixtures.initialize.mockResolvedValue(machine);
     fixtures.openHistory.mockResolvedValue(history);
