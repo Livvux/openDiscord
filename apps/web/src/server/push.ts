@@ -10,7 +10,7 @@ import { loadChannelAuthority } from "./access";
 import { AppError } from "./errors";
 import { enforceCap } from "./limits";
 import { getMessageForBroadcast } from "./messages";
-import { mutedCommunities } from "./presence";
+import { mutedCommunities, presenceChoice } from "./presence";
 import { excerptOf } from "@/lib/mentions";
 import { parse } from "./validation";
 
@@ -86,7 +86,7 @@ const sendWithWebPush: PushSender = async (sub, payload) => {
 
 /**
  * Pushes a mention to the person's devices if they can still read the channel and haven't muted the
- * community (people who blocked the author were already left out by `syncMentions`). Gone (404/410)
+ * community or set Do not disturb (people who blocked the author were already left out by `syncMentions`). Gone (404/410)
  * or unusable subscriptions are removed. Errors are logged, never thrown.
  */
 export async function pushMention(userId: string, channelId: string, messageId: string, send: PushSender = sendWithWebPush): Promise<number> {
@@ -96,6 +96,7 @@ export async function pushMention(userId: string, channelId: string, messageId: 
   const access = await loadChannelAuthority(db, channelId, userId);
   if (!access) return 0;
   if ((await mutedCommunities(userId, [access.channel.communityId])).size > 0) return 0;
+  if ((await presenceChoice(userId)) === "dnd") return 0;
   const loaded = await getMessageForBroadcast(messageId);
   if (!loaded) return 0;
   const [c] = await db.select({ name: community.name }).from(community).innerJoin(channel, eq(channel.communityId, community.id)).where(eq(channel.id, channelId));

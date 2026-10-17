@@ -179,6 +179,9 @@ test("production proof route defaults to HTTP 404 and requires both runtime gate
       const response = await page.goto("http://127.0.0.1:3201/voice-worker-proof");
       expect(response?.status()).toBe(404);
       expect(await page.evaluate(() => typeof window.voiceProof)).toBe("undefined");
+      const three = await page.goto("http://127.0.0.1:3201/voice-worker-proof/three-browser");
+      expect(three?.status()).toBe(404);
+      expect(await page.evaluate(() => typeof window.threeVoice)).toBe("undefined");
       await expect(page.getByRole("button", { name: /native worker proof/i })).toHaveCount(0);
     } finally {
       server.kill("SIGTERM");

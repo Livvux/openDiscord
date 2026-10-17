@@ -72,6 +72,16 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   const serverTimeline = await alice.request.get(`/api/dm?conversation=${conversationId}`).then((r) => r.text());
   expect(serverTimeline).not.toContain(first);
   expect(wire.join("\n")).not.toContain(first);
+  await alice.getByRole("button", { name: "Choose emoji", exact: true }).click();
+  const emojiPicker = alice.getByRole("dialog", { name: "Choose emoji or sticker" });
+  await emojiPicker.getByRole("textbox").fill("party popper");
+  await emojiPicker.getByRole("gridcell", { name: "party popper", exact: true }).click();
+  await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("🎉");
+  await alice.getByRole("button", { name: "Send encrypted message", exact: true }).click();
+  const privateEmoji = bob.getByRole("log").getByRole("img", { name: "🎉", exact: true });
+  await expect(privateEmoji).toBeVisible({ timeout: 30_000 });
+  await expect(privateEmoji).toHaveAttribute("src", "/twemoji/17.0.3/svg/1f389.svg");
+  expect(wire.join("\n")).not.toContain("🎉");
   await bob.reload();
   await openConversation(bob, "Private Alice");
   await expect(bob.getByRole("log").getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -151,6 +161,8 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await signUp(charlie, "Private Charlie");
   await charlie.goto(invite);
   await charlie.getByRole("button", { name: "Accept invite", exact: true }).click();
+  await expect(charlie).toHaveURL(/\/app\/c\/[0-9a-f-]+(?:\/|$)/);
+  await expect(charlie.getByRole("heading", { level: 1, name: "general", exact: true })).toBeVisible();
   const charlieId = (await charlie.request.get("/api/auth/get-session").then((response) => response.json())).user.id as string;
   const secondConversation = await alice.evaluate(async (target) => {
     const response = await fetch("/api/dm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "request", target }) });

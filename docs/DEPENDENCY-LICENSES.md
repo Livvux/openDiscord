@@ -16,3 +16,13 @@ This automated gate inventories package declarations. It is not a legal compatib
 an SBOM attestation, a source-code license audit or proof that all distribution obligations have been
 met. A new declaration needs an explicit review of its actual package contents and intended use;
 never add an exception solely to make CI green.
+
+## Emoji graphics
+
+The emoji picker uses `emoji-picker-react` v5's official shadcn registry integration (MIT).
+Twemoji v17.0.3 SVGs are bundled unmodified under `apps/web/public/twemoji/17.0.3/svg`,
+with their upstream CC BY 4.0 license and attribution alongside them. Graphics copyright
+2022–present Jason Sofonia & Justine De Caires; copyright 2014–2021 Twitter.
+Source: https://github.com/jdecked/twemoji/tree/v17.0.3/assets/svg.
+The picker links to this attribution; no emoji image CDN is contacted. On upgrades, replace
+both the SVG directory and `src/lib/twemoji-assets.json`, then run the emoji coverage test.
