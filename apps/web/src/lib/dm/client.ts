@@ -120,7 +120,12 @@ export class PrivateMessaging {
       await client.flush();
       await client.query([userId]);
       const identity = await machine.getIdentity(new C.UserId(matrixUser(userId)));
-      if (!identity) await client.bootstrap();
+      if (!identity) await client.bootstrap().catch(async (error: unknown) => {
+        // Another browser won a concurrent first setup. The SDK drops our mismatched private keys on the
+        // next query (tests/dm-matrix), so continue as an unverified second device that must be verified.
+        await client.query([userId]);
+        if (!(await machine.getIdentity(new C.UserId(matrixUser(userId))))) throw error;
+      });
       window.addEventListener("pagehide", () => client.close(), { once: true });
       window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
       return client;
@@ -305,6 +310,8 @@ export class PrivateMessaging {
           stage = "sender_binding";
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           stage = "device_trust";
+          // Cached state is enough: refresh() runs sync(peer), which re-queries the peer, before every decrypt,
+          // and a device first seen after that query is unknown here, so the message fails closed until then.
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device || await this.identityChanged(envelope.senderId) || !(await this.acceptsDevice(envelope.senderId, device))) throw new Error("Verify the sender's device to read this message.");
           stage = "plaintext_schema";

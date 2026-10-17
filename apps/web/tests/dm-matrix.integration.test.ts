@@ -20,17 +20,20 @@ afterAll(() => users.cleanup());
 /** Real SDK state machines use the production PostgreSQL transport, with no invented keys or local-trust override. */
 class Endpoint {
   private constructor(readonly auth: DmDeviceAuth, readonly machine: C.OlmMachine) {}
-  static async open(userId: string) {
+  static async open(userId: string, bootstrap = true) {
     const auth = { userId, sessionId: randomUUID(), deviceId: randomUUID(), secret: randomBytes(32).toString("hex") };
     await db.insert(session).values({ id: auth.sessionId, userId, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) });
     await registerDmDevice(userId, auth.sessionId, { id: auth.deviceId, secret: auth.secret, name: "Matrix integration" });
     const endpoint = new Endpoint(auth, await C.OlmMachine.initialize(new C.UserId(matrixUser(userId)), new C.DeviceId(auth.deviceId), undefined, undefined, logger));
     await endpoint.flush();
-    const bootstrap = await endpoint.machine.bootstrapCrossSigning(false);
-    if (bootstrap.uploadKeysRequest instanceof C.KeysUploadRequest) await endpoint.out(bootstrap.uploadKeysRequest);
-    await handleCryptoRequest(auth, { kind: "signing", body: JSON.parse(bootstrap.uploadSigningKeysRequest.body) });
-    await endpoint.out(bootstrap.uploadSignaturesRequest);
+    if (bootstrap) await endpoint.bootstrap();
     return endpoint;
+  }
+  async bootstrap() {
+    const requests = await this.machine.bootstrapCrossSigning(false);
+    if (requests.uploadKeysRequest instanceof C.KeysUploadRequest) await this.out(requests.uploadKeysRequest);
+    await handleCryptoRequest(this.auth, { kind: "signing", body: JSON.parse(requests.uploadSigningKeysRequest.body) });
+    await this.out(requests.uploadSignaturesRequest);
   }
   async out(request: Request) {
     const body: unknown = JSON.parse(request.body);
@@ -125,4 +128,17 @@ describe("Matrix and PostgreSQL integration", () => {
 
     } finally { a.machine.close(); b.machine.close(); }
   }, 20_000);
+  it("a browser that loses a concurrent first setup drops its own identity and stays an unverified device", async () => {
+    await C.initAsync();
+    const owner = await users.create("SDK Setup Race");
+    const winner = await Endpoint.open(owner), loser = await Endpoint.open(owner, false);
+    try {
+      await expect(loser.bootstrap()).rejects.toThrow("Restore your identity");
+      await loser.query([owner]);
+      const [ours, theirs] = await Promise.all([loser, winner].map((e) => e.machine.getIdentity(new C.UserId(matrixUser(owner)))));
+      expect(ours?.masterKey).toBe(theirs?.masterKey);
+      expect(ours?.isVerified()).toBe(false);
+      expect((await loser.machine.crossSigningStatus()).hasMaster).toBe(false);
+    } finally { winner.machine.close(); loser.machine.close(); }
+  });
 });
