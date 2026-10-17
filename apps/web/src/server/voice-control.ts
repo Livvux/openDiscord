@@ -1,4 +1,4 @@
-// Unactivated internal draft: no transport, SFU client, tokens or timers.
+// Internal control state; generation-room effects are durable and consumed only after commit.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, asc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -14,6 +14,8 @@ import { consume } from "./limits";
 import { has, Permission } from "./permissions";
 import { parse } from "./validation";
 import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
+
+import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction, type VoiceRoomBudget, type VoiceRoomCleanup } from "./voice-sfu";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Call = typeof voiceCall.$inferSelect;
@@ -34,15 +36,20 @@ function matchesSecret(hash: string, secret: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 const participant = (id: string) => `v1:${id}`;
-const namespace = (id: string) => `@voice_${id}:${VOICE_DOMAIN}`;
+const namespace = (callId: string, memberId: string) => `@voice_${callId}_${memberId}:${VOICE_DOMAIN}`;
+function requireCallNamespace(value: string, callId: string) {
+  const match = /^@voice_([a-f0-9-]{36})_([a-f0-9-]{36}):opendiscord\.local$/.exec(value);
+  if (!match || !z.uuid().safeParse(match[1]).success || !z.uuid().safeParse(match[2]).success || match[1] !== callId || value !== namespace(match[1], match[2])) throw notFound("Current voice device not found.");
+}
 // Voice-only order: advisory -> sorted community -> sorted call -> user/session/anchor SHARE.
 // Never acquire DM or mutate guarded auth tables after entering this scope.
-async function accountSession(tx: Tx, userId: string, sessionId: string, now: Date) {
+async function accountSession(tx: Tx, userId: string, sessionId: string, cutoff?: Date) {
   const [account] = await tx.select({ id: user.id }).from(user).where(eq(user.id, userId)).for("share");
   const [current] = await tx.select({ id: session.id, expiresAt: session.expiresAt }).from(session)
     .where(and(eq(session.id, sessionId), eq(session.userId, userId))).for("share");
-  if (!account || !current || current.expiresAt <= now) throw forbidden("This account session is unavailable.");
+  if (!account || !current || current.expiresAt <= (cutoff ?? new Date())) throw forbidden("This account session is unavailable.");
   await assertActiveUser(userId, tx);
+  return current;
 }
 async function anchorFor(tx: Tx, userId: string, anchorId: string) {
   const [anchor] = await tx.select({ id: dmDevice.id, secretHash: dmDevice.secretHash }).from(dmDevice)
@@ -50,10 +57,11 @@ async function anchorFor(tx: Tx, userId: string, anchorId: string) {
   if (!anchor) throw forbidden("This enrollment anchor is unavailable.");
   return anchor;
 }
-async function joinAuth(tx: Tx, auth: VoiceJoinAuth, now: Date) {
-  await accountSession(tx, auth.userId, auth.sessionId, now);
+async function joinAuth(tx: Tx, auth: VoiceJoinAuth) {
+  const currentSession = await accountSession(tx, auth.userId, auth.sessionId);
   const anchor = await anchorFor(tx, auth.userId, auth.anchorDeviceId);
   if (!matchesSecret(anchor.secretHash, auth.anchorSecret)) throw forbidden("This enrollment anchor is unavailable.");
+  return currentSession;
 }
 async function liveMembers(tx: Tx, callId: string) {
   return tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.callId, callId), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCallMember.id));
@@ -79,22 +87,29 @@ async function markLeft(tx: Tx, call: Call, rows: Member[], reason: string, now:
   if (!remaining.length) { call.status = "closed"; call.closedAt = now; }
   return rows.map((m) => ({ callId: call.id, memberId: m.id, participantIdentity: participant(m.id), reason }));
 }
-async function expireAndRevalidate(tx: Tx, call: Call, now: Date): Promise<VoiceRemoval[]> {
+async function expireAndRevalidate(tx: Tx, call: Call, cutoff?: Date): Promise<VoiceRemoval[]> {
   const stale: Member[] = [];
+  const locked: { member: Member; sessionExpiresAt: Date }[] = [];
   for (const m of await liveMembers(tx, call.id)) {
-    let valid = m.leaseExpiresAt > now;
+    let valid = m.voiceUserId === namespace(call.id, m.id);
     if (valid) {
       try {
-        await accountSession(tx, m.userId, m.sessionId, now);
+        const currentSession = await accountSession(tx, m.userId, m.sessionId, cutoff);
         await anchorFor(tx, m.userId, m.anchorDeviceId);
         const access = await loadChannelAuthority(tx, call.channelId, m.userId);
         valid = !!access && access.channel.kind === "voice" && has(access.authority, Permission.Connect);
+        if (valid) locked.push({ member: m, sessionExpiresAt: currentSession.expiresAt });
       } catch (error) {
         if (!(error instanceof AppError)) throw error;
         valid = false;
       }
     }
     if (!valid) stale.push(m);
+  }
+  // Every blocking authority lock is held before one final freshness decision for all peers.
+  const now = cutoff ?? new Date();
+  for (const { member, sessionExpiresAt } of locked) {
+    if (member.leaseExpiresAt <= now || sessionExpiresAt <= now) stale.push(member);
   }
   const effects = await markLeft(tx, call, stale, "authorization-or-lease-expired", now);
   await closeEmptyVoiceCall(tx, call, now);
@@ -110,42 +125,52 @@ async function snapshot(tx: Tx, call: Call, own: Member, now: Date, removals: Vo
 export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promise<VoiceSnapshot> {
   const auth = parse(voiceJoinAuthSchema, rawAuth), data = parse(voiceJoinSchema, input);
   await consume(`voice-control-join:${auth.userId}`, 30, 60_000);
-  const result = await db.transaction(async (tx): Promise<VoiceSnapshot | AppError> => {
+  const result = await voiceTransaction(async (tx): Promise<VoiceSnapshot | AppError> => {
     await lockVoice(tx);
-    const now = new Date();
+    let now = new Date();
     const [ch] = await tx.select().from(channel).where(eq(channel.id, data.channelId));
     if (!ch) throw notFound("Voice channel not found.");
     await lockCommunity(tx, ch.communityId);
     let [call] = await tx.select().from(voiceCall).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCall.status, "active"))).for("update");
-    await joinAuth(tx, auth, now);
+    const ownSession = await joinAuth(tx, auth);
     const access = await requireChannel(tx, ch.id, auth.userId, Permission.Connect);
     if (access.channel.kind !== "voice") throw invalid("This is not a voice channel.");
-    const removals = call ? await expireAndRevalidate(tx, call, now) : [];
+    const removals = call ? await expireAndRevalidate(tx, call) : [];
     const [previous] = await tx.select({ member: voiceCallMember, call: voiceCall }).from(voiceCallMember)
       .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCallMember.joinNonce, data.joinNonce)));
     if (previous) {
       const m = previous.member;
       if (m.userId !== auth.userId || m.sessionId !== auth.sessionId || m.anchorDeviceId !== auth.anchorDeviceId || m.voiceDeviceId !== data.voiceDeviceId || !matchesSecret(m.enrollmentSecretHash, data.enrollmentSecret)) return conflict("This join nonce already has a different binding.");
-      if (m.state === "left" || m.leaseExpiresAt <= now || previous.call.status !== "active") return conflict("This enrollment has ended. Join with a fresh identity and nonce.");
       try { await noBlockedPairs(tx, await liveMembers(tx, m.callId)); } catch (error) { if (error instanceof AppError) return error; throw error; }
-      return snapshot(tx, previous.call, m, now, removals);
+      const result = await snapshot(tx, previous.call, m, new Date(), removals);
+      now = new Date();
+      if (ownSession.expiresAt <= now) return forbidden("This account session is unavailable.");
+      if (m.state === "left" || m.leaseExpiresAt <= now || previous.call.status !== "active") return conflict("This enrollment has ended. Join with a fresh identity and nonce.");
+      return { ...result, serverTime: now.toISOString() };
     }
     const current = call?.status === "active" ? await liveMembers(tx, call.id) : [];
     try { await noBlockedPairs(tx, current, auth.userId); } catch (error) { if (error instanceof AppError) return error; throw error; }
     if (current.length >= L.members) return invalid("This call has reached its eight-device limit.");
     if (current.some((m) => m.anchorDeviceId === auth.anchorDeviceId)) return conflict("This anchor already has a live voice enrollment.");
     if (call && (await tx.select({ id: voiceCallMember.id }).from(voiceCallMember).where(and(eq(voiceCallMember.callId, call.id), eq(voiceCallMember.voiceDeviceId, data.voiceDeviceId)))).length) return conflict("This voice device ID has already been used in this call.");
+    try { return await tx.transaction(async tx => {
     if (!call || call.status === "closed") {
       [call] = await tx.insert(voiceCall).values({ channelId: ch.id }).returning();
     }
     const { rows: [{ id }] } = await tx.execute<{ id: string }>(sql`select uuidv7() as id`);
-    const [own] = await tx.insert(voiceCallMember).values({ id, callId: call.id, userId: auth.userId, anchorDeviceId: auth.anchorDeviceId, sessionId: auth.sessionId, joinNonce: data.joinNonce, voiceUserId: namespace(id), voiceDeviceId: data.voiceDeviceId, enrollmentSecretHash: digest(data.enrollmentSecret), leaseExpiresAt: new Date(now.getTime() + L.leaseMs) }).returning();
+    now = new Date();
+    if (ownSession.expiresAt <= now) throw forbidden("This account session is unavailable.");
+    const [own] = await tx.insert(voiceCallMember).values({ id, callId: call.id, userId: auth.userId, anchorDeviceId: auth.anchorDeviceId, sessionId: auth.sessionId, joinNonce: data.joinNonce, voiceUserId: namespace(call.id, id), voiceDeviceId: data.voiceDeviceId, enrollmentSecretHash: digest(data.enrollmentSecret), leaseExpiresAt: new Date(now.getTime() + L.leaseMs) }).returning();
     if (current.length) {
       call.generation++;
       await tx.update(voiceCall).set({ generation: call.generation }).where(eq(voiceCall.id, call.id));
       await tx.delete(voiceControlMailbox).where(eq(voiceControlMailbox.callId, call.id));
     }
-    return snapshot(tx, call, own, now, removals);
+    const result = await snapshot(tx, call, own, now, removals);
+    now = new Date();
+    if (ownSession.expiresAt <= now || own.leaseExpiresAt <= now) throw forbidden("This voice enrollment has ended.");
+    return { ...result, serverTime: now.toISOString() };
+    }); } catch (error) { if (error instanceof AppError) return error; throw error; }
   });
   if (result instanceof AppError) throw result;
   return result;
@@ -156,26 +181,36 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
 type Access = { call: Call; own: Member; now: Date; removals: VoiceRemoval[] };
 async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding, allowLeft = false): Promise<Access | AppError> {
   await lockVoice(tx);
-  const now = new Date();
   const [ref] = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, binding.callId));
   if (!ref) throw notFound("Voice enrollment not found.");
   await lockCommunity(tx, ref.communityId);
   const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, binding.callId)).for("update");
-  await accountSession(tx, auth.userId, auth.sessionId, now);
+  const ownSession = await accountSession(tx, auth.userId, auth.sessionId);
   const [own] = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.id, binding.memberId), eq(voiceCallMember.callId, call.id), eq(voiceCallMember.userId, auth.userId), eq(voiceCallMember.sessionId, auth.sessionId)));
   if (!own || auth.memberId !== own.id || own.joinNonce !== binding.joinNonce || !matchesSecret(own.enrollmentSecretHash, auth.secret)) throw forbidden("This voice enrollment is unavailable.");
-  const removals = await expireAndRevalidate(tx, call, now);
+  const removals = await expireAndRevalidate(tx, call);
   const [current] = await tx.select().from(voiceCallMember).where(eq(voiceCallMember.id, own.id));
-  if (allowLeft && current.state === "left") return { call, own: current, now, removals };
-  if (current.state === "left" || current.leaseExpiresAt <= now || call.status !== "active") return forbidden("This voice enrollment has ended.");
-  await anchorFor(tx, own.userId, own.anchorDeviceId);
-  await requireChannel(tx, call.channelId, own.userId, Permission.Connect);
+  if (allowLeft && current.state === "left") {
+    const now = new Date();
+    if (ownSession.expiresAt <= now) return forbidden("This account session is unavailable.");
+    return { call, own: current, now, removals };
+  }
+  if (current.state === "left" || call.status !== "active") return forbidden("This voice enrollment has ended.");
+  try {
+    await anchorFor(tx, own.userId, own.anchorDeviceId);
+    await requireChannel(tx, call.channelId, own.userId, Permission.Connect);
+  } catch (error) { if (error instanceof AppError) return error; throw error; }
   try { await noBlockedPairs(tx, await liveMembers(tx, call.id)); } catch (error) { if (error instanceof AppError) return error; throw error; }
+  const now = new Date();
+  if (ownSession.expiresAt <= now || current.leaseExpiresAt <= now) {
+    await markLeft(tx, call, [current], "authorization-or-lease-expired", now);
+    return forbidden("This voice enrollment has ended.");
+  }
   return { call, own: current, now, removals };
 }
 /** Internal only: capture authorization and roster under the same lifecycle/community/call locks.
  * No heartbeat extension, SDK call or network effect occurs in this transaction. */
-export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Promise<VoiceMediaGrant> {
+export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown, cleanup?: { budget: VoiceRoomBudget; deferUntilRevalidation?: boolean }): Promise<VoiceMediaGrant> {
   const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
   const result = await db.transaction(async (tx): Promise<VoiceMediaGrant | AppError> => {
@@ -189,9 +224,15 @@ export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Pr
       ...(has(authority, Permission.Speak) ? ["microphone" as const] : []),
       ...(has(authority, Permission.Video) ? ["camera" as const, "screen_share" as const, "screen_share_audio" as const] : []),
     ];
+    const expiresAt = new Date(Math.min(own.leaseExpiresAt.getTime(), currentSession.expiresAt.getTime(), now.getTime() + 60_000));
+    try { await reserveVoiceRoom(tx, { channelId: call.channelId, callId: call.id, generation: call.generation }, expiresAt); }
+    catch (error) { if (error instanceof AppError) return error; throw error; }
     return { snapshot: await snapshot(tx, call, own, now, removals), roomName: voiceRoomName({ channelId: call.channelId, callId: call.id, generation: call.generation }), participantIdentity: participant(own.id), sources, canPublishData: false,
-      expiresAt: new Date(Math.min(own.leaseExpiresAt.getTime(), currentSession.expiresAt.getTime(), now.getTime() + 60_000)).toISOString() };
+      expiresAt: expiresAt.toISOString() };
   });
+  // A successful first token reservation defers opportunistic consumption until its mandatory
+  // post-create revalidation. Denials still commit reaping and consume within the same allowance.
+  if (!cleanup?.deferUntilRevalidation || result instanceof AppError) await consumeVoiceRooms({ budget: cleanup?.budget });
   if (result instanceof AppError) throw result;
   return result;
 }
@@ -199,7 +240,7 @@ export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown): Pr
 export async function heartbeatVoiceControl(rawAuth: unknown, input: unknown): Promise<VoiceSnapshot> {
   const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
-  const result = await db.transaction(async (tx) => {
+  const result = await voiceTransaction(async (tx) => {
     const access = await boundAccess(tx, auth, binding);
     if (access instanceof AppError) return access;
     const { call, own, now, removals } = access;
@@ -214,7 +255,7 @@ export async function heartbeatVoiceControl(rawAuth: unknown, input: unknown): P
 export async function leaveVoiceControl(rawAuth: unknown, input: unknown): Promise<{ removals: VoiceRemoval[] }> {
   const auth = parse(voiceMemberAuthSchema, rawAuth), binding = parse(voiceBindingSchema, input);
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
-  const result = await db.transaction(async (tx) => {
+  const result = await voiceTransaction(async (tx) => {
     const access = await boundAccess(tx, auth, binding, true);
     if (access instanceof AppError) return access;
     if (access.own.state === "left") return { removals: access.removals };
@@ -279,10 +320,12 @@ export async function invalidateLostVoiceCapabilities(tx: Tx, before: Awaited<Re
 export async function invalidateBlockedVoicePair(tx: Tx, first: string, second: string) {
   await lockVoice(tx);
   const rows = await selectedVoiceMembers(tx, { userId: first });
-  for (const callId of [...new Set(rows.map(r => r.call.id))]) {
+  const removals: VoiceRemoval[] = [];
+  for (const callId of [...new Set(rows.map(r => r.call.id))].sort()) {
     const peers = await liveMembers(tx, callId);
-    if (peers.some(m => m.userId === second)) await invalidateVoiceMembership(tx, { callId }, "blocked-pair");
+    if (peers.some(m => m.userId === second)) removals.push(...await invalidateVoiceMembership(tx, { callId }, "blocked-pair"));
   }
+  return removals;
 }
 async function closeEmptyVoiceCall(tx: Tx, call: Call, now: Date) {
   if (call.status !== "active" || (await liveMembers(tx, call.id)).length) return;
@@ -312,8 +355,11 @@ const voiceRepairEligible = (now: Date) => sql`(
 export const VOICE_MAINTENANCE_BATCH_SIZE = 8;
 /** Separate DB-only Voice batches; eligibility and keyset prevent healthy-prefix starvation. */
 export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }: { apply: boolean; now: Date; batchSize: number; maxBatches: number }) {
-  if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
+  const rooms: VoiceRoomCleanup = { claimed: 0, requests: 0, retired: 0, deleted: 0, failed: 0, unavailable: 0, limited: false };
+  if (!apply) return { rooms, scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
   const voiceBatchSize = Math.min(batchSize, VOICE_MAINTENANCE_BATCH_SIZE);
+  const cleanupDeadline = performance.now() + 20_000;
+  let cleanupRooms = 16, cleanupRequests = 32;
   let cursor: string | undefined, scanned = 0, closed = 0, removed = 0;
   const closedCallIds: string[] = [];
   for (let batch = 0; batch < maxBatches; batch++) {
@@ -332,12 +378,20 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
       }
       return { calls, closed, removed, closedCallIds };
     });
+    if (cleanupRooms > 0 && cleanupRequests > 0) {
+      const cleanup = await consumeVoiceRooms({ maxRooms: cleanupRooms, maxRequests: cleanupRequests, maxMilliseconds: Math.max(0, cleanupDeadline - performance.now()) });
+      cleanupRooms -= cleanup.claimed; cleanupRequests -= cleanup.requests;
+      rooms.claimed += cleanup.claimed; rooms.requests += cleanup.requests;
+      rooms.retired += cleanup.retired; rooms.deleted += cleanup.deleted;
+      rooms.failed += cleanup.failed; rooms.unavailable += cleanup.unavailable;
+      rooms.limited ||= cleanup.limited;
+    }
     scanned += result.calls.length; closed += result.closed; removed += result.removed;
     closedCallIds.push(...result.closedCallIds);
     cursor = result.calls.at(-1)?.call.id;
-    if (result.calls.length < voiceBatchSize) return { scanned, closed, removed, closedCallIds, limited: false };
+    if (result.calls.length < voiceBatchSize) return { rooms, scanned, closed, removed, closedCallIds, limited: false };
   }
-  return { scanned, closed, removed, closedCallIds, limited: true };
+  return { rooms, scanned, closed, removed, closedCallIds, limited: true };
 }
 
 const keyRecord = z.record(z.string().regex(/^signed_curve25519:[A-Za-z0-9+/_=-]{1,100}$/), voicePrekeySchema);
@@ -348,13 +402,22 @@ const queryBody = z.object({ device_keys: z.record(z.string().max(256), z.array(
 const claimBody = z.object({ one_time_keys: z.record(z.string().max(256), z.record(z.uuid(), z.literal("signed_curve25519"))), timeout: z.number().int().min(0).max(60_000).optional() }).strict();
 const sendBody = z.object({ messages: z.record(z.string().max(256), z.record(z.uuid(), object)) }).strict();
 
-async function targetFor(tx: Tx, callId: string, userId: string): Promise<Member> {
+async function currentTarget(tx: Tx, callId: string, userId: string) {
+  requireCallNamespace(userId, callId);
   const [target] = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.callId, callId), eq(voiceCallMember.voiceUserId, userId), ne(voiceCallMember.state, "left")));
+  return target;
+}
+async function targetFor(tx: Tx, callId: string, userId: string): Promise<Member> {
+  const target = await currentTarget(tx, callId, userId);
   if (!target) throw notFound("Current voice device not found.");
   return target;
 }
+// Initial own signatures may precede stored cross-signing IDs. Query can later merge
+// these four entries with four known stored signing IDs; prekeys are returned unchanged.
+const MAX_INITIAL_SIGNATURE_KEYS = 4;
 function selfSignatures(value: { signatures?: Record<string, Record<string, string>> }, ownUser: string) {
   if (value.signatures && Object.keys(value.signatures).some((id) => id !== ownUser)) throw invalid("Only this voice identity may sign its uploaded keys.");
+  if (Object.keys(value.signatures?.[ownUser] ?? {}).length > MAX_INITIAL_SIGNATURE_KEYS) throw invalid("Too many initial voice signatures.");
 }
 async function identityFor(tx: Tx, memberId: string) {
   const [identity] = await tx.select().from(voiceIdentity).where(eq(voiceIdentity.memberId, memberId));
@@ -387,32 +450,39 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
   } else if (request.kind === "signing") body = parse(signingBody, request.body);
   else if (request.kind === "query") body = parse(queryBody, request.body);
   else if (request.kind === "claim") body = parse(claimBody, request.body);
-  else if (request.kind === "send") {
+  else if ((request.kind === "send" || request.kind === "retire")) {
     body = parse(sendBody, request.body);
     if (!voiceEventSchema(request.eventType)) throw invalid("Unsupported voice device event.");
   } else if (request.kind === "signatures") body = request.body;
-  const nested = request.kind === "query" ? body.device_keys : request.kind === "claim" ? body.one_time_keys : request.kind === "send" ? body.messages : request.kind === "signatures" ? body : undefined;
+  const nested = request.kind === "query" ? body.device_keys : request.kind === "claim" ? body.one_time_keys : (request.kind === "send" || request.kind === "retire") ? body.messages : request.kind === "signatures" ? body : undefined;
   if (nested !== undefined) {
     const entries = Object.entries(record(nested));
-    if (entries.length > (request.kind === "send" ? L.members - 1 : L.members)) throw invalid("Too many voice targets.");
+    if ((["send", "retire", "signatures"].includes(request.kind) && entries.length !== 1) || entries.length > L.members) throw invalid("Too many voice targets.");
     let work = 0;
     for (const [, value] of entries) {
       const count = Array.isArray(value) ? value.length : Object.keys(record(value)).length;
-      if (count > (request.kind === "signatures" ? 2 : 1) || (work += Math.max(count, 1)) > (request.kind === "signatures" ? 16 : L.members)) throw invalid("Too many voice target keys.");
+      if (((request.kind === "send" || request.kind === "retire" || request.kind === "signatures" || request.kind === "claim") && count === 0) || count > (request.kind === "signatures" ? 2 : 1) || (work += Math.max(count, 1)) > (request.kind === "signatures" ? 16 : L.members)) throw invalid("Too many voice target keys.");
     }
   }
   await consume(`voice-control:${auth.userId}`, 240, 60_000);
-  const result = await db.transaction(async (tx): Promise<Json | AppError> => {
+  const result = await voiceTransaction(async (tx): Promise<Json | AppError> => {
     const access = await boundAccess(tx, auth, data);
     if (access instanceof AppError) return access;
     const { call, own, now } = access;
     if (call.generation !== data.expectedGeneration) return conflict("Voice membership changed. Refresh the current roster.");
-    await tx.delete(voiceControlMailbox).where(and(eq(voiceControlMailbox.callId, call.id), lte(voiceControlMailbox.expiresAt, now)));
+    try { return await tx.transaction(async tx => {
+    if (request.kind !== "retire") await tx.delete(voiceControlMailbox).where(and(eq(voiceControlMailbox.callId, call.id), lte(voiceControlMailbox.expiresAt, now)));
     // Crucially validate current scope BEFORE receipt replay, so an old receipt never reveals a
     // removed device. Active-member receipts are tombstones, never purged by TTL or rekey.
     if (nested !== undefined) {
       for (const [matrixId, devices] of Object.entries(record(nested))) {
-        const target = await targetFor(tx, call.id, matrixId);
+        requireCallNamespace(matrixId, call.id);
+        if (request.kind === "retire") continue;
+        const target = await currentTarget(tx, call.id, matrixId);
+        if (!target) {
+          if (request.kind === "send") throw notFound("Current voice device not found.");
+          continue;
+        }
         if (request.kind !== "signatures") {
           const ids = Array.isArray(devices) ? devices : Object.keys(record(devices));
           if (ids.some((id) => id !== target.voiceDeviceId)) throw notFound("Current voice device not found.");
@@ -443,7 +513,19 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
       return receipt.response;
     }
     let response: Json = {};
-    if (request.kind === "upload") {
+    if (request.kind === "retire") {
+      for (const rawDevices of Object.values(record(body.messages))) {
+        for (const rawContent of Object.values(record(rawDevices))) {
+          const schema = voiceEventSchema(request.eventType);
+          if (!schema) throw invalid("Unsupported voice device event.");
+          const content = record(parse(schema, rawContent));
+          if (request.eventType === "m.room.encrypted") {
+            if (Object.keys(record(content.ciphertext)).length !== 1) throw invalid("Native Olm envelope requires one recipient ciphertext.");
+          } else if (content.from_device !== undefined && content.from_device !== own.voiceDeviceId) throw invalid("Native verification sender mismatch.");
+        }
+      }
+      response = { nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } };
+    } else if (request.kind === "upload") {
       const identity = await identityFor(tx, own.id);
       let deviceKeys = identity?.deviceKeys ?? null;
       if (body.device_keys) {
@@ -486,7 +568,10 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
     } else if (request.kind === "query") {
       const device_keys: Json = {}, master_keys: Json = {}, self_signing_keys: Json = {}, user_signing_keys: Json = {};
       for (const matrixId of Object.keys(record(body.device_keys))) {
-        const target = await targetFor(tx, call.id, matrixId), identity = await identityFor(tx, target.id);
+        const target = await currentTarget(tx, call.id, matrixId);
+        // Explicit absence removes a previously known native device; omission leaves it cached.
+        if (!target) { device_keys[matrixId] = {}; continue; }
+        const identity = await identityFor(tx, target.id);
         const signatures = await tx.select().from(voiceSignature).where(and(eq(voiceSignature.targetMemberId, target.id), or(eq(voiceSignature.signerMemberId, target.id), eq(voiceSignature.signerMemberId, own.id))));
         const attach = (keyId: string, value: Json): Json => {
           const merged = record(value.signatures ?? {});
@@ -508,8 +593,14 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
     } else if (request.kind === "signatures") {
       const identity = await identityFor(tx, own.id);
       const signerIds = new Set([`ed25519:${own.voiceDeviceId}`, ...Object.values(identity?.crossSigningKeys ?? {}).flatMap((key) => Object.keys(record(record(key).keys)))]);
+      const failures: Json = {};
       for (const [matrixId, rawKeys] of Object.entries(body)) {
-        const target = await targetFor(tx, call.id, matrixId), targetIdentity = await identityFor(tx, target.id);
+        const target = await currentTarget(tx, call.id, matrixId);
+        if (!target) {
+          failures[matrixId] = Object.fromEntries(Object.keys(record(rawKeys)).map(keyId => [keyId, { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." }]));
+          continue;
+        }
+        const targetIdentity = await identityFor(tx, target.id);
         for (const [keyId, raw] of Object.entries(record(rawKeys))) {
           const original = keyId === target.voiceDeviceId ? targetIdentity?.deviceKeys : targetIdentity?.crossSigningKeys && signingId(targetIdentity.crossSigningKeys.master_key) === keyId ? record(targetIdentity.crossSigningKeys.master_key) : undefined;
           if (!original) throw invalid("Native signature target does not exist.");
@@ -520,11 +611,12 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
           await tx.insert(voiceSignature).values({ signerMemberId: own.id, targetMemberId: target.id, keyId, signatures }).onConflictDoUpdate({ target: [voiceSignature.signerMemberId, voiceSignature.targetMemberId, voiceSignature.keyId], set: { signatures } });
         }
       }
-      response = { failures: {} };
+      response = { failures };
     } else if (request.kind === "claim") {
       const one_time_keys: Json = {};
       for (const matrixId of Object.keys(record(body.one_time_keys))) {
-        const target = await targetFor(tx, call.id, matrixId);
+        const target = await currentTarget(tx, call.id, matrixId);
+        if (!target) continue;
         const responseKeys: Json = {};
         for (const deviceId of Object.keys(record(record(body.one_time_keys)[matrixId]))) {
           const [key] = await tx.select().from(voicePrekey).where(and(eq(voicePrekey.memberId, target.id), eq(voicePrekey.retired, false), or(eq(voicePrekey.used, false), eq(voicePrekey.fallback, true)))).orderBy(asc(voicePrekey.fallback), asc(voicePrekey.keyId)).limit(1).for("update");
@@ -554,9 +646,11 @@ export async function handleVoiceCrypto(rawAuth: unknown, input: unknown): Promi
           await tx.insert(voiceControlMailbox).values({ callId: call.id, senderMemberId: own.id, recipientMemberId: target.id, generation: call.generation, event: { sender: own.voiceUserId, type: request.eventType, content }, expiresAt: new Date(now.getTime() + L.mailboxTtlMs) });
         }
       }
+      response = { nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } };
     }
     if (request.kind !== "query") await storeReceipt(tx, own, requestId, requestDigest, response, now);
     return response;
+    }); } catch (error) { if (error instanceof AppError) return error; throw error; }
   });
   if (result instanceof AppError) throw result;
   return result;

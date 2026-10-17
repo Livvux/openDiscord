@@ -1,0 +1,27 @@
+# Dedicated ordinary Docker Compose deployment; never attach to dokploy-network.
+services:
+  scanner:
+    image: clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
+    restart: unless-stopped
+    mem_limit: 4g
+    memswap_limit: 4g
+    environment:
+      TZ: Etc/UTC
+      FRESHCLAM_CHECKS: "12"
+    volumes:
+      - signatures:/var/lib/clamav
+    networks:
+      default: {}
+      app:
+        aliases: [opendiscord-private-scanner]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  signatures: {}
+networks:
+  app:
+    external: true
+    name: ${OPENDISCORD_APP_PRIVATE_NETWORK:?Set the exact existing app-private network}

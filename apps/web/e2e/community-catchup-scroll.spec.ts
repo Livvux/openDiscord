@@ -121,9 +121,9 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
       await sendMessage(writer, `History ${index}: ${"A long message keeps this channel scrollable. ".repeat(60)}`.trim());
     }
     reader = await joinAsNewUser(browser, "Scroll Reader", await createInviteLink(writer));
-    await reader.goto(channelUrl);
-    await expect(reader.getByRole("heading", { level: 1, name: "general", exact: true })).toBeVisible();
-    await expect(reader.getByRole("log", { name: "Messages in #general" })).toBeVisible();
+    // Retire the joined document and its in-flight catch-up before intercepting the fresh mount.
+    // Otherwise a late request from the old document can consume the single-request gate.
+    await reader.goto("about:blank");
     reader.on("pageerror", (error) => errors.push(error.message));
     reader.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     const historyPath = `/api/channels/${channelId}/messages`;

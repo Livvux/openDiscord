@@ -1,3 +1,4 @@
+import { consumeVoiceRooms } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { and, count, desc, eq, gt, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
@@ -36,6 +37,12 @@ async function mutate<T>(actor: AdminActor, fn: (tx: Parameters<Parameters<typeo
     await requireInstanceAdmin(actor, tx);
     return fn(tx);
   });
+}
+
+async function mutateVoice<T>(actor: AdminActor, fn: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
+  const value = await mutate(actor, fn);
+  await consumeVoiceRooms();
+  return value;
 }
 
 export const USER_FILTERS = ["all", "pending", "active", "rejected", "suspended", "admins"] as const;
@@ -94,7 +101,7 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
   const targetId = parse(z.string().min(1).max(128), rawId);
   const enabled = parse(z.boolean(), suspended);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId)).for("update");
     if (!target) throw notFound("Account not found.");
     // Administrators must first be demoted; this protects the last admin and prevents self-lockout.
@@ -113,12 +120,12 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
 async function disconnectUser(userId: string) {
   const memberships = await db.select({ communityId: member.communityId }).from(member).where(eq(member.userId, userId));
   await Promise.all(memberships.map((m) => publish({ type: "member.removed", communityId: m.communityId, userId })));
-  for (const m of memberships) afterAccessChange(m.communityId);
+  for (const m of memberships) await afterAccessChange(m.communityId);
 }
 export async function revokeUserSessions(actor: AdminActor, rawId: unknown, rawReason: unknown) {
   const targetId = parse(z.string().min(1).max(128), rawId);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId));
     if (!target) throw notFound("Account not found.");
     await invalidateVoiceMembership(tx, { userId: targetId }, "sessions-revoked");
@@ -131,7 +138,7 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
   const id = parse(uuid, rawId);
   const enabled = parse(z.boolean(), suspended);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     if (enabled) await invalidateVoiceMembership(tx, { communityId: id }, "community-suspended");
     const rows = await tx.update(community).set({ suspendedAt: enabled ? new Date() : null, suspensionReason: enabled ? reason : null })
       .where(eq(community.id, id)).returning({ id: community.id });
@@ -140,14 +147,14 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
   });
   if (enabled) {
     await publish({ type: "community.deleted", communityId: id });
-    afterAccessChange(id);
+    await afterAccessChange(id);
   }
 }
 export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEmail: unknown, rawReason: unknown) {
   const id = parse(uuid, rawId);
   const email = parse(z.email().max(254).transform((s) => s.toLowerCase()), rawEmail);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [c] = await tx.select({ id: community.id }).from(community).where(eq(community.id, id)).for("update");
     if (!c) throw notFound("Community not found.");
     const beforeVoice = await captureVoiceCapabilities(tx, { communityId: id });
@@ -165,13 +172,13 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
   });
   await publish({ type: "channels.changed", communityId: id });
   // The previous owner may lose rights they relied on in voice.
-  afterAccessChange(id);
+  await afterAccessChange(id);
 }
 export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enabled: unknown, rawReason: unknown) {
   const id = parse(z.string().min(1).max(128), rawId);
   const grant = parse(z.boolean(), enabled);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const beforeVoice = await captureVoiceCapabilities(tx, { userId: id });
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
     if (!target) throw notFound("Account not found.");
@@ -208,7 +215,7 @@ export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision
   const targetId = parse(z.string().min(1).max(128), rawId);
   const decision = parse(z.enum(["approved", "rejected"]), rawDecision);
   const reason = parse(requiredReason, rawReason);
-  const target = await mutate(actor, async (tx) => {
+  const target = await mutateVoice(actor, async (tx) => {
     const [row] = await tx.select({ id: user.id, email: user.email, status: user.approvalStatus }).from(user).where(eq(user.id, targetId)).for("update");
     if (!row) throw notFound("Account not found.");
     if (row.status === decision) throw new AppError("conflict", `This account is already ${decision}.`);
@@ -229,7 +236,7 @@ export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision
 export async function setClosedAlpha(actor: AdminActor, rawEnabled: unknown, rawReason: unknown) {
   const closedAlpha = parse(z.boolean(), rawEnabled);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const beforeVoice = await captureVoiceCapabilities(tx);
     await tx.insert(instanceSettings).values({ closedAlpha }).onConflictDoUpdate({ target: instanceSettings.id, set: { closedAlpha } });
     await invalidateLostVoiceCapabilities(tx, beforeVoice);
@@ -256,7 +263,7 @@ export async function resolveReport(actor: AdminActor, rawId: unknown, rawOutcom
   const id = parse(uuid, rawId);
   const outcome = parse(z.enum(["dismissed", "removed"]), rawOutcome);
   const reason = parse(requiredReason, rawReason);
-  const event = await mutate(actor, async (tx) => {
+  const event = await mutateVoice(actor, async (tx) => {
     const [report] = await tx.select().from(abuseReport).where(eq(abuseReport.id, id)).for("update");
     if (!report) throw notFound("Report not found.");
     if (report.status !== "open") throw new AppError("conflict", "This report has already been resolved.");

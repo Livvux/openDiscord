@@ -1,3 +1,4 @@
+import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -155,7 +156,7 @@ export async function listDmDevices(actor: string, target = actor): Promise<Devi
   return (await db.select().from(dmDevice).where(eq(dmDevice.userId, target)).orderBy(asc(dmDevice.createdAt))).map((d) => ({ id: d.id, userId: d.userId, name: d.name, revoked: !!d.revokedAt, createdAt: d.createdAt.toISOString() }));
 }
 export async function revokeDmDevice(actor: string, id: string): Promise<void> {
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
     await lockVoiceLifecycle(tx, "auth");
     const [device] = await tx.update(dmDevice).set({ revokedAt: new Date() }).where(and(eq(dmDevice.id, parse(uuid, id)), eq(dmDevice.userId, actor))).returning({ id: dmDevice.id });
     if (!device) throw notFound("Device not found.");

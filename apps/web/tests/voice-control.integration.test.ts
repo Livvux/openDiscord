@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, SQL, sql } from "drizzle-orm";
 import { z } from "zod";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { channel, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmSignature, member, role, session, userBlock } from "@/db/schema";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
@@ -35,7 +35,7 @@ describe("unactivated voice control server admission", () => {
   it("creates a server-owned namespace and preserves the entire exact nonce binding", async () => {
     const first = await joinVoiceControl(auth(), join());
     expect(first).toMatchObject({ channelId, joinNonce, voiceDeviceId, generation: 1 });
-    expect(first.voiceUserId).toBe(`@voice_${first.memberId}:opendiscord.local`);
+    expect(first.voiceUserId).toBe(`@voice_${first.callId}_${first.memberId}:opendiscord.local`);
     expect(first.participantIdentity).toBe(`v1:${first.memberId}`);
     expect(await joinVoiceControl(auth(), join())).toMatchObject({ memberId: first.memberId, callId: first.callId });
     expect(JSON.stringify(first)).not.toContain(enrollmentSecret);
@@ -87,11 +87,143 @@ async function upload(e: Endpoint, prekeys: Record<string, unknown> = {}) {
   await crypto(e, { kind: "upload", body: { device_keys: keys(e), one_time_keys: prekeys } });
 }
 const keyContent = (letter: string) => ({ key: letter.repeat(43), signatures: {} });
-const claim = (e: Endpoint, requestId = randomUUID()) => ({ kind: "claim", requestId, body: { one_time_keys: { [e.snapshot.voiceUserId]: { [e.snapshot.voiceDeviceId]: "signed_curve25519" } } } });
-const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "send", requestId, eventType: "m.key.verification.request", body: { messages: { [b.snapshot.voiceUserId]: { [b.snapshot.voiceDeviceId]: { from_device: a.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } });
+const claim = (e: Endpoint, requestId = randomUUID()) => ({ kind: "claim", requestId, nativeRequestId: requestId, body: { one_time_keys: { [e.snapshot.voiceUserId]: { [e.snapshot.voiceDeviceId]: "signed_curve25519" } } } });
+const send = (a: Endpoint, b: Endpoint, requestId = randomUUID()) => ({ kind: "send", requestId, nativeRequestId: requestId, nativeTxnId: requestId, eventType: "m.key.verification.request", body: { messages: { [b.snapshot.voiceUserId]: { [b.snapshot.voiceDeviceId]: { from_device: a.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } });
 
 // These tests exercise the internal draft directly. No endpoint or active product flow is created.
 describe("voice-only scope, immutable public state and replay", () => {
+  it.each((["lease", "session"] as const).flatMap(deadline => (["heartbeat", "crypto", "join-retry"] as const).map(operation => ({ deadline, operation }))))("rechecks $deadline after an observed row-lock wait before $operation", async ({ deadline, operation }) => {
+    const { endpoints: [a] } = await fixture(1);
+    const writer = await db.$client.connect();
+    const start = Date.now();
+    if (deadline === "lease") await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(start + 10_000) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    else await db.update(session).set({ expiresAt: new Date(start + 10_000) }).where(eq(session.id, a.sessionId));
+    let pending: Promise<unknown> | undefined;
+    try {
+      await writer.query("BEGIN");
+      const { rows: [{ pid }] } = await writer.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await writer.query('select id from "user" where id = $1 for update', [a.userId]);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(start);
+      const action = operation === "heartbeat" ? heartbeatVoiceControl(memberAuth(a), binding(a))
+        : operation === "crypto" ? crypto(a, { kind: "sync" })
+        : joinVoiceControl({ userId: a.userId, sessionId: a.sessionId, anchorDeviceId: a.anchorDeviceId, anchorSecret: a.anchorSecret }, { channelId: a.snapshot.channelId, joinNonce: a.snapshot.joinNonce, voiceDeviceId: a.snapshot.voiceDeviceId, enrollmentSecret: a.secret, consent: true });
+      pending = action.then(value => ({ value }), error => ({ error }));
+      let observed = false;
+      for (let i = 0; i < 100; i++) {
+        const { rows: [{ blocked }] } = await db.$client.query<{ blocked: boolean }>("select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))) as blocked", [pid]);
+        if (blocked) { observed = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(observed).toBe(true);
+      vi.setSystemTime(start + 20_000);
+      await writer.query("COMMIT");
+      expect(await pending).toMatchObject({ error: { code: operation === "join-retry" && deadline === "lease" ? "conflict" : "forbidden" } });
+      const [member] = await db.select().from(voiceCallMember).where(eq(voiceCallMember.id, a.snapshot.memberId));
+      if (deadline === "lease") expect(member.state).toBe("left");
+      expect(member.leaseExpiresAt.getTime()).toBeLessThanOrEqual(deadline === "lease" ? start + 20_000 : new Date(a.snapshot.leaseExpiresAt).getTime());
+      expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.senderMemberId, a.snapshot.memberId))).toBe(0);
+    } finally {
+      await writer.query("ROLLBACK");
+      await pending;
+      vi.useRealTimers();
+      writer.release();
+    }
+  });
+  it("strictly separates single-target current enqueue from explicit nondelivery retirement", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    await upload(a); await upload(b);
+    const request = send(a, b);
+    expect(await crypto(a, request)).toEqual({ nativeResponse: {}, disposition: { status: "processed-current", enqueued: 1 } });
+    const before = await db.$count(voiceControlMailbox);
+    const retire = { ...request, kind: "retire", requestId: randomUUID() };
+    expect(await crypto(a, retire)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    expect(await crypto(a, retire)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`;
+    const unknownRequest = { ...retire, requestId: randomUUID(), body: { messages: { [unknown]: { [randomUUID()]: request.body.messages[b.snapshot.voiceUserId][b.snapshot.voiceDeviceId] } } } };
+    expect(await crypto(a, unknownRequest)).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+    expect(await db.$count(voiceControlMailbox)).toBe(before);
+    await expect(crypto(a, { ...retire, requestId: request.requestId })).rejects.toMatchObject({ code: "conflict" });
+    await expect(crypto(a, { ...retire, nativeRequestId: randomUUID() })).rejects.toMatchObject({ code: "conflict" });
+    await expect(crypto(a, { ...retire, nativeTxnId: randomUUID() })).rejects.toMatchObject({ code: "conflict" });
+    for (const kind of ["send", "retire", "signatures"]) {
+      const body = kind === "signatures" ? {} : { messages: {} };
+      await expect(crypto(a, kind === "signatures" ? { kind, body } : { ...request, kind, requestId: randomUUID(), body })).rejects.toMatchObject({ code: "invalid" });
+    }
+    for (const kind of ["send", "retire"]) {
+      await expect(crypto(a, { ...request, kind, requestId: randomUUID(), body: { messages: { ...request.body.messages, [unknown]: { [randomUUID()]: {} } } } })).rejects.toMatchObject({ code: "invalid" });
+    }
+    await expect(crypto(a, { kind: "signatures", body: { [a.snapshot.voiceUserId]: {}, [b.snapshot.voiceUserId]: {} } })).rejects.toMatchObject({ code: "invalid" });
+  });
+  it("returns current same-call absence and truthful signature refusal without historical keys", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    await upload(a); await upload(b, { "signed_curve25519:one": keyContent("d") });
+    const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`, device = randomUUID();
+    expect(await crypto(a, { kind: "query", body: { device_keys: { [unknown]: [] } } })).toEqual({ device_keys: { [unknown]: {} }, master_keys: {}, self_signing_keys: {}, user_signing_keys: {}, failures: {} });
+    const request = { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [unknown]: { [device]: "signed_curve25519" } } } };
+    expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
+    expect(await crypto(a, request)).toEqual({ one_time_keys: {}, failures: {} });
+    expect(await crypto(a, { kind: "signatures", body: { [unknown]: { [device]: keys(b) } } })).toEqual({ failures: { [unknown]: { [device]: { errcode: "M_FORBIDDEN", error: "Current voice signature target is unavailable." } } } });
+    expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, b.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(0);
+    expect(await db.$count(voiceSignature, eq(voiceSignature.signerMemberId, a.snapshot.memberId))).toBe(0);
+  });
+  it.each(["session", "anchor", "lease", "generation"] as const)("checks current %s authority before retirement receipt replay", async (loss) => {
+    const { endpoints: [a, b] } = await fixture();
+    const request = { ...send(a, b), kind: "retire" };
+    await crypto(a, request);
+    if (loss === "session") await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, a.sessionId));
+    else if (loss === "anchor") await db.update(dmDevice).set({ revokedAt: new Date() }).where(eq(dmDevice.id, a.anchorDeviceId));
+    else if (loss === "lease") await db.update(voiceCallMember).set({ leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(voiceCallMember.id, a.snapshot.memberId));
+    else await leaveVoiceControl(memberAuth(b), binding(b));
+    await expect(crypto(a, request)).rejects.toMatchObject({ code: loss === "generation" ? "conflict" : "forbidden" });
+    expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.snapshot.callId))).toBe(0);
+  });
+  it("retires healthy current and unknown targets without recipient/key reads or mailbox inserts", async () => {
+    const { endpoints: [a, b] } = await fixture();
+    const transaction = db.transaction.bind(db);
+    let forbiddenAccesses = 0;
+    const targetsRecipient = (value: unknown): boolean => value === voiceCallMember.voiceUserId || (value instanceof SQL && value.queryChunks.some(targetsRecipient));
+    // Instrument the real transaction; retain its real PostgreSQL locks, reads and receipt writes.
+    const spy = vi.spyOn(db, "transaction").mockImplementation((callback, config) => transaction(tx => callback(new Proxy(tx, {
+      get(target, key, receiver) {
+        const method: unknown = Reflect.get(target, key, receiver);
+        if ((key !== "select" && key !== "insert") || typeof method !== "function") return method;
+        return (...args: unknown[]) => {
+          if (key === "insert" && args[0] === voiceControlMailbox) { forbiddenAccesses++; throw new Error("Retirement mailbox insert"); }
+          const builder: object = Reflect.apply(method, target, args);
+          if (key !== "select") return builder;
+          return new Proxy(builder, {
+            get(query, property, queryReceiver) {
+              const from: unknown = Reflect.get(query, property, queryReceiver);
+              if (property !== "from" || typeof from !== "function") return from;
+              return (table: unknown) => {
+                if (table === voiceIdentity || table === voicePrekey || table === voiceSignature) { forbiddenAccesses++; throw new Error("Retirement key read"); }
+                const scoped: object = Reflect.apply(from, query, [table]);
+                if (table !== voiceCallMember) return scoped;
+                return new Proxy(scoped, {
+                  get(scope, field, scopeReceiver) {
+                    const where: unknown = Reflect.get(scope, field, scopeReceiver);
+                    if (field !== "where" || typeof where !== "function") return where;
+                    return (...conditions: unknown[]) => {
+                      if (conditions.some(targetsRecipient)) { forbiddenAccesses++; throw new Error("Retirement recipient lookup"); }
+                      return Reflect.apply(where, scope, conditions);
+                    };
+                  },
+                });
+              };
+            },
+          });
+        };
+      },
+    })), config));
+    try {
+      expect(await crypto(a, { ...send(a, b), kind: "retire" })).toMatchObject({ disposition: { status: "processed-retired", enqueued: 0 } });
+      const unknown = `@voice_${a.snapshot.callId}_${randomUUID()}:opendiscord.local`;
+      const request = send(a, b);
+      expect(await crypto(a, { ...request, kind: "retire", body: { messages: { [unknown]: request.body.messages[b.snapshot.voiceUserId] } } })).toMatchObject({ disposition: { status: "processed-retired", enqueued: 0 } });
+      expect(forbiddenAccesses).toBe(0);
+    } finally { spy.mockRestore(); }
+  });
   it("requires a real owned live session, active anchor possession, Connect and consent", async () => {
     const f = await fixture(1), a = f.endpoints[0], input = { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: a.secret, consent: true };
     await expect(joinVoiceControl({ ...f.accounts[0], anchorSecret: randomBytes(32).toString("hex") }, input)).rejects.toMatchObject({ code: "forbidden" });
@@ -122,9 +254,10 @@ describe("voice-only scope, immutable public state and replay", () => {
       const device = b.snapshot.voiceDeviceId;
       const requests = [
         { kind: "query", body: { device_keys: { [target]: [] } } },
-        { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [target]: { [device]: "signed_curve25519" } } } },
+        { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [target]: { [device]: "signed_curve25519" } } } },
         { kind: "signatures", body: { [target]: { [device]: keys(b) } } },
         { ...send(a, b), body: { messages: { [target]: { [device]: { transaction_id: randomUUID() } } } } },
+        { ...send(a, b), kind: "retire", body: { messages: { [target]: { [device]: { transaction_id: randomUUID() } } } } },
       ];
       for (const request of requests) await expect(crypto(a, request)).rejects.toMatchObject({ code: "not_found" });
     }
@@ -317,7 +450,13 @@ function neLeft() { return sql`${voiceCallMember.state} <> 'left'`; }
 type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
 const syncResult = z.object({ cursor: z.string(), events: z.array(z.record(z.string(), z.unknown())), oneTimeKeys: z.record(z.string(), z.number()), unusedFallbackKeys: z.array(z.string()) });
 const nativeLogger = { debug() {}, info() {}, warn() {}, error() {} };
+class ProductProtocolPaused extends Error {
+  constructor(readonly request: NativeRequest) { super("Intentional public protocol pause"); }
+}
+const nativeTransportId = (endpoint: Endpoint, request: NativeRequest, operation: "send" | "retire" = "send") => createHash("sha256").update(JSON.stringify([endpoint.snapshot.generation, operation, request.type, request.id, request.body])).digest("hex");
 class NativeVoice {
+  pauseEvent?: string;
+  pauseType?: C.RequestType;
   private constructor(readonly endpoint: Endpoint, readonly machine: C.OlmMachine, readonly sizes: number[]) {}
   static async open(endpoint: Endpoint) {
     const s = endpoint.snapshot;
@@ -334,16 +473,24 @@ class NativeVoice {
       return owner;
     } catch (error) { machine.close(); throw error; }
   }
-  async out(request: NativeRequest) {
+  async out(request: NativeRequest, operation: "send" | "retire" = "send") {
+    if (request.type === this.pauseType || (request instanceof C.ToDeviceRequest && request.event_type === this.pauseEvent)) {
+      this.pauseEvent = undefined;
+      this.pauseType = undefined;
+      throw new ProductProtocolPaused(request);
+    }
     const body: unknown = JSON.parse(request.body);
+    const requestId = nativeTransportId(this.endpoint, request, operation);
     let response: Record<string, unknown>;
-    if (request instanceof C.KeysUploadRequest) { this.sizes.push(Buffer.byteLength(request.body)); response = await crypto(this.endpoint, { kind: "upload", body, requestId: request.id }); }
-    else if (request instanceof C.KeysQueryRequest) response = await crypto(this.endpoint, { kind: "query", body, requestId: request.id });
-    else if (request instanceof C.KeysClaimRequest) response = await crypto(this.endpoint, { kind: "claim", body, requestId: request.id });
-    else if (request instanceof C.SignatureUploadRequest) response = await crypto(this.endpoint, { kind: "signatures", body, ...(request.id ? { requestId: request.id } : {}) });
-    else if (request instanceof C.ToDeviceRequest) response = await crypto(this.endpoint, { kind: "send", body, requestId: request.txn_id, eventType: request.event_type });
+    if (operation === "retire" && !(request instanceof C.ToDeviceRequest)) throw new Error("Only ToDevice can retire.");
+    if (request instanceof C.KeysUploadRequest) { this.sizes.push(Buffer.byteLength(request.body)); response = await crypto(this.endpoint, { kind: "upload", body, requestId, nativeRequestId: request.id }); }
+    else if (request instanceof C.KeysQueryRequest) response = await crypto(this.endpoint, { kind: "query", body, requestId, nativeRequestId: request.id });
+    else if (request instanceof C.KeysClaimRequest) response = await crypto(this.endpoint, { kind: "claim", body, requestId, nativeRequestId: request.id });
+    else if (request instanceof C.SignatureUploadRequest) response = await crypto(this.endpoint, { kind: "signatures", body, requestId, ...(request.id ? { nativeRequestId: request.id } : {}) });
+    else if (request instanceof C.ToDeviceRequest) response = await crypto(this.endpoint, { kind: operation, body, requestId, nativeRequestId: request.id, nativeTxnId: request.txn_id, eventType: request.event_type });
     else throw new Error("Unowned native request kind in voice server fixture.");
-    if (request.id) await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(response));
+    if (request.id) await this.machine.markRequestAsSent(request.id, request.type, JSON.stringify(request instanceof C.ToDeviceRequest ? response.nativeResponse : response));
+    return response;
   }
   async flush() {
     for (let i = 0; i < 4; i++) {
@@ -362,7 +509,9 @@ class NativeVoice {
     return changes;
   }
   verification(peer: NativeVoice) {
-    const requests = this.machine.getVerificationRequests(new C.UserId(peer.endpoint.snapshot.voiceUserId));
+    const known = this.machine.getVerificationRequests(new C.UserId(peer.endpoint.snapshot.voiceUserId)).filter(flow => !flow.isCancelled());
+    const active = known.filter(flow => !flow.isDone());
+    const requests = active.length ? active : known;
     if (requests.length !== 1) throw new Error("Expected one scoped native voice verification flow.");
     return requests[0];
   }
@@ -371,6 +520,45 @@ class NativeVoice {
     if (!(sas instanceof C.Sas)) throw new Error("Native voice SAS was not established.");
     return sas;
   }
+}
+async function verifyNativePair(a: NativeVoice, b: NativeVoice) {
+  await a.query([a, b]); await b.query([a, b]);
+  const peer = await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId));
+  if (!peer) throw new Error("Missing real service peer device.");
+  await a.out(peer.requestVerification([C.VerificationMethod.SasV1])[1]); await b.sync();
+  const first = a.verification(b), second = b.verification(a);
+  const ready = second.acceptWithMethods([C.VerificationMethod.SasV1]);
+  if (!ready) throw new Error("Missing public SAS ready.");
+  await b.out(ready); await a.sync();
+  const started = await a.verification(b).startSas();
+  if (!started) throw new Error("Missing public SAS start.");
+  await a.out(started[1]); await b.sync();
+  const accept = b.sas(a).accept();
+  if (accept) await b.out(accept);
+  await a.sync(); await b.sync(); await a.sync();
+  const left = a.sas(b).decimals(), right = b.sas(a).decimals();
+  expect(!!left && !!right && Array.from(left).every((value, i) => value === right[i])).toBe(true);
+  for (const request of await a.sas(b).confirm()) await a.out(request);
+  for (const request of await b.sas(a).confirm()) await b.out(request);
+  await a.sync(); await b.sync(); await a.sync(); await b.sync();
+  expect(first.isDone() && second.isDone()).toBe(true);
+  await a.query([a, b]); await b.query([a, b]);
+}
+const nativeIdentityDigest = (owner: NativeVoice) => createHash("sha256").update(JSON.stringify([owner.machine.identityKeys.curve25519.toBase64(), owner.machine.identityKeys.ed25519.toBase64()])).digest("hex");
+async function nativeEncryptedRequest(sender: NativeVoice, recipient: NativeVoice, message: string) {
+  const claim = await sender.machine.getMissingSessions([new C.UserId(recipient.endpoint.snapshot.voiceUserId)]);
+  if (claim) await sender.out(claim);
+  const device = await sender.machine.getDevice(new C.UserId(recipient.endpoint.snapshot.voiceUserId), new C.DeviceId(recipient.endpoint.snapshot.voiceDeviceId));
+  if (!device?.isVerified()) throw new Error("Verified real service peer required.");
+  const encrypted = await device.encryptToDeviceEvent("app.opendiscord.voice.control", { message }, C.CollectStrategy.onlyTrustedDevices());
+  const id = randomUUID();
+  // Public constructor fixture around genuine encryptToDeviceEvent output; not a queued-output claim.
+  return new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [recipient.endpoint.snapshot.voiceUserId]: { [recipient.endpoint.snapshot.voiceDeviceId]: JSON.parse(encrypted) } } }));
+}
+async function expectNativeDelivery(sender: NativeVoice, recipient: NativeVoice, message: string) {
+  await sender.out(await nativeEncryptedRequest(sender, recipient, message));
+  const events = await recipient.sync();
+  expect(events.some(item => item instanceof C.DecryptedToDeviceEvent && item.encryptionInfo.isSenderVerified() && JSON.parse(item.rawEvent).content?.message === message)).toBe(true);
 }
 async function dmStateDigest(endpoints: Endpoint[]) {
   const users = endpoints.map((e) => e.userId), devices = endpoints.map((e) => e.anchorDeviceId);
@@ -384,6 +572,156 @@ async function dmStateDigest(endpoints: Endpoint[]) {
 }
 
 describe("pinned native18.9.0 public request compatibility", () => {
+  it("processes genuine mixed query/claim absence and exact retry against current real membership", async () => {
+    await C.initAsync();
+    const { endpoints } = await fixture(3);
+    const before = await dmStateDigest(endpoints), owners: NativeVoice[] = [];
+    try {
+      for (const endpoint of endpoints) owners.push(await NativeVoice.open(endpoint));
+      const [a, b, c] = owners;
+      await a.query([a, b, c]);
+      const claim = await a.machine.getMissingSessions([new C.UserId(b.endpoint.snapshot.voiceUserId), new C.UserId(c.endpoint.snapshot.voiceUserId)]);
+      if (!claim) throw new Error("Expected genuine native mixed claim.");
+      expect(Object.keys(JSON.parse(claim.body).one_time_keys)).toHaveLength(2);
+      const original = claim.body;
+      await leaveVoiceControl(memberAuth(b.endpoint), binding(b.endpoint));
+      await refresh(a.endpoint); await refresh(c.endpoint);
+      const used = await db.$count(voicePrekey, and(eq(voicePrekey.memberId, c.endpoint.snapshot.memberId), eq(voicePrekey.used, true)));
+      const response = await a.out(claim);
+      expect(Object.hasOwn(z.record(z.string(), z.unknown()).parse(response.one_time_keys), b.endpoint.snapshot.voiceUserId)).toBe(false);
+      expect(Object.hasOwn(z.record(z.string(), z.unknown()).parse(response.one_time_keys), c.endpoint.snapshot.voiceUserId)).toBe(true);
+      expect(await crypto(a.endpoint, { kind: "claim", requestId: nativeTransportId(a.endpoint, claim), nativeRequestId: claim.id, body: JSON.parse(claim.body) })).toEqual(response);
+      expect(await db.$count(voicePrekey, and(eq(voicePrekey.memberId, c.endpoint.snapshot.memberId), eq(voicePrekey.used, true)))).toBe(used + 1);
+      expect(claim.body === original).toBe(true);
+      const query = a.machine.queryKeysForUsers([new C.UserId(b.endpoint.snapshot.voiceUserId), new C.UserId(c.endpoint.snapshot.voiceUserId)]);
+      const current = await a.out(query);
+      expect(z.record(z.string(), z.unknown()).parse(current.device_keys)[b.endpoint.snapshot.voiceUserId]).toEqual({});
+      expect(Object.hasOwn(z.record(z.string(), z.unknown()).parse(current.device_keys), c.endpoint.snapshot.voiceUserId)).toBe(true);
+      expect(await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId))).toBeUndefined();
+      expect(await a.machine.getMissingSessions([new C.UserId(b.endpoint.snapshot.voiceUserId)])).toBeNull();
+      await a.flush();
+      await verifyNativePair(a, c);
+      await expectNativeDelivery(a, c, "current peer after real absence");
+      expect(await dmStateDigest(endpoints)).toBe(before);
+    } finally { for (const owner of owners) owner.machine.close(); }
+  }, 60_000);
+  it("feeds genuine single-user signature refusal to the SDK without remote storage or disturbing a verified current peer", async () => {
+    await C.initAsync();
+    const { endpoints } = await fixture(3), owners: NativeVoice[] = [];
+    const before = await dmStateDigest(endpoints);
+    try {
+      for (const endpoint of endpoints) owners.push(await NativeVoice.open(endpoint));
+      const [a, b, c] = owners;
+      await verifyNativePair(a, c);
+      a.pauseType = C.RequestType.SignatureUpload;
+      let pending: C.SignatureUploadRequest;
+      try { await verifyNativePair(a, b); throw new Error("Expected real SAS signature upload."); }
+      catch (error) {
+        if (!(error instanceof ProductProtocolPaused)) throw error;
+        if (!(error.request instanceof C.SignatureUploadRequest)) throw new Error("Expected public SignatureUpload.");
+        pending = error.request;
+      }
+      const targets = z.record(z.string(), z.record(z.string(), z.unknown())).parse(JSON.parse(pending.body));
+      expect(Object.keys(targets)).toEqual([b.endpoint.snapshot.voiceUserId]);
+      const localBefore = (await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId)))?.isVerified();
+      await leaveVoiceControl(memberAuth(b.endpoint), binding(b.endpoint));
+      await refresh(a.endpoint); await refresh(c.endpoint);
+      const response = await a.out(pending);
+      const failures = z.record(z.string(), z.record(z.string(), z.object({ errcode: z.literal("M_FORBIDDEN") }).passthrough())).parse(response.failures);
+      expect(Object.keys(failures[b.endpoint.snapshot.voiceUserId])).toEqual(Object.keys(targets[b.endpoint.snapshot.voiceUserId]));
+      expect(await db.$count(voiceSignature, and(eq(voiceSignature.signerMemberId, a.endpoint.snapshot.memberId), eq(voiceSignature.targetMemberId, b.endpoint.snapshot.memberId)))).toBe(0);
+      expect((await a.machine.getDevice(new C.UserId(b.endpoint.snapshot.voiceUserId), new C.DeviceId(b.endpoint.snapshot.voiceDeviceId)))?.isVerified()).toBe(localBefore);
+      expect((await a.machine.outgoingRequests()).some(request => request.type === C.RequestType.SignatureUpload && request.id === pending.id)).toBe(false);
+      await a.flush();
+      expect((await a.machine.getDevice(new C.UserId(c.endpoint.snapshot.voiceUserId), new C.DeviceId(c.endpoint.snapshot.voiceDeviceId)))?.isVerified()).toBe(true);
+      await expectNativeDelivery(a, c, "current verified peer after signature refusal");
+      expect(await dmStateDigest(endpoints)).toBe(before);
+    } finally { for (const owner of owners) owner.machine.close(); }
+  }, 60_000);
+  it("retires a genuine first Olm type0 constructor fixture without delivery then decrypts real traffic in both directions", async () => {
+    await C.initAsync();
+    const { endpoints } = await fixture(), owners: NativeVoice[] = [];
+    const before = await dmStateDigest(endpoints);
+    try {
+      for (const endpoint of endpoints) owners.push(await NativeVoice.open(endpoint));
+      const [a, b] = owners;
+      await verifyNativePair(a, b);
+      const identity = nativeIdentityDigest(a), request = await nativeEncryptedRequest(a, b, "retired initial Olm");
+      const messages = z.record(z.string(), z.record(z.string(), z.object({ ciphertext: z.record(z.string(), z.object({ type: z.number() }).passthrough()) }).passthrough())).parse(JSON.parse(request.body).messages);
+      expect(Object.values(messages[b.endpoint.snapshot.voiceUserId][b.endpoint.snapshot.voiceDeviceId].ciphertext)[0].type).toBe(0);
+      expect(await a.out(request, "retire")).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+      expect(await b.sync()).toHaveLength(0);
+      await expectNativeDelivery(a, b, "real control after initial nondelivery");
+      await expectNativeDelivery(b, a, "real reply after initial nondelivery");
+      expect(nativeIdentityDigest(a)).toBe(identity);
+      expect(await dmStateDigest(endpoints)).toBe(before);
+    } finally { for (const owner of owners) owner.machine.close(); }
+  }, 60_000);
+  for (const phase of ["request", "ready", "start", "key", "mac", "done"]) {
+    for (const departed of [false, true]) {
+      it(`retires genuine pending ${phase} to a ${departed ? "departed" : "current"} peer through the real service and preserves fresh verified traffic`, async () => {
+        await C.initAsync();
+        const { endpoints } = await fixture(4);
+        const before = await dmStateDigest(endpoints);
+        const owners: NativeVoice[] = [];
+        try {
+          for (const endpoint of endpoints) owners.push(await NativeVoice.open(endpoint));
+          const [a, b, c, d] = owners;
+          await verifyNativePair(a, d);
+          const identity = nativeIdentityDigest(a), retained = nativeIdentityDigest(d);
+          a.pauseEvent = `m.key.verification.${phase}`;
+          let pending: C.ToDeviceRequest;
+          try {
+            await (phase === "ready" ? verifyNativePair(b, a) : verifyNativePair(a, b));
+            throw new Error("Expected genuine pending native phase.");
+          } catch (error) {
+            if (!(error instanceof ProductProtocolPaused)) throw error;
+            if (!(error.request instanceof C.ToDeviceRequest)) throw new Error("Expected public ToDevice phase.");
+            pending = error.request;
+          }
+          expect(pending.event_type).toBe(`m.key.verification.${phase}`);
+          const original = { id: pending.id, txn: pending.txn_id, body: pending.body, type: pending.type };
+          const removed = departed ? b : c;
+          await leaveVoiceControl(memberAuth(removed.endpoint), binding(removed.endpoint));
+          for (const owner of owners.filter(owner => owner !== removed)) await refresh(owner.endpoint);
+          if (departed) await expect(crypto(a.endpoint, { kind: "send", requestId: randomUUID(), nativeRequestId: pending.id, nativeTxnId: pending.txn_id, eventType: pending.event_type, body: JSON.parse(pending.body) })).rejects.toMatchObject({ code: "not_found" });
+          const cancellations: NativeRequest[] = [pending];
+          for (const flow of a.machine.getVerificationRequests(new C.UserId(b.endpoint.snapshot.voiceUserId))) {
+            if (!flow.isDone() && !flow.isCancelled()) {
+              const cancel = flow.cancel();
+              if (cancel instanceof C.ToDeviceRequest) cancellations.push(cancel);
+            }
+          }
+          cancellations.push(...(await a.machine.outgoingRequests()).filter(request => request instanceof C.ToDeviceRequest));
+          const unique = new Map(cancellations.map(request => [request.id, request]));
+          for (const request of unique.values()) expect(await a.out(request, "retire")).toEqual({ nativeResponse: {}, disposition: { status: "processed-retired", enqueued: 0 } });
+          expect(pending.id === original.id && pending.txn_id === original.txn && pending.body === original.body && pending.type === original.type).toBe(true);
+          expect(await db.$count(voiceControlMailbox, eq(voiceControlMailbox.callId, a.endpoint.snapshot.callId))).toBe(0);
+          expect((await a.machine.outgoingRequests()).filter(request => request instanceof C.ToDeviceRequest)).toHaveLength(0);
+          expect(nativeIdentityDigest(a)).toBe(identity);
+          expect(nativeIdentityDigest(d)).toBe(retained);
+          expect((await a.machine.getDevice(new C.UserId(d.endpoint.snapshot.voiceUserId), new C.DeviceId(d.endpoint.snapshot.voiceDeviceId)))?.isVerified()).toBe(true);
+          await expectNativeDelivery(a, d, "retained verified peer control");
+          await expectNativeDelivery(d, a, "retained verified peer reply");
+          const fresh = departed ? c : b;
+          if (!departed) {
+            for (const flow of b.machine.getVerificationRequests(new C.UserId(a.endpoint.snapshot.voiceUserId))) {
+              if (!flow.isDone() && !flow.isCancelled()) {
+                const cancel = flow.cancel();
+                if (cancel instanceof C.ToDeviceRequest) await b.out(cancel, "retire");
+              }
+            }
+            for (const request of (await b.machine.outgoingRequests()).filter(request => request instanceof C.ToDeviceRequest)) await b.out(request, "retire");
+          }
+          await verifyNativePair(a, fresh);
+          await expectNativeDelivery(a, fresh, "fresh forward control");
+          await expectNativeDelivery(fresh, a, "fresh reverse control");
+          expect(nativeIdentityDigest(a)).toBe(identity);
+          expect(await dmStateDigest(endpoints)).toBe(before);
+        } finally { for (const owner of owners) owner.machine.close(); }
+      }, 60_000);
+    }
+  }
   it("bootstraps independent memory-only identities, completes native SAS and verified Olm through only voice tables", async () => {
     await C.initAsync();
     const { endpoints } = await fixture();

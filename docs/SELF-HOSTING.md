@@ -36,6 +36,15 @@ Optional integrations (see `.env.example`):
   then an account token (`cf accounts tokens create`) with *Workers R2 Storage Bucket Item Write*
   scoped to that bucket. The access key ID is the token ID; the secret is the SHA-256 hex of the token value.
 
+## Optional attachment scanning
+
+A trusted private ClamAV service can be enabled with `CLAMAV_HOST` and `CLAMAV_PORT=3310`.
+Use the [dedicated operations guide](../ops/scanner/README.md) for a pinned image, persistent
+signature updater, private network, monitoring and recovery. Budget an additional 4 GiB for the
+scanner plus update/reload headroom and disk. Once configured, engine failure rejects new
+uploads/imports; existing downloads are unchanged. No configured host means scanning is bypassed.
+Signature age is monitored, not automatically enforced by the app; scanning cannot guarantee safe files.
+
 ## Security notes
 
 - `web` is not published on a host port; only Caddy is. Keep it that way: rate limiting trusts the
@@ -170,14 +179,21 @@ A restore drill is part of the test plan: the round trip is verified to restore 
 
 ## Upgrade
 
+Upgrades introducing migration `0031` require complete writer quiescence. Follow the
+[0031 compatibility rollout and recovery procedure](OPERATIONS.md#0031-compatible-writer-rollout)
+before starting a migration or new application image. The generic sequence below is insufficient
+for this version boundary: Compose startup dependencies do not stop existing replicas or jobs.
+Use the following generic sequence only for upgrades that do not cross that boundary.
+
 ```sh
 scripts/backup.sh
 git pull
 docker compose up -d --build
 ```
 
-Migrations are forward-only. To roll back, restore the backup taken before the upgrade and check out
-the previous release.
+Migrations are forward-only. A `0031` rollback must follow the linked recovery procedure; starting
+an old image against the new guards is unsafe. Full restore loses writes after the backup and
+requires stopped writers, preserved current state, a verified backup and matching previous images.
 
 ## Moving one community
 
@@ -262,3 +278,21 @@ For public legal pages set all of `OPERATOR_NAME`, `OPERATOR_ADDRESS`, `OPERATOR
 exactly opendiscord.app. Other domains never inherit lk media's identity. Review the notice for your
 actual infrastructure, purposes, jurisdiction and retention. Technical policies and generated pages
 do not constitute a professional legal assessment or establish regulatory compliance.
+
+### Generation-room ledger backup and activation boundary
+
+Migration 0032 adds durable SFU ownership; the ordinary full PostgreSQL backup/restore includes
+`voice_sfu_room`, and readiness probes every exported ledger column. The CI encrypted restore
+rehearsal compares every table, including this ledger. Preserve this table during code rollback.
+Do not resume token issuers from old code that does not register ownership. Restoring a pre-0032
+backup while SFU rooms survive loses ownership evidence: keep admissions/issuers stopped until
+an explicitly approved, isolated SFU drain/reset or a matching ledger backup restores consistency.
+Never discover/delete arbitrary shared SFU rooms by prefix, and never delete ownership rows merely
+because app tokens expired. Use the 0031 quiesced-writer upgrade/rollback gate above as well.
+
+The new internal token path explicitly creates registered generation rooms after database commit
+and revalidates before signing. It does not activate the product transport or change LiveKit
+configuration. A later coherent release must verify pinned LiveKit 1.13.10 `room.auto_create: false`
+with actual runtime acceptance, and retire the legacy auto-created channel-room issuers together.
+See OPERATIONS for cleanup budgets, indefinite tombstone retention, the 100000-row admission cap,
+capacity review and physical revocation/race limitations.
