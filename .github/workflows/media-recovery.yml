@@ -1,11 +1,7 @@
 name: Media recovery acceptance
 on:
-  pull_request:
-  push:
-    branches: [main]
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
