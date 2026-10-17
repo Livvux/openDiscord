@@ -65,7 +65,7 @@ export function ProfileCardBody({ card, currentUserId, onChanged, headingLevel =
       <div aria-hidden className="h-16 rounded-t-lg bg-primary/40" />
       <div className="-mt-10 grid gap-3 px-4 pb-4">
         <span className="w-fit rounded-full bg-popover p-1">
-          <PresenceAvatar userId={card.id} name={card.name} size="lg" status={card.presence} />
+          <PresenceAvatar userId={card.id} name={card.name} avatar={card.avatar} size="lg" status={card.presence} />
         </span>
         <div>
           {title ? title(card.name) : <Heading className="text-lg font-semibold text-zinc-50">{card.name}</Heading>}

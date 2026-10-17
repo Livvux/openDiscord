@@ -25,12 +25,13 @@ const item = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left te
 interface AccountMenuProps {
   userId: string;
   name: string;
+  avatar: string | null;
   presence: PresenceChoice;
   customStatus: string;
 }
 
 /** Bottom of the rail: who you are, how you appear, and the way to settings and sign-out. */
-export function AccountMenu({ userId, name, presence, customStatus }: AccountMenuProps) {
+export function AccountMenu({ userId, name, avatar, presence, customStatus }: AccountMenuProps) {
   const router = useRouter();
   const id = useId();
   const [choice, setChoice] = useState(presence);
@@ -78,12 +79,12 @@ export function AccountMenu({ userId, name, presence, customStatus }: AccountMen
         aria-label={`Account menu for ${name}, ${PRESENCE_LABEL[choice]}`}
         className="relative mb-4 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
-        <Avatar name={name} />
+        <Avatar name={name} avatar={avatar} />
         <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-sidebar ${PRESENCE_DOT[choice]}`} />
       </PopoverTrigger>
       <PopoverContent side="right" align="end" sideOffset={10} aria-label="Account menu" className="w-72 gap-1 p-2">
         <div className="flex items-center gap-3 px-2 pt-1 pb-2">
-          <Avatar name={name} />
+          <Avatar name={name} avatar={avatar} />
           <div className="min-w-0">
             <p className="truncate font-semibold text-zinc-50">{name}</p>
             <p className="truncate text-xs text-muted-foreground">{status || PRESENCE_LABEL[choice]}</p>

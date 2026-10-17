@@ -239,6 +239,13 @@
       "when": 1792144989629,
       "tag": "0033_voice_sfu_room_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792249096552,
+      "tag": "0034_user_avatars",
+      "breakpoints": true
     }
   ]
 }

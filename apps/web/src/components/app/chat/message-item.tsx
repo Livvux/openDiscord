@@ -169,9 +169,9 @@ export function MessageItem(props: MessageItemProps) {
       aria-busy={pending || undefined}
     >
       <div className="w-8 shrink-0">
-        {!grouped && (message.authorImported ? <PresenceAvatar userId={message.authorId} name={message.authorName} /> : (
+        {!grouped && (message.authorImported ? <PresenceAvatar userId={message.authorId} name={message.authorName} avatar={message.authorAvatar} /> : (
           <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} profileOnClick>
-            <button type="button" aria-label={`View profile of ${message.authorName}`} className="rounded-full focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={message.authorId} name={message.authorName} /></button>
+            <button type="button" aria-label={`View profile of ${message.authorName}`} className="rounded-full focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={message.authorId} name={message.authorName} avatar={message.authorAvatar} /></button>
           </UserContextMenu>
         ))}
       </div>

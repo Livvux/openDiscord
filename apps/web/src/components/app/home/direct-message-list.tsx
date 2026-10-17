@@ -67,7 +67,7 @@ export function DirectMessageList({ userId, initial, presence, relations }: Dire
                   aria-current={active ? "page" : undefined}
                   className={`flex items-center gap-3 rounded-md px-2 py-1.5 focus-visible:outline-2 focus-visible:outline-ring ${active ? "bg-white/10 text-zinc-50" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
                 >
-                  <PresenceAvatar userId={c.peerId} name={c.peerName} status={presence[c.peerId] ?? null} announce />
+                  <PresenceAvatar userId={c.peerId} name={c.peerName} avatar={c.peerAvatar} status={presence[c.peerId] ?? null} announce />
                   <span className="min-w-0 flex-1">
                     <span data-dm-peer-name className="block truncate">{c.peerName}</span>
                     {status && <span className="block truncate text-xs text-muted-foreground">{status}</span>}

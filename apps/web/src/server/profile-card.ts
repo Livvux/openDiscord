@@ -7,6 +7,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { community, dmConversation, friendship, member, user, userBlock, userPresence, userProfile } from "@/db/schema";
 import type { PresenceStatus } from "@/lib/presence";
+import { avatarOf } from "./avatars";
 import { notFound } from "./errors";
 import { consume } from "./limits";
 import { AccountBlocked, assertActiveUser } from "./instance-policy";
@@ -22,6 +23,7 @@ const accountId = z.string().trim().min(1).max(64);
 export interface ProfileCard {
   id: string;
   name: string;
+  avatar: string | null;
   memberSince: string;
   customStatus: string;
   bio: string;
@@ -42,7 +44,7 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
   const active = assertActiveUser(targetId).then(() => true, (e: unknown) => (e instanceof AccountBlocked ? false : Promise.reject(e)));
   const [[person], mutual, [friend], [conversation], blocks, isActive] = await Promise.all([
     db
-      .select({ name: user.name, createdAt: user.createdAt, bio: userProfile.bio, customStatus: userProfile.customStatus, visible: userPresence.visible, status: userPresence.status, lastSeenAt: userPresence.lastSeenAt })
+      .select({ name: user.name, avatar: avatarOf(user.id), createdAt: user.createdAt, bio: userProfile.bio, customStatus: userProfile.customStatus, visible: userPresence.visible, status: userPresence.status, lastSeenAt: userPresence.lastSeenAt })
       .from(user)
       .leftJoin(userProfile, eq(userProfile.userId, user.id))
       .leftJoin(userPresence, eq(userPresence.userId, user.id))
@@ -67,7 +69,7 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
   if (!person || (!self && (!isActive || (!mutual.length && !friend && !conversation)))) throw notFound("Profile not found.");
   const relation: ProfileCard["relation"] = !friend ? null : friend.status === "accepted" ? "friend" : friend.requestedBy === viewerId ? "outgoing" : "incoming";
   const blocked = blocks.some((b) => b.blockerId === viewerId);
-  const base = { id: targetId, name: person.name, memberSince: person.createdAt.toISOString(), relation, blocked };
+  const base = { id: targetId, name: person.name, avatar: person.avatar, memberSince: person.createdAt.toISOString(), relation, blocked };
   if (blocks.length) return { ...base, relation: null, customStatus: "", bio: "", presence: null, mutualCommunities: [] };
   const online = person.visible && person.lastSeenAt && person.lastSeenAt > new Date(Date.now() - ONLINE_WINDOW_MS);
   return {

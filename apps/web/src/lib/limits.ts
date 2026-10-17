@@ -6,6 +6,10 @@ export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "i
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 
+/** Profile pictures: the client uploads a cropped square at this size; the server re-encodes it. */
+export const AVATAR_DIMENSION = 256;
+export const AVATAR_RAW_BYTES = 2 * 1024 * 1024;
+
 /** Other files are stored unchanged and only ever served as downloads. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 

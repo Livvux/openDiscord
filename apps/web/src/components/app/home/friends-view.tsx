@@ -96,7 +96,7 @@ export function FriendsView({ userId, friends, blocked, initialCode }: FriendsVi
                     <li className="flex items-center gap-3 px-3 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
                       <UserProfilePopover userId={f.id} currentUserId={userId} render={
                         <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring">
-                          <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
+                          <PresenceAvatar userId={f.id} name={f.name} avatar={f.avatar} status={f.presence} announce />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium text-zinc-100">{f.name}</span>
                             <span className="block truncate text-xs text-muted-foreground">
@@ -234,7 +234,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
             {results.map((p) => (
               <UserContextMenu key={p.id} userId={p.id} name={p.name} currentUserId={userId} relation={p.relation} disabled={busy} onChanged={refreshResults} onError={(error) => setNotice({ ok: false, text: error })}>
                 <li className="flex items-center gap-3 px-3 py-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
-                  <PresenceAvatar userId={p.id} name={p.name} size="sm" status={null} />
+                  <PresenceAvatar userId={p.id} name={p.name} avatar={p.avatar} size="sm" status={null} />
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   {p.relation === null || p.relation === "incoming" ? (
                     <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add"} ${p.name} as a friend`}

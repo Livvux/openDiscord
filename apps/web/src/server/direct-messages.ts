@@ -8,6 +8,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
 import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
+import { avatarOf } from "./avatars";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
 import { requireInstanceAdmin, type AdminActor } from "./instance-admin";
@@ -112,9 +113,9 @@ export async function respondToDirectRequest(actor: string, id: string, rawStatu
 export async function listDirectConversations(actor: string): Promise<DirectConversation[]> {
   const rows = await db.select().from(dmConversation).where(or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))).orderBy(desc(dmConversation.id));
   if (!rows.length) return [];
-  const peers = await db.select({ id: user.id, name: user.name }).from(user).where(inArray(user.id, rows.map((r) => r.firstId === actor ? r.secondId : r.firstId)));
+  const peers = await db.select({ id: user.id, name: user.name, avatar: avatarOf(user.id) }).from(user).where(inArray(user.id, rows.map((r) => r.firstId === actor ? r.secondId : r.firstId)));
   const blocks = await db.select().from(userBlock).where(or(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, actor)));
-  return rows.map((r) => { const peerId = r.firstId === actor ? r.secondId : r.firstId; return { id: r.id, peerId, peerName: peers.find((p) => p.id === peerId)?.name ?? "Deleted account", requestedBy: r.requestedBy, status: r.status, blocked: blocks.some((b) => b.blockedId === peerId || b.blockerId === peerId), ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId) }; });
+  return rows.map((r) => { const peerId = r.firstId === actor ? r.secondId : r.firstId; return { id: r.id, peerId, peerName: peers.find((p) => p.id === peerId)?.name ?? "Deleted account", peerAvatar: peers.find((p) => p.id === peerId)?.avatar ?? null, requestedBy: r.requestedBy, status: r.status, blocked: blocks.some((b) => b.blockedId === peerId || b.blockerId === peerId), ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId) }; });
 }
 export async function listDirectMessages(actor: string, id: string, before?: string) {
   await conversationFor(db, actor, id);

@@ -24,13 +24,14 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : "
 interface PrivateMessagesProps {
   userId: string;
   userName: string;
+  userAvatar: string | null;
   /** Peer from ?to=. */
   target?: string;
   /** Friends need no message request: opening ?to= starts the conversation. */
   targetIsFriend?: boolean;
 }
 
-export function PrivateMessages({ userId, userName, target, targetIsFriend = false }: PrivateMessagesProps) {
+export function PrivateMessages({ userId, userName, userAvatar, target, targetIsFriend = false }: PrivateMessagesProps) {
   const [client, setClient] = useState<PrivateMessaging | null>(null);
   const [conversations, setConversations] = useState<DirectConversation[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -150,7 +151,7 @@ export function PrivateMessages({ userId, userName, target, targetIsFriend = fal
         <MobileNavToggle />
         {active ? <>
           <UserContextMenu userId={active.peerId} name={active.peerName} currentUserId={userId} blocked={active.ownBlocked} onChanged={() => void refresh()} onError={setError} profileOnClick>
-            <button type="button" aria-label={`View profile of ${active.peerName}`} className="flex min-h-6 min-w-0 items-center gap-2 rounded px-1 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={active.peerId} name={active.peerName} size="sm" status={null} /></button>
+            <button type="button" aria-label={`View profile of ${active.peerName}`} className="flex min-h-6 min-w-0 items-center gap-2 rounded px-1 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="sm" status={null} /></button>
           </UserContextMenu>
           <h1 className="min-w-0 truncate font-semibold">{active.peerName}</h1>
           {peerVerified && <span className="inline-flex items-center gap-1 text-xs text-brand-mint"><ShieldCheckIcon aria-hidden className="size-3.5" />Verified</span>}
@@ -192,8 +193,8 @@ export function PrivateMessages({ userId, userName, target, targetIsFriend = fal
         {active && <>
           {active.status === "pending" && <div className="grid gap-3 p-4"><p>{active.requestedBy === userId ? "Your message request is waiting for acceptance." : "Accept this request to begin an encrypted conversation."}</p>{active.requestedBy !== userId && <div className="flex gap-2">{(["accepted", "rejected"] as const).map((s) => <Button key={s} disabled={busy || active.blocked} variant={s === "accepted" ? "default" : "outline"} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "respond", id: active.id, status: s }); })}>{s === "accepted" ? "Accept message request" : "Decline request"}</Button>)}</div>}</div>}
           {hasMore && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void run(loadEarlier)}>Load earlier encrypted messages</Button>}
-          {active.status === "accepted" && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} size="lg" status={null} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
-          <div role="log" aria-label={`Private conversation with ${active.peerName}`}><ol className="grid py-2">{messages.map((m) => <PrivateMessageItem key={m.id} message={m} authorName={m.own ? userName : active.peerName} onError={setError} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
+          {active.status === "accepted" && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="lg" status={null} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
+          <div role="log" aria-label={`Private conversation with ${active.peerName}`}><ol className="grid py-2">{messages.map((m) => <PrivateMessageItem key={m.id} message={m} authorName={m.own ? userName : active.peerName} authorAvatar={m.own ? userAvatar : active.peerAvatar} onError={setError} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
         </>}
         {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea ref={reportTextarea} autoFocus className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label><label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
       </div>

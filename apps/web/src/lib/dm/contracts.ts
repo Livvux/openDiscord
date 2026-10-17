@@ -24,7 +24,7 @@ export const plainMessageSchema = z.object({
 }).strict();
 export type PlainDirectMessage = z.infer<typeof plainMessageSchema>;
 export type DmDeviceAuth = { userId: string; sessionId: string; deviceId: string; secret: string };
-export type DirectConversation = { id: string; peerId: string; peerName: string; requestedBy: string; status: "pending" | "accepted" | "rejected"; blocked: boolean; ownBlocked: boolean };
+export type DirectConversation = { id: string; peerId: string; peerName: string; peerAvatar: string | null; requestedBy: string; status: "pending" | "accepted" | "rejected"; blocked: boolean; ownBlocked: boolean };
 export type DirectEnvelope = { id: string; conversationId: string; senderId: string; deviceId: string; transactionId: string; content: Record<string, unknown>; createdAt: string };
 export type DeviceView = { id: string; userId: string; name: string; revoked: boolean; createdAt: string };
 export type CryptoSync = { cursor: string; events: Record<string, unknown>[]; oneTimeKeys: Record<string, number>; unusedFallbackKeys: string[] };

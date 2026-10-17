@@ -18,7 +18,7 @@ export function ActiveNow({ userId, friends }: { userId: string; friends: Friend
             <li key={f.id}>
               <UserProfilePopover userId={f.id} currentUserId={userId} render={
                 <button type="button" className="flex w-full items-center gap-3 rounded-lg bg-panel/60 p-3 text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring">
-                  <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
+                  <PresenceAvatar userId={f.id} name={f.name} avatar={f.avatar} status={f.presence} announce />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-zinc-100">{f.name}</span>
                     {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
