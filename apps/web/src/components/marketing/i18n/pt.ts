@@ -12,7 +12,7 @@ export const pt: Messages = {
     selfHost: "Auto-hospedar",
     roadmap: "Roadmap",
     signIn: "Entrar",
-    join: "Entrar na beta",
+    join: "Entrar na alfa",
     language: "Idioma",
   },
   hero: {
@@ -103,7 +103,7 @@ export const pt: Messages = {
       {
         label: "Agora",
         title: "Alfa fechado",
-        items: ["Canais privados, cargos, moderação", "Menções, threads, busca, reações", "Voz, vídeo e compartilhamento de tela", "Bots, webhooks, API pública", "DMs criptografadas com verificação de dispositivos", "Recursos, regras e controles de retenção"],
+        items: ["Canais privados, cargos, moderação", "Menções, threads, busca, reações", "Voz, vídeo e compartilhamento de tela", "Bots, webhooks, API pública", "DMs criptografadas com verificação de dispositivos", "Recursos, regras e controles de retenção", "Emojis e figurinhas próprios", "Canais públicos e descoberta"],
       },
       {
         label: "Em seguida",
@@ -112,16 +112,16 @@ export const pt: Messages = {
       },
       {
         label: "Depois",
-        title: "Voz e além",
-        items: ["Emojis e figurinhas próprios", "Apps nativos", "Canais públicos opcionais", "Descoberta de comunidades"],
+        title: "Apps e grupos",
+        items: ["Apps nativos", "DMs em grupo e chamadas por DM"],
       },
     ],
   },
   footer: {
     titleStart: "Traga sua comunidade",
     titleAccent: "para casa.",
-    lead: "Entre na beta por convite ou veja quanto custa manter a instância hospedada.",
-    join: "Entrar na beta",
+    lead: "Entre na alfa por convite ou veja quanto custa manter a instância hospedada.",
+    join: "Entrar na alfa",
     funding: "Financiamento e custos",
     tagline: "Mentes abertas. Mais brilhantes juntos.",
     nav: "Rodapé",
