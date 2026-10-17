@@ -58,3 +58,16 @@ describe("links in sentences", () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 });
+
+
+describe("emoji rendering", () => {
+  it("renders local graphics in plain and formatted text", () => {
+    expect(html("Hi **❤️** 👍🏽")).toContain('src="/twemoji/17.0.3/svg/2764.svg"');
+    expect(html("Hi **❤️** 👍🏽")).toContain('alt="👍🏽"');
+  });
+  it("leaves code and URL targets intact", () => {
+    const out = html("`😀`\n```\n❤️\n```\nhttps://example.com/😀");
+    expect(out).not.toContain("<img");
+    expect(out).toContain('href="https://example.com/😀"');
+  });
+});

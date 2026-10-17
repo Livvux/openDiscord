@@ -25,7 +25,7 @@ describe("presence", () => {
     expect(await presenceVisible(shy)).toBe(false);
     expect(await onlineMembers(owner, communityId)).toEqual([]);
     await setPresenceVisible(social, true);
-    expect(await onlineMembers(owner, communityId)).toEqual([social]);
+    expect(await onlineMembers(owner, communityId)).toEqual([{ id: social, status: "online" }]);
   });
 
   it("goes offline after the window and refuses non-members", async () => {
