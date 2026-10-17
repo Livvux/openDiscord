@@ -1,9 +1,9 @@
 import { ShieldIcon } from "lucide-react";
 import { isInstanceAdmin } from "@/server/instance-policy";
 import Link from "next/link";
-import { listCommunities } from "@/server/communities";
+import { listCommunityNavigation } from "@/server/communities";
 import { requirePageUser } from "@/server/session";
-import { mutedCommunities, presenceChoice } from "@/server/presence";
+import { presenceChoice } from "@/server/presence";
 import { getProfile } from "@/server/profile";
 import { communityUnread } from "@/server/unread";
 
@@ -12,11 +12,12 @@ import { AccountMenu } from "./account-menu";
 import { RailHomeLink } from "./home/home-nav-link";
 import { CreateCommunityDialog } from "./create-community-dialog";
 import { RailLink } from "./rail-link";
+import { ServerContextMenu } from "./server-context-menu";
 
 export async function CommunityRail() {
   const user = await requirePageUser();
-  const [communities, admin, presence, profile] = await Promise.all([listCommunities(user.id), isInstanceAdmin(user.id), presenceChoice(user.id), getProfile(user.id)]);
-  const [unread, muted] = await Promise.all([communityUnread(user.id, communities), mutedCommunities(user.id, communities.map((c) => c.id))]);
+  const [communities, admin, presence, profile] = await Promise.all([listCommunityNavigation(user.id), isInstanceAdmin(user.id), presenceChoice(user.id), getProfile(user.id)]);
+  const unread = await communityUnread(user.id, communities);
   return (
     <>
       <RailHomeLink />
@@ -24,7 +25,9 @@ export async function CommunityRail() {
       <ul className="flex flex-1 flex-col items-center gap-3 overflow-y-auto py-4">
         {communities.map((c) => (
           <li key={c.id}>
-            <RailLink communityId={c.id} name={c.name} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} muted={muted.has(c.id)} />
+            <ServerContextMenu community={c}>
+              <RailLink communityId={c.id} name={c.name} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} muted={c.notifications === "muted"} />
+            </ServerContextMenu>
           </li>
         ))}
         <li>

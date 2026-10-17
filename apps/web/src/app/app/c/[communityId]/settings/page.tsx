@@ -15,6 +15,7 @@ import { AutomodSettings } from "@/components/app/settings/automod-settings";
 import { NotificationLevel } from "@/components/app/settings/notification-level";
 import { CategoriesEditor } from "@/components/app/settings/categories-editor";
 import { getAutomod } from "@/server/automod";
+import { blockedIds } from "@/server/blocks";
 import { listIntegrations } from "@/server/integrations";
 import { IntegrationsEditor } from "@/components/app/settings/integrations-editor";
 import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from "@/server/moderation";
@@ -101,7 +102,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
   const a = view.authority;
-  const [members, roles, invites, bans, audit, safety, automod, integrations] = await Promise.all([
+  const [members, roles, invites, bans, audit, safety, automod, integrations, blockedUserIds] = await Promise.all([
     listMembers(user.id, view.id),
     listRoles(user.id, view.id),
     has(a, Permission.ManageCommunity) ? listInvites(user.id, view.id) : null,
@@ -110,6 +111,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
     has(a, Permission.ManageCommunity) ? getCommunitySafety(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? getAutomod(user.id, view.id) : null,
     has(a, Permission.ManageCommunity) ? listIntegrations(user.id, view.id) : null,
+    blockedIds(user.id),
   ]);
   const [assets, rules, appeals] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
@@ -128,7 +130,7 @@ async function Settings({ params }: Pick<PageProps<"/app/c/[communityId]/setting
         title={`Members (${members.length})`}
         description={canModerateMembers ? "You can moderate members ranked below your highest role." : undefined}
       >
-        <MembersManager communityId={view.id} currentUserId={user.id} authority={a} members={members} roles={roles} />
+        <MembersManager communityId={view.id} currentUserId={user.id} authority={a} members={members} roles={roles} blockedUserIds={blockedUserIds} />
       </Section>
       {has(a, Permission.ManageRoles) && (
         <Section

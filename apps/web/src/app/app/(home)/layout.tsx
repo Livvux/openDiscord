@@ -5,6 +5,7 @@ import { HomeNavLink } from "@/components/app/home/home-nav-link";
 import { MobilePanel } from "@/components/app/mobile-nav";
 import { PresenceAvatar } from "@/components/app/presence-avatar";
 import { HomeRefresher } from "@/components/app/home/home-refresher";
+import { UserContextMenu } from "@/components/app/user-context-menu";
 import { homeConversations, homeFriends } from "@/server/home";
 import { requirePageUser } from "@/server/session";
 
@@ -44,17 +45,19 @@ async function HomeSidebar() {
         <ul className="space-y-0.5">
           {online.map((f) => (
             <li key={f.id}>
-              <Link
-                href={`/app/messages?to=${encodeURIComponent(f.id)}`}
-                aria-label={`Message ${f.name}`}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <PresenceAvatar userId={f.id} name={f.name} size="sm" status={f.presence} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{f.name}</span>
-                  {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
-                </span>
-              </Link>
+              <UserContextMenu userId={f.id} name={f.name} currentUserId={user.id} relation={f.state}>
+                <Link
+                  href={`/app/messages?to=${encodeURIComponent(f.id)}`}
+                  aria-label={`Message ${f.name}`}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <PresenceAvatar userId={f.id} name={f.name} size="sm" status={f.presence} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{f.name}</span>
+                    {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
+                  </span>
+                </Link>
+              </UserContextMenu>
             </li>
           ))}
         </ul>

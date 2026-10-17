@@ -2,12 +2,13 @@
 
 import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
 
-import { CornerUpLeftIcon, FileDownIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
+import { CopyIcon, CornerUpLeftIcon, FileDownIcon, FlagIcon, HashIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useId, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import { shortFilename } from "@/lib/filename";
 import { renderMarkdown } from "@/lib/markdown";
@@ -16,11 +17,14 @@ import type { MessageView } from "@/server/messages";
 import { ReportDialog } from "../report-dialog";
 import { nameColor } from "../avatar";
 import { PresenceAvatar } from "../presence-avatar";
+import { UserContextMenu } from "../user-context-menu";
 
 import { assetText, assetTokens, decodeAssetTokens, encodeAssetShortcodes, type AssetView } from "@/lib/community-assets";
 import { CommunityAssetImage } from "../community-asset-image";
 import { EmojiSelector } from "../emoji-selector";
 import { EmojiText } from "../emoji-text";
+import { GifEmbed } from "../gif-embed";
+import { gifSource } from "@/lib/gifs";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -33,6 +37,7 @@ function formatBytes(bytes: number): string {
 
 /** Renders stored content: the Markdown subset, with `<@id>` tokens as readable, highlighted names. */
 export function MessageContent({ content, mentions, currentUserId, assets = [] }: { content: string; mentions: readonly Mention[]; currentUserId?: string; assets?: readonly AssetView[] }) {
+  if (gifSource(content)) return <GifEmbed url={content} />;
   const names = new Map(mentions.map((m) => [m.id, m.name]));
   return renderMarkdown(content, (id, key) => (
     <span
@@ -74,9 +79,29 @@ export function MessageItem(props: MessageItemProps) {
   const [editing, setEditing] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reactionOpen, setReactionOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const handoffFocus = useRef(false);
   const [pending, startTransition] = useTransition();
   const created = new Date(message.createdAt);
   const mentionsMe = message.mentions.some((m) => m.id === currentUserId);
+
+  function openAction(action: () => void) {
+    handoffFocus.current = true;
+    action();
+  }
+
+  async function copy(value: string, success: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setNotice(success);
+      setError(null);
+    } catch {
+      setNotice(null);
+      setError("Couldn't copy. Your browser may not allow clipboard access.");
+    }
+  }
 
   function onDelete() {
     if (!window.confirm("Delete this message? This can't be undone.")) return;
@@ -136,14 +161,19 @@ export function MessageItem(props: MessageItemProps) {
   }
 
   return (
-    <li
+    <ContextMenu disabled={editing} onOpenChange={(open) => { if (open) handoffFocus.current = false; }}>
+    <ContextMenuTrigger render={<li />}
       data-message-id={message.id}
-      tabIndex={-1}
+      tabIndex={0}
       className={`group relative flex gap-3 px-5 outline-none hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"} ${mentionsMe ? "border-l-2 border-amber-400 bg-amber-400/[0.07]" : ""}`}
       aria-busy={pending || undefined}
     >
       <div className="w-8 shrink-0">
-        {!grouped && <PresenceAvatar userId={message.authorId} name={message.authorName} />}
+        {!grouped && (message.authorImported ? <PresenceAvatar userId={message.authorId} name={message.authorName} /> : (
+          <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} openOnClick>
+            <button type="button" aria-label={`Actions for ${message.authorName}`} className="rounded-full focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={message.authorId} name={message.authorName} /></button>
+          </UserContextMenu>
+        ))}
       </div>
       <div className="min-w-0 flex-1">
         {message.replyTo && (
@@ -162,7 +192,11 @@ export function MessageItem(props: MessageItemProps) {
         {!grouped && (
           <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             {/* Imported authors share the importer's account, so colour them by name instead. */}
-            <span className={`font-medium ${nameColor(message.authorImported ? message.authorName : message.authorId)}`}>{message.authorName}</span>
+            {message.authorImported ? <span className={`font-medium ${nameColor(message.authorName)}`}>{message.authorName}</span> : (
+              <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} openOnClick>
+                <button type="button" aria-label={`Actions for ${message.authorName}`} className={`min-h-6 rounded text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring ${nameColor(message.authorId)}`}>{message.authorName}</button>
+              </UserContextMenu>
+            )}
             {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
             {message.authorImported && <span className="rounded bg-white/10 px-1 text-[10px] font-semibold text-zinc-300" title="Imported from another instance">IMPORTED</span>}
             <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="shrink-0 text-[11px] whitespace-nowrap text-zinc-400" suppressHydrationWarning>
@@ -258,6 +292,7 @@ export function MessageItem(props: MessageItemProps) {
           </button>
         )}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
       {!editing && (
         <div className="absolute top-0 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
           {canReact && (
@@ -271,7 +306,7 @@ export function MessageItem(props: MessageItemProps) {
             </Button>
           )}
           {canReact && (
-            <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react}
+            <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react} open={reactionOpen} onOpenChange={setReactionOpen}
               trigger={<Button variant="ghost" size="icon-sm" aria-label="Add reaction" disabled={pending}><SmilePlusIcon /></Button>} />
           )}
           {canPin && (
@@ -285,9 +320,9 @@ export function MessageItem(props: MessageItemProps) {
               {message.pinned ? <PinOffIcon /> : <PinIcon />}
             </Button>
           )}
-          <ReportDialog messageId={message.id} />
-          {message.authorId !== currentUserId && !blocked && <Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} aria-label={`Message ${message.authorName} privately`} className="rounded px-2 py-1 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Message</Link>}
-          {message.authorId !== currentUserId && !blocked && (
+          <ReportDialog messageId={message.id} open={reportOpen} onOpenChange={setReportOpen} />
+          {message.authorId !== currentUserId && !message.authorImported && !blocked && <Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} aria-label={`Message ${message.authorName} privately`} className="rounded px-2 py-1 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Message</Link>}
+          {message.authorId !== currentUserId && !message.authorImported && !blocked && (
             <Button variant="ghost" size="icon-sm" aria-label={`Block ${message.authorName}`} onClick={onBlock} disabled={pending}>
               <UserXIcon />
             </Button>
@@ -305,7 +340,21 @@ export function MessageItem(props: MessageItemProps) {
         </div>
       )}
       </div>
-    </li>
+    </ContextMenuTrigger>
+    <ContextMenuContent aria-label="Message actions" finalFocus={() => handoffFocus.current ? false : true}>
+      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onReply(message))}><CornerUpLeftIcon aria-hidden />Reply</ContextMenuItem>}
+      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReactionOpen(true))}><SmilePlusIcon aria-hidden />Add reaction</ContextMenuItem>}
+      {onOpenThread && (canReact || message.thread) && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onOpenThread(message))}><MessagesSquareIcon aria-hidden />{message.thread ? "Open thread" : "Start a thread"}</ContextMenuItem>}
+      {(canReact || (onOpenThread && message.thread)) && <ContextMenuSeparator />}
+      {message.content && <ContextMenuItem onClick={() => void copy(decodeAssetTokens(decodeMentions(message.content, message.mentions)), "Message text copied.")}><CopyIcon aria-hidden />Copy text</ContextMenuItem>}
+      <ContextMenuItem onClick={() => void copy(message.id, "Message ID copied.")}><HashIcon aria-hidden />Copy message ID</ContextMenuItem>
+      <ContextMenuSeparator />
+      {canEdit && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setEditing(true))}><PencilIcon aria-hidden />Edit message</ContextMenuItem>}
+      {canPin && <ContextMenuItem disabled={pending} onClick={() => run(() => setPinned(message.id, !message.pinned))}>{message.pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}{message.pinned ? "Unpin message" : "Pin message"}</ContextMenuItem>}
+      <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReportOpen(true))}><FlagIcon aria-hidden />Report message</ContextMenuItem>
+      {canDelete && <><ContextMenuSeparator /><ContextMenuItem variant="destructive" disabled={pending} onClick={onDelete}><Trash2Icon aria-hidden />Delete message</ContextMenuItem></>}
+    </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
