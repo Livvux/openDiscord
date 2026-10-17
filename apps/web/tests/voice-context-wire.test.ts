@@ -24,8 +24,8 @@ describe("S6-A1 eight-party encrypted wire feasibility, no eight-browser/media c
       const reference = randomUUID();
       const common = { version: 1, purpose: VOICE_CONTROL_EVENT, callId: fixture.snapshot.callId, generation: 1, epochId: randomUUID(), sender, recipient, audience, reference, transaction: reference };
       const payload = kind === "material"
-        ? voiceOwnerControlSchema.parse({ ...common, kind, publisher: sender, keyId: randomUUID(), material: Buffer.alloc(32, 9).toString("base64") })
-        : voiceContextControlSchema.parse({ ...common, kind, leader: audience[0], sequence: 1 });
+        ? voiceOwnerControlSchema.parse({ ...common, kind, proposalSequence: Number.MAX_SAFE_INTEGER, publisher: sender, keyId: randomUUID(), material: Buffer.alloc(32, 9).toString("base64") })
+        : voiceContextControlSchema.parse({ ...common, kind, leader: audience[0], sequence: Number.MAX_SAFE_INTEGER });
       if (payload.kind !== "material") expect(validateVoiceContextControl(payload, fixture.snapshot, audience)).toEqual(payload);
       const encoded = encodeVoiceControlWire(payload);
       expect(decodeVoiceControlWire(encoded)).toEqual(payload);
