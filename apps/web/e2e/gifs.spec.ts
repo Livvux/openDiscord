@@ -9,10 +9,10 @@ test("GIF links require consent before an external media request", async ({ brow
   const requested: string[] = [];
   await page.route("https://media4.giphy.com/**", async (route) => {
     requested.push(route.request().url());
-    // A 1x1 GIF keeps this test independent of the remote provider.
+    // A decodable 1x1 GIF keeps this test independent of the remote provider; a broken one hits onError.
     await route.fulfill({
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64"),
+      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"),
     });
   });
 
@@ -33,7 +33,7 @@ test("GIF links require consent before an external media request", async ({ brow
 
 test("configured KLIPY and GIPHY providers can send a GIF through the channel composer", async ({ browser }) => {
   const page = await newUserPage(browser);
-  const gif = Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64");
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
   const klipyUrl = "https://static.klipy.com/sample.gif";
   const giphyUrl = "https://media4.giphy.com/media/sample/giphy.gif";
 
