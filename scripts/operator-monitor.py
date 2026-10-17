@@ -167,8 +167,9 @@ def check_scanner(config: MonitorConfig, now: float) -> str | None:
                 or mounts[0].get("Destination") != "/var/lib/clamav" or not mounts[0].get("RW")
                 or settings.get("LogConfig") != {"Type": "json-file", "Config": {"max-size": "10m", "max-file": "3"}}):
             return "scanner-config-mismatch"
-        result = subprocess.run(["docker", "top", scanner, "-eo", "args"], capture_output=True, text=True, timeout=10, check=False)
-        processes = [line.split() for line in result.stdout.splitlines()[1:]]
+        result = subprocess.run(["docker", "top", scanner, "-eo", "pid,args"], capture_output=True, text=True, timeout=10, check=False)
+        # Docker rejects ps formats without a PID column; drop it before matching.
+        processes = [line.split()[1:] for line in result.stdout.splitlines()[1:]]
         if result.returncode or not any(words and words[0] in ("freshclam", "/usr/bin/freshclam")
                                        and "--daemon" in words and "--foreground" in words for words in processes):
             return "scanner-update-process-missing"
