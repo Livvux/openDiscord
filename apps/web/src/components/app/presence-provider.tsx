@@ -6,6 +6,11 @@ import type { PresenceStatus } from "@/lib/presence";
 const POLL_MS = 60_000;
 const PresenceContext = createContext<ReadonlyMap<string, PresenceStatus>>(new Map());
 
+/** Every member shown as online in the open community. */
+export function useOnlineMembers(): ReadonlyMap<string, PresenceStatus> {
+  return useContext(PresenceContext);
+}
+
 /** The member's shown status, or null when offline or hidden. */
 export function usePresence(userId: string): PresenceStatus | null {
   return useContext(PresenceContext).get(userId) ?? null;
