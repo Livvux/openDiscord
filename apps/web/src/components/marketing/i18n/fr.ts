@@ -16,7 +16,6 @@ export const fr: Messages = {
     language: "Langue",
   },
   hero: {
-    badge: "Open source, chaque ligne est lisible",
     titleStart: "Les communautés appartiennent à",
     titleAccent: "tous.",
     lead: "openDiscord est une plateforme communautaire open source. Discutez sur opendiscord.app ou faites tourner exactement la même version sur votre propre serveur. Aucun verrouillage, et le chat de base ne sera jamais payant.",
@@ -26,17 +25,8 @@ export const fr: Messages = {
   },
   mockup: {
     label: "Aperçu du client openDiscord avec communautés, salons et messages",
-    community: "Salle d’étude",
-    textChannels: "Salons textuels",
-    composer: "Envoyer un message dans #general",
-    typing: "Ife est en train d’écrire…",
-    messages: [
-      "Notre groupe d’étude était prêt en une soirée. Les liens d’invitation ont fait le reste.",
-      "La même version sur ma propre machine. docker compose up et c’était lancé 🚀",
-      "Les motifs d’exclusion et de bannissement arrivent dans le journal d’audit. Nos modos adorent.",
-      "Et exporter mes données, c’est un clic. Comme il se doit.",
-    ],
   },
+  media: { play: "Lire la vidéo", pause: "Mettre la vidéo en pause" },
   marquee: {
     label: "Inclus dans la première version",
     items: [
@@ -45,13 +35,15 @@ export const fr: Messages = {
     ],
   },
   features: {
-    eyebrow: "Open source · De vraies personnes · De meilleures communautés",
     titleStart: "Tout ce dont une communauté a besoin.",
     titleAccent: "Rien à louer.",
     realtime: {
       title: "En temps réel, mais d’abord enregistré",
       body: "Chaque message est écrit dans PostgreSQL avant que quiconque ne le voie. Après une coupure, le client rattrape son retard depuis la base de données.",
-      stages: ["Message", "PostgreSQL", "Tout le monde"],
+    },
+    threads: {
+      title: "Des fils qui gardent les salons lisibles",
+      body: "Répondez dans un fil au lieu d’inonder le salon. Les réactions, les mentions et la recherche fonctionnent partout de la même façon.",
     },
     invite: {
       title: "Sur invitation par défaut",
@@ -60,12 +52,10 @@ export const fr: Messages = {
     moderation: {
       title: "Modération intégrée",
       body: "Des rôles avec une hiérarchie claire, exclusions et bannissements motivés, un journal d’audit et des limites de débit dès le premier jour.",
-      log: ["a banni spam-bot", "a modifié le rôle d’Ife", "a supprimé un message"],
     },
     data: {
       title: "Vos données, votre choix",
       body: "Exportez tout ce que vous avez écrit ou supprimez votre compte en un clic. Pas de dark patterns, pas de pistage publicitaire.",
-      export: "Exporter mes données",
     },
     encryption: {
       title: "Honnêtes sur le chiffrement",
@@ -76,14 +66,7 @@ export const fr: Messages = {
       no: "Côté serveur",
     },
   },
-  stats: [
-    { value: "AGPL-3.0", label: "Chaque ligne est publique" },
-    { value: "0", label: "Traceur publicitaire" },
-    { value: "1", label: "Fichier compose pour s’auto-héberger" },
-    { value: "0 €", label: "Pour le chat de base, pour toujours" },
-  ],
   selfHost: {
-    eyebrow: "Auto-héberger",
     titleStart: "Un seul fichier compose.",
     titleAccent: "Votre serveur. Vos règles.",
     lead: "L’instance officielle et la vôtre utilisent la même image. Pointez un domaine vers un petit VPS, définissez deux secrets et vous avez un serveur communautaire avec des sauvegardes que vous maîtrisez.",
@@ -114,7 +97,6 @@ export const fr: Messages = {
     },
   },
   roadmap: {
-    eyebrow: "Construit au grand jour",
     titleStart: "Une première version modeste.",
     titleAccent: "Une feuille de route publique.",
     stages: [
@@ -146,6 +128,7 @@ export const fr: Messages = {
     discover: "Découvrir les salons publics",
     privacy: "Confidentialité",
     terms: "Conditions",
+    guidelines: "Règles",
     imprint: "Mentions légales",
     signIn: "Se connecter",
   },
