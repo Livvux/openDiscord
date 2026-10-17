@@ -73,7 +73,7 @@ async function Settings() {
         <PresenceSettings visible={showPresence} />
       </Section>
       <Section title="Blocked people" description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
-        <BlockedList blocked={blocked} />
+        <BlockedList blocked={blocked} currentUserId={user.id} />
       </Section>
       <Section title="Authenticator app" description="Optional two-factor authentication with a time-based code (TOTP).">
         <TwoFactorSettings enabled={has2fa} />
