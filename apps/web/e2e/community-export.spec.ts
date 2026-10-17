@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { createCommunity, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
+import { withCommunityImport } from "./import-lock";
 
 test.describe("community export and import", () => {
   test.skip(({ isMobile }) => isMobile, "desktop flow");
@@ -24,7 +25,14 @@ test.describe("community export and import", () => {
 
     await owner.getByRole("button", { name: "Create a community" }).first().click();
     await expectNoA11yViolations(owner);
-    await owner.getByLabel("Or import an export file").setInputFiles(file);
+    await withCommunityImport(async () => {
+      const importing = owner.waitForResponse((response) => response.url().endsWith("/api/communities/import") && response.request().method() === "POST");
+      await owner.getByLabel("Or import an export file").setInputFiles(file);
+      const response = await importing;
+      expect(response.status()).toBe(201);
+      // Navigation may evict Chromium's cached body; completion does not require rereading it.
+      expect(await response.finished()).toBeNull();
+    });
     await expect(owner.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
     const msg = owner.getByRole("log").getByRole("listitem").filter({ hasText: "First message" });
     await expect(msg.getByText("IMPORTED")).toBeVisible();
@@ -83,11 +91,13 @@ test("the owner migrates a complete archive with private image and binary files"
     const create = owner.getByRole("button", { name: "Create a community", exact: true }).first();
     if (!await create.isVisible()) await toggle.click();
     await create.click();
-    const importing = owner.waitForResponse((response) => response.url().endsWith("/api/communities/import") && response.request().method() === "POST");
-    await owner.getByRole("dialog", { name: "Create a community", exact: true }).getByLabel("Or import an export file").setInputFiles({ name: "community.odc.gz", mimeType: "application/gzip", buffer: archive });
-    const importedResponse = await importing;
-    expect(importedResponse.status()).toBe(201);
-    const imported: { communityId: string } = await importedResponse.json();
+    const imported = await withCommunityImport(async () => {
+      const importing = owner.waitForResponse((response) => response.url().endsWith("/api/communities/import") && response.request().method() === "POST");
+      await owner.getByRole("dialog", { name: "Create a community", exact: true }).getByLabel("Or import an export file").setInputFiles({ name: "community.odc.gz", mimeType: "application/gzip", buffer: archive });
+      const importedResponse = await importing;
+      expect(importedResponse.status()).toBe(201);
+      return await importedResponse.json() as { communityId: string };
+    });
     await expect(owner).toHaveURL(new RegExp(`/app/c/${imported.communityId}/`));
     await expect(owner.getByRole("dialog", { name: "Create a community", exact: true })).toBeHidden();
     await expect(owner.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
