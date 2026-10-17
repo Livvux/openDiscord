@@ -17,6 +17,10 @@ test("global administration works without 2FA and applies reports and suspension
   const memberContext = chatter.context();
   page.setDefaultTimeout(15_000);
   chatter.setDefaultTimeout(15_000);
+  const admin = page.getByRole("main");
+  const reports = admin.getByRole("region", { name: "Abuse reports", exact: true });
+  const users = admin.getByRole("region", { name: "Users", exact: true });
+  const communities = admin.getByRole("region", { name: "Communities", exact: true });
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   chatter.on("pageerror", (error) => runtimeErrors.push(error.message));
@@ -65,9 +69,9 @@ test("global administration works without 2FA and applies reports and suspension
     await chatter.goto(channelUrl);
 
     await page.goto("/app/admin?tab=reports");
-    await expect(page.getByText("QA message abuse report", { exact: true })).toBeVisible();
-    await expect(page.getByText("QA reported private message", { exact: true })).toHaveCount(0);
-    const report = page.locator("#reports li").filter({ hasText: "QA message abuse report" });
+    await expect(reports.getByText("QA message abuse report", { exact: true })).toBeVisible();
+    await expect(reports.getByText("QA reported private message", { exact: true })).toHaveCount(0);
+    const report = reports.locator("li").filter({ hasText: "QA message abuse report" });
     await report.getByRole("button", { name: "Review reported message", exact: true }).click();
     await page.getByLabel("Reason", { exact: true }).fill("QA explicit private-content review");
     await page.getByRole("button", { name: "Confirm review reported message", exact: true }).click();
@@ -75,7 +79,7 @@ test("global administration works without 2FA and applies reports and suspension
     await report.getByRole("button", { name: "Remove reported message", exact: true }).click();
     await page.getByLabel("Reason", { exact: true }).fill("QA confirmed abusive content");
     await page.getByRole("button", { name: "Confirm remove reported message", exact: true }).click();
-    await expect(page.getByText("QA message abuse report", { exact: true })).toHaveCount(0);
+    await expect(reports.getByText("QA message abuse report", { exact: true })).toHaveCount(0);
     await expect(chatter.getByText("QA reported private message", { exact: true })).toHaveCount(0);
     const removed = await db.query("select count(*)::int as total from message where content=$1 and author_id=$2", ["QA reported private message", chatterId]);
     expect(removed.rows[0].total).toBe(0);
@@ -85,11 +89,11 @@ test("global administration works without 2FA and applies reports and suspension
     await page.goto("/app/admin?tab=users");
     await page.getByLabel("Search users by name or email").fill(chatterEmail);
     await page.getByRole("button", { name: "Search", exact: true }).click();
-    const userRow = page.locator("#users li").filter({ hasText: chatterEmail });
+    const userRow = users.locator("li").filter({ hasText: chatterEmail });
     await userRow.getByRole("button", { name: "Suspend user", exact: true }).click();
     await page.getByLabel("Reason", { exact: true }).fill("QA account suspension");
     await page.getByRole("button", { name: "Confirm suspend user", exact: true }).click();
-    await expect(page.locator("#users")).toContainText("Suspended: QA account suspension");
+    await expect(users).toContainText("Suspended: QA account suspension");
     await expect(chatter).toHaveURL(/\/sign-in/);
     expect((await chatter.request.get(`/api/channels/${channelId}/messages`)).status()).toBe(401);
     expect((await chatter.request.head(`/api/communities/${communityId}/events`)).status()).toBe(401);
@@ -105,7 +109,7 @@ test("global administration works without 2FA and applies reports and suspension
     await page.goto("/app/admin?tab=communities");
     await page.getByLabel("Search communities by name").fill(`QA moderation ${suffix}`);
     await page.getByRole("button", { name: "Search", exact: true }).click();
-    const communityRow = page.locator("#communities li").filter({ hasText: suffix });
+    const communityRow = communities.locator("li").filter({ hasText: suffix });
     await communityRow.getByRole("button", { name: "Suspend community", exact: true }).click();
     await page.getByLabel("Reason", { exact: true }).fill("QA community suspension");
     await page.getByRole("button", { name: "Confirm suspend community", exact: true }).click();

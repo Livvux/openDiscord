@@ -31,6 +31,7 @@ export const CSP = [
   "img-src 'self' data: blob: https://api.producthunt.com/widgets/embed-image/ https://*.giphy.com https://static.klipy.com https://static1.klipy.com https://static2.klipy.com",
   "font-src 'self'",
   `connect-src 'self' https://api.giphy.com https://api.klipy.com${liveKitOrigins()}`,
+  "worker-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

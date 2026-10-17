@@ -1,6 +1,6 @@
-# Unactivated control-only CallSession
+# Unactivated CallSession and installed media consumer
 
-`CallSession.create` requires deliberate Voice join consent, a real authenticated account/session assertion and an existing read-only DM enrollment anchor. It acquires its own account Web Lock and creates independent memory-only Voice enrollment secret/device/nonce. Native WASM is dynamically imported only after browser join. No storage writes, DM initializer, media runtime, provider, UI or legacy issuer changes occur.
+`CallSession.create` requires deliberate Voice join consent, a real authenticated account/session assertion and an existing read-only DM enrollment anchor. It acquires its own account Web Lock and creates independent memory-only Voice enrollment secret/device/nonce. Native WASM is dynamically imported only after browser join. No storage writes, DM initializer, provider, UI or legacy issuer changes occur. The browser media module is dynamically imported only after genuine all-peer context installation.
 
 Before any receive/user SAS processing, `keysPrepared` must confirm a completed public full-roster query for the exact current generation. Completed native factory bootstrap proves own published public device keys only; it does not rewrite own join snapshot state. Every remote must be `active` in the authoritative roster: the existing service sets this only after valid immutable device/prekey publication, independently of SAS/trust/admission. A waiting remote blocks receive/query for the full-roster call until the normal ten-second heartbeat observes same-generation waiting-to-active. Then one bounded query prepares the native device cache; one-second polls never repeatedly query. A real generation transition clears this barrier synchronously. Query is outside transition/drain, singleflight by generation, and stale completion cannot prepare a new generation after exact binding/lease checks. This deliberately delays all roster SAS while any remote has not published keys; no readiness-discovery wire kind or extra bootstrap heartbeat is added. Initial self-only polling still produces a genuine HTTP409 first when a second participant joins.
 
@@ -18,6 +18,59 @@ The first typed normal HTTP409 fences synchronously, shares only authoritative h
 
 Received replacement offers are staged prospectively: the installed attempt/ref/view/timer remain unchanged until the actual Owner stage succeeds. Only the actual typed `VoiceContextRejected` at that stage boundary can reject a lower/retired replay nonfatally. Rejected proposal context/pending refs expire at the next Owner batch; independent installed-current media still reaches the explicit media boundary. Successful stage synchronously fences through Owner, then captured attempt/revision/lease/earlier receive-start deadline are rechecked before committing the replacement. Divergent-equal, schema/native, acceptance and transport failures remain fatal.
 
-There is deliberately no media consumer. A genuine installed media control or buffered material returned by installation ends with typed `unsupported-media`; it is never silently discarded, retained externally, or labeled ready. The later MediaSession slice must replace this boundary with real once-only authenticated consumption before any UI activation.
+The private installed media consumer receives the exact proposal audience, sequence and immutable installed snapshot, with closure capabilities for current-context checks, authenticated native sends and the real service token. It never receives the Owner, agreement ref, enrollment secret, raw HTTP client or native machine. Installation drains authenticated retained material into the captured instance exactly once. Startup does not wait for future peer material inside the native receive batch. `agreed` still describes cryptographic context agreement, not media readiness.
 
-Tests distinguish adapter races with a mocked public port from actual public native Owners, authenticated cookies, HTTP route and PostgreSQL service. The three-Owner asynchronous consent test compares real public SAS, continues genuine mailbox ACK/SAS after early local-not-ready, explicitly retries full selection and reaches independent all-peer barriers. Test-only observation of genuine public factory return values enables an actual encrypted material rejection assertion. This is control/native/service evidence, not authenticated product-browser, media, device, deployment or production acceptance.
+Each full-roster party, including listeners, generates independent 32-byte participant key material. Nonextractable HKDF imports precede authenticated prepared receipts. A fresh public participant-specific BaseKeyProvider, StrictVoiceWorker and Room contain every exact roster identity at key index zero. Every actual SDK setKey submission must match the expected CryptoKey and identity before a genuine positive own enable ACK permits key-ready. Publication additionally requires key-ready from every other admitted receiver. Prepared alone never permits capture. The ten-second media keying deadline begins at actual Owner installation before dynamic import/token work, is bounded by the remaining call lease and never resets per peer or response.
+
+Own source grants come only from the actual service token and control local intent methods. No permitted source is captured automatically. `setMicrophoneEnabled`, `setCameraEnabled` and `setScreenShareEnabled` require current full readiness and the exact own source grant. Video forces VP8 in the third publish-options argument. Screen audio is refused; screen capture explicitly uses audio:false. Empty listener sources mean zero local source/capture/publication calls, while full-roster key import, genuine own ACK, key-ready and remote decode remain required.
+
+Remote auto-subscription is disabled. Every publication checks current admitted identity, source/kind, Opus/VP8 and exact GCM, then waits for a genuine matching remote worker ACK before subscribing and checks current context again before attach. Own empty sources never imply remote source denial. **Pinned SDK metadata exception:** LiveKit 2.22.4 exposes only an isEncrypted public getter accepting any non-NONE enum. This slice reads only the declared `publication.trackInfo.encryption` signaling value after public metadata checks to enforce exact GCM. No protected-field cast, private manager access or metadata write is used. Missing/unknown/non-GCM fails closed; SDK upgrades require this source and actual worker/browser gate to be reviewed again.
+
+JWT expiry bounds connection use immediately before and after connect; it does not establish SFU revocation. Established media follows the latest authoritative CallSession lease. Reconnecting, SignalReconnecting (including signal-only resume), disconnect, worker error, context/generation/session change and close synchronously fence sources/playback/worker before asynchronous disconnect. Automatic SDK reconnect cannot restore old keys/tokens. Delayed capture results are stopped. A fresh context creates a fresh Room/key table/worker/token; no old-epoch readiness is reused.
+
+The controlled Chromium gate bundles only test static modules/worker/WASM with the existing locked Vite API and serves a finite static URL list through Playwright. Existing authenticated HTML and all cookie HTTP/native/service traffic remain real, without a proof route, window epoch coordinator, test JWT or private SDK manager. Transparent native Worker/RTCPeerConnection observation forwards genuine messages/streams and stores aggregate evidence only. Controlled non-silent oscillator and moving canvas capture produce real Opus/VP8 over the SFU. This authored gate is not acceptance until exact-head CI executes it successfully; three-account product UI and physical-device/mobile/screen-audio acceptance remain later.
+
+Tests distinguish adapter races with a mocked public port from actual public native Owners, authenticated cookies, HTTP route and PostgreSQL service. The three-Owner asynchronous consent test compares real public SAS, continues genuine mailbox ACK/SAS after early local-not-ready, explicitly retries full selection and reaches independent all-peer barriers. Test-only observation of genuine public factory return values enables an actual encrypted material consumer-delivery assertion. These Node tests mock only media effects to retain their control scope; they make no real ACK/media claim. This is control/native/service evidence, not authenticated product-browser, media, device, deployment or production acceptance.
+
+## Product presentation and acceptance
+
+The app shell now resolves authenticated account/session IDs under its own Suspense
+boundary and keys one VoiceProvider by that exact identity. The provider observes the
+official auth client session state, fences before sign-out or encryption-identity reset,
+and closes on unmount. Navigation only detaches video elements; the provider audio root
+and authenticated CallSession survive text-channel navigation.
+
+Joining requires separate consent to a temporary Voice device and existing encrypted
+messaging setup. Voice never enrolls a messaging device. Each exact full-roster peer must
+complete genuine native SDK SAS comparison on both browsers, then be separately admitted.
+Full-audience consent is another explicit action. The UI displays native `Sas.emoji()`
+symbols and descriptions from pinned Matrix crypto SDK18.9.0; no local emoji table or
+trust conversion is involved. Generation changes clear current media and require full
+roster consent again. Microphone, camera and screen sharing remain off until explicit
+source clicks. Screen capture requests video only.
+
+CallView exposes immutable, key-free media state and opaque playback tile IDs. It does
+not expose Room, Track, tokens or key material. `agreed` alone is never displayed as media
+ready. MediaSession validates current subscriptions and owns attach/detach operations;
+fences synchronously clear all presentation and stop captures. Exact own token source
+grants control local actions, while a listen-only peer can still decrypt admitted media.
+
+`Voice product acceptance` is a separate disposable hosted job. It builds the actual
+Next production server and starts LiveKit1.13.10 with `room.auto_create: false`. Its
+three separate authenticated accounts use real product signup, community membership,
+messaging setup, Voice consent, three native SAS pair comparisons, six admissions and
+three full-audience decisions. Native Worker/RTCPeerConnection observers forward original
+operations unchanged and retain only counts/order/stats. The test checks worker fetch
+content type/CSP, own positive SDK ACK after all exact key submissions, listen-only empty
+source grants, non-silent decoded Opus, changing VP8 pixels in actual product video
+mounts, navigation remounts, responsive layout, capture toggles, renewed calls past the
+original join JWT expiry, and Connect revocation. SAS values, keys, tokens and identities
+are excluded from the diagnostic summary; comparison traces are disabled.
+
+These are test requirements, not a claim that the current revision has passed them.
+The exact hosted check IDs and outcomes belong in the implementation report. Existing
+control/lifecycle/media suites retain lower-layer negative coverage; they do not substitute
+for the actual Next product gate. Physical audio devices, WebKit encrypted media,
+eight-browser capacity, arbitrary networks and external cryptographic audit remain outside
+this acceptance. Source CI never enables production: operator freeze, migration, exact SFU
+configuration, cleanup and independent review remain release prerequisites.

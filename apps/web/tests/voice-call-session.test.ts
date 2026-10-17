@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CallSession, VoiceCallSessionError } from "@/lib/voice/call-session";
 
 const join = vi.fn();
+vi.mock("@/lib/voice/media-session", () => { throw new Error("SSR must not evaluate the browser media runtime."); });
 vi.mock("@/lib/voice/http-client", async importOriginal => {
   const actual = await importOriginal<typeof import("@/lib/voice/http-client")>();
   return { ...actual, createVoiceHttpClient: () => ({ join }) };

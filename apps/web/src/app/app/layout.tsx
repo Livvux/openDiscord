@@ -1,3 +1,4 @@
+import { requirePageUser } from "@/server/session";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { CommunityRail } from "@/components/app/community-rail";
@@ -9,9 +10,13 @@ import { VoiceProvider } from "@/components/app/voice/voice-provider";
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default function AppLayout({ children }: LayoutProps<"/app">) {
+  return <Suspense fallback={<div role="status" className="p-4">Opening your account…</div>}><AuthenticatedShell>{children}</AuthenticatedShell></Suspense>;
+}
+async function AuthenticatedShell({ children }: { children: React.ReactNode }) {
+  const { id, sessionId } = await requirePageUser();
   return (
     <NotificationsProvider>
-    <VoiceProvider>
+    <VoiceProvider key={`${id}:${sessionId}`} accountId={id} sessionId={sessionId}>
     <MobileNavProvider>
       <div className="flex h-dvh overflow-hidden bg-background text-sm text-foreground">
         <MobilePanel

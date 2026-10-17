@@ -18,7 +18,6 @@ import * as presence from "@/server/presence";
 import * as profile from "@/server/profile";
 import * as profileCard from "@/server/profile-card";
 import { requireUser } from "@/server/session";
-import * as voice from "@/server/voice";
 import * as unread from "@/server/unread";
 
 async function run<T>(fn: (userId: string) => Promise<T>, refreshUi = true): Promise<ActionResult<T>> {
@@ -106,8 +105,6 @@ export const searchPeople = async (query: string) => run((u) => friends.searchPe
 export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
   run((u) => presence.setNotificationLevel(u, communityId, level));
 
-export const joinVoice = async (channelId: string) => run((u) => voice.createVoiceToken(u, channelId), false);
-export const listVoiceParticipants = async (channelId: string) => run((u) => voice.listVoiceParticipants(u, channelId), false);
 
 export const createIntegration = async (
   communityId: string,
