@@ -7,12 +7,12 @@ export function LanguageSwitcher({ locale, label }: { locale: Locale; label: str
     <details className="group relative">
       <summary
         aria-label={`${label}: ${localeNames[locale]}`}
-        className="flex cursor-pointer list-none items-center gap-1.5 rounded-full px-3 py-1.5 text-slate-300 transition hover:bg-white/5 hover:text-white [&::-webkit-details-marker]:hidden"
+        className="flex h-9 cursor-pointer list-none items-center gap-1.5 rounded-lg px-2.5 transition-colors hover:bg-ink/5 [&::-webkit-details-marker]:hidden"
       >
         <Globe aria-hidden className="size-4" />
-        <span className="font-mono text-xs uppercase">{locale}</span>
+        <span className="text-xs font-medium uppercase">{locale}</span>
       </summary>
-      <ul className="absolute right-0 mt-2 w-44 rounded-2xl border border-white/10 bg-brand-charcoal/95 p-1.5 shadow-2xl shadow-black/50 backdrop-blur-xl">
+      <ul className="absolute right-0 mt-2 w-44 rounded-2xl border border-line bg-white p-1.5 shadow-lg shadow-ink/10">
         {locales.map((l) => (
           <li key={l}>
             <a
@@ -20,10 +20,10 @@ export function LanguageSwitcher({ locale, label }: { locale: Locale; label: str
               hrefLang={l}
               lang={l}
               aria-current={l === locale ? "page" : undefined}
-              className="flex items-center justify-between rounded-xl px-3 py-2 text-slate-300 transition hover:bg-white/5 hover:text-white aria-[current=page]:text-white"
+              className="flex items-center justify-between rounded-xl px-3 py-2 text-ink-muted transition-colors hover:bg-ink/5 hover:text-ink aria-[current=page]:font-medium aria-[current=page]:text-ink"
             >
               {localeNames[l]}
-              <span className="font-mono text-xs text-slate-400 uppercase">{l}</span>
+              <span className="text-xs uppercase">{l}</span>
             </a>
           </li>
         ))}
