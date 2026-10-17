@@ -105,7 +105,9 @@ class ScannerTests(unittest.TestCase):
                 return subprocess.CompletedProcess(arguments, 0, json.dumps({"Internal": False, "Driver": "bridge", "Labels": {
                     "com.docker.compose.project": "scanner-project", "com.docker.compose.network": "default"}}))
             if arguments[1] == "top":
-                return subprocess.CompletedProcess(arguments, 0, top if top is not None else "COMMAND\nfreshclam --checks=12 --daemon --foreground --stdout --user=clamav\n")
+                if "pid" not in arguments[-1].split(","):
+                    return subprocess.CompletedProcess(arguments, 1, "", "Couldn't find PID field in ps output")
+                return subprocess.CompletedProcess(arguments, 0, top if top is not None else "PID COMMAND\n757750 freshclam --checks=12 --daemon --foreground --stdout --user=clamav\n")
             self.assertEqual(arguments[1:3], ["exec", "a" * 12])
             return subprocess.CompletedProcess(arguments, 0, json.dumps({"version": version or self.version}))
         with patch.object(monitor.subprocess, "run", side_effect=run):
@@ -117,7 +119,7 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(self.run_check(discovery=discovery), "scanner-unavailable")
         for error in (PermissionError(), subprocess.TimeoutExpired("docker", 10)):
             self.assertEqual(self.run_check(error=error), "scanner-unavailable")
-        self.assertEqual(self.run_check(top="COMMAND\ntail -f /dev/null\n"), "scanner-update-process-missing")
+        self.assertEqual(self.run_check(top="PID COMMAND\n757739 tail -f /dev/null\n"), "scanner-update-process-missing")
         self.assertEqual(self.run_check(web_networks={}), "scanner-config-mismatch")
 
     def test_container_and_configuration_drift(self):
