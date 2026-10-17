@@ -2,7 +2,7 @@
 
 import { MenuIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 // Below the md breakpoint the community rail and channel list become an off-canvas panel.
@@ -12,26 +12,32 @@ const MobileNavContext = createContext<{ open: boolean; setOpen: (open: boolean)
 });
 
 export function MobileNavProvider({ children }: { children: React.ReactNode }) {
-  // Open only on the page where it was opened: any navigation (e.g. creating a community) closes it.
-  const pathname = usePathname();
-  const [openedAt, setOpenedAt] = useState<string | null>(null);
-  const open = openedAt === pathname;
-  const setOpen = useCallback((value: boolean) => setOpenedAt(value ? pathname : null), [pathname]);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen]);
+  }, [open]);
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
+      <Suspense><CloseOnNavigation close={() => setOpen(false)} /></Suspense>
       {children}
       {open && (
         <div aria-hidden className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setOpen(false)} />
       )}
     </MobileNavContext.Provider>
   );
+}
+
+/** Any navigation (e.g. creating a community) closes the overlay, not only links inside it. */
+function CloseOnNavigation({ close }: { close: () => void }) {
+  const pathname = usePathname();
+  const latest = useRef(close);
+  useEffect(() => { latest.current = close; });
+  useEffect(() => { latest.current(); }, [pathname]);
+  return null;
 }
 
 /** Wraps a sidebar: always visible from md up, an overlay panel below when opened. */
