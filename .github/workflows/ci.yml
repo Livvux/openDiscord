@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   check:
-    if: always()
+    # Superseded runs should cancel, while genuine failures must still fail this gate.
+    if: ${{ !cancelled() }}
     needs: [backend, browser, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -60,9 +61,24 @@ jobs:
       - name: Dependency audit (production dependencies)
         run: pnpm audit --prod --audit-level=high
       - name: Operator job shell syntax
-        run: bash -n scripts/production-backup.sh scripts/production-maintenance.sh scripts/secure-dokploy-env.sh
+        run: bash -n scripts/production-backup.sh scripts/production-maintenance.sh scripts/production-voice-maintenance.sh scripts/secure-dokploy-env.sh
       - name: Operator alert state regression checks
-        run: python3 scripts/test-operator-monitor.py
+        run: |
+          python3 scripts/test-operator-monitor.py
+          python3 scripts/test-capture-scanner-recovery.py
+      - name: Voice operator wrapper isolation and cleanup
+        run: python3 scripts/test-production-voice-maintenance.py
+      - name: Voice systemd template verification
+        run: |
+          sudo install -m 755 /bin/true /usr/local/sbin/opendiscord-voice-maintenance
+          sudo install -m 755 /bin/true /usr/local/sbin/opendiscord-operator-monitor
+          systemd-analyze verify ops/voice-maintenance/*.service ops/voice-maintenance/*.timer ops/scanner/*.service ops/scanner/*.timer
+      - name: Private scanner Compose contract
+        env:
+          OPENDISCORD_APP_PRIVATE_NETWORK: isolated-scanner-fixture
+        run: |
+          docker compose -f ops/scanner/compose.yml config --format json > /tmp/scanner-compose.json
+          python3 scripts/check-scanner-compose.py /tmp/scanner-compose.json
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm db:migrate
@@ -84,6 +100,11 @@ jobs:
           pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
 
   browser:
+    strategy:
+      # Keep every shard's diagnostics when another shard fails.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -114,12 +135,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: apps/web/.next/cache
-          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-shard-${{ matrix.shard }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-shard-${{ matrix.shard }}-
             ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm db:migrate
       - run: pnpm build
       - name: Characterize isolated authenticated HTTP and SSE
+        if: matrix.shard == 1
         timeout-minutes: 4
         env:
           OPENDISCORD_ISOLATED_LOAD: "1"
@@ -127,7 +150,7 @@ jobs:
           OPENDISCORD_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: pnpm --filter web exec tsx scripts/characterize-http-sse.ts
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: always() && matrix.shard == 1
         with:
           name: http-sse-characterization
           path: apps/web/http-sse-characterization.json
@@ -136,8 +159,19 @@ jobs:
       - name: Start LiveKit (dev mode)
         id: livekit
         run: docker run -d --name opendiscord-ci-livekit --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+      - name: Voice maintenance real DB and SDK acceptance
+        timeout-minutes: 3
+        run: pnpm --filter web exec tsx scripts/verify-voice-maintenance.ts
       - run: pnpm --filter web exec playwright install --with-deps chromium
-      - run: pnpm --filter web test:e2e
+      - name: Desktop and mobile browser shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter web exec playwright test --project=desktop --project=mobile --shard="$SHARD/3" --workers=2 --output=test-results/browser
+      # Each shard owns its database. The instance-wide alpha switch runs only after
+      # this runner's ordinary tests finish, with no other tests using that database.
+      - name: Closed Alpha approval acceptance
+        if: matrix.shard == 1
+        run: pnpm --filter web exec playwright test --project=closed-alpha --no-deps --workers=1 --output=test-results/closed-alpha
       - name: LiveKit advertised address and listeners
         if: always() && steps.livekit.outcome == 'success'
         # Deliberately omit participant, SDP, ICE credential and token logs.
@@ -146,7 +180,7 @@ jobs:
         # A failed initial attempt must survive a successful retry on disposable CI accounts.
         if: always()
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.shard }}
           path: |
             apps/web/test-results/**/trace.zip
             apps/web/test-results/**/error-context.md
@@ -158,7 +192,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: browser-screenshots
+          name: browser-screenshots-${{ matrix.shard }}
           path: apps/web/test-results/**/*.png
           retention-days: 7
           if-no-files-found: ignore

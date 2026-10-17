@@ -12,7 +12,7 @@ export const es: Messages = {
     selfHost: "Autoalojar",
     roadmap: "Hoja de ruta",
     signIn: "Iniciar sesión",
-    join: "Únete a la beta",
+    join: "Únete a la alfa cerrada",
     language: "Idioma",
   },
   hero: {
@@ -103,7 +103,7 @@ export const es: Messages = {
       {
         label: "Ahora",
         title: "Alfa cerrada",
-        items: ["Canales privados, roles, moderación", "Menciones, hilos, búsqueda, reacciones", "Voz, vídeo y compartir pantalla", "Bots, webhooks, API pública", "MD cifrados con verificación de dispositivos", "Apelaciones, normas y controles de retención"],
+        items: ["Canales privados, roles, moderación", "Menciones, hilos, búsqueda, reacciones", "Voz, vídeo y compartir pantalla", "Bots, webhooks, API pública", "MD cifrados con verificación de dispositivos", "Apelaciones, normas y controles de retención", "Emojis y stickers propios", "Canales públicos y descubrimiento"],
       },
       {
         label: "Después",
@@ -112,16 +112,16 @@ export const es: Messages = {
       },
       {
         label: "Más adelante",
-        title: "Voz y más allá",
-        items: ["Emojis y stickers propios", "Apps nativas", "Canales públicos opcionales", "Descubrimiento de comunidades"],
+        title: "Apps y grupos",
+        items: ["Apps nativas", "MD grupales y llamadas por MD"],
       },
     ],
   },
   footer: {
     titleStart: "Lleva tu comunidad",
     titleAccent: "a casa.",
-    lead: "Únete a la beta por invitación o mira lo que cuesta mantener la instancia alojada.",
-    join: "Únete a la beta",
+    lead: "Únete a la alfa cerrada o mira lo que cuesta mantener la instancia alojada.",
+    join: "Únete a la alfa cerrada",
     funding: "Financiación y costes",
     tagline: "Mentes abiertas. Más brillantes juntos.",
     nav: "Pie de página",

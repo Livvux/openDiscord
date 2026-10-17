@@ -61,7 +61,7 @@ is written only after a complete encrypted off-host readback. It does not contin
 the object remains available later. Monitor state suppresses repeat emails for one hour and sends
 a recovery email after a notified failure resolves.
 
-The owner-only JSON configuration contains `mode` (`health` or `backup`), `smtp_url`, `from`, and
+The owner-only JSON configuration contains `mode` (`health`, `backup`, activation-only `voice` or `scanner`), `smtp_url`, `from`, and
 `to`; the file must belong to the executing user and have no group/other permissions. SMTP uses
 verified TLS (implicit TLS for `smtps`, mandatory STARTTLS for `smtp`). Credentials are never
 included in check output or exception logs. State is stored in `/var/lib/opendiscord-monitor`.
@@ -98,3 +98,230 @@ hosted installation uses a path-triggered oneshot running `scripts/secure-dokplo
 owner-only access after replacement. It reads only the file mode, never its contents, and does no
 work when the mode is already 0600. Keep its path unit scoped to the app's exact `.env`; do not
 change the permissions or runtime settings of unrelated deployments.
+## 0031 compatible writer rollout
+
+Migration `0031` and compatible application/operator code form one deployment boundary. Old
+admin/bootstrap writers take the admin advisory lock before auth writes; the new statement guards
+take DM `810025`, then Voice `810030`. Mixing old and new writers can deadlock even without Voice
+calls. Old import and maintenance paths introduce further inversions. This procedure is a rollout
+gate, not evidence of deployment or Voice/E2EE activation.
+
+1. Record immutable image digests and their exact reviewed Git SHA for web, migrate, bootstrap and
+   maintenance/operator images. Require successful checks for that exact revision. Verify an
+   encrypted pre-upgrade backup and rehearse its restore in an isolated database; record the
+   recovery choice before downtime. Do not substitute an unreviewed tag or mutable `latest`.
+2. Establish deployment-wide operational exclusion. Disable automatic deployments/restart overlap,
+   schedules and admissions. Drain and stop every old web replica and admin/bootstrap/manual/
+   maintenance writer using this database, including actual job containers and operator connections.
+   Explicitly stop `opendiscord-maintenance.timer`, `opendiscord-voice-maintenance.timer` and
+   their services; stop `opendiscord-voice-monitor.timer`/service while Voice is quiescent.
+   A stopped timer alone does not stop an already running job container.
+   The maintenance script's flock serializes maintenance only; it is not a deployment mutex.
+   Stopping a Compose client does not prove its job container stopped.
+3. With explicit bounded drain, lock and statement budgets, inspect `pg_stat_activity` and `pg_locks`
+   by reviewed application identities. Report connection/transaction/lock metadata only, without
+   SQL query text or parameters. Confirm old processes cannot resume writes and their transactions
+   have drained. If they cannot drain within the budget, abort the upgrade. Do not blindly terminate
+   connections; termination requires a separate operational decision.
+4. Only then execute the exact pinned migrate image once under the same exclusion. Verify the
+   migration journal includes `0031`; all seven enabled BEFORE STATEMENT guards on `user`, `session`,
+   `account`, `verification`, `two_factor`, `passkey` and `dm_device` invoke
+   `voice_auth_statement_guard`, whose order is `810025` then `810030`. Verify the enabled AFTER DELETE
+   member backstop invokes `voice_member_delete_generation`. Trigger DDL can block. On timeout or
+   runner failure keep writers stopped and inspect the actual journal/functions/triggers; runner
+   failure alone does not prove atomic rollback.
+5. Start only the recorded compatible web/operator/maintenance images and verify their revisions
+   and absence of old replicas/jobs. Check readiness, real auth login/logout, admin policy/session
+   revoke, DM registration/upload/revoke, profile/non-revoking edits and maintenance dry-run/apply
+   under bounded conditions. Perform canonical cascade/generation acceptance in an isolated
+   environment. Do not create production test accounts or mutate customer sessions without
+   separately scoped authorization. Compose `depends_on` orders new startup only.
+6. Reopen schedules and admissions only after compatibility and readback pass. Record the actual
+   maintenance release image and cadence separately. Restart the hourly timer only against its
+   compatible release. Enable/restart the Voice repair and Voice monitor timers only when the
+   coherent Voice activation gates below pass; they are not installed by a source change.
+   No rolling old/new writer period is permitted.
+
+For recovery, quiesce and drain all compatible writers and schedules again first, explicitly
+stopping both hourly and Voice repair timers/services and the Voice monitor timer/service.
+Preserve labelled running containers until drained or explicitly stopped under the recovery plan. Prefer a known
+compatible fix-forward image. Never routinely start old images against `0031` guards. Full restore
+requires preserving the current database, the verified pre-upgrade backup and matching old
+application/operator images, explicit acknowledgement of loss of all post-backup writes, and
+restore/readiness/auth/admin/maintenance readback before reopening. Rehearse auth/config/key
+compatibility. Never silently drop triggers or edit the migration journal; a reverse migration is a
+separate reviewed change including its journal consistency and loss of generation protection.
+
+### Unactivated generation-room ownership (migration 0032)
+
+The internal bound-token path reserves an exact `voice:<channel UUID>:<call UUID>:<generation>`
+room in `voice_sfu_room` under the Voice transaction lock before any SFU create or JWT delivery.
+`active` means authorized to issue, not proof a token was delivered or a room exists. Explicit
+CreateRoom happens after commit; a second locked enrollment/generation check precedes JWT signing.
+No network request is made inside the database transaction. Revocation can still race response
+signing, admitted SFU requests, or late completion of a timed-out create. A retired generation is
+terminal: retrying it never restores registration or returns a fresh token.
+
+The call generation/status/delete trigger retires registered rooms atomically, including native
+session/anchor/user cascades. Ownership has no parent foreign key and survives channel/community
+removal. Cleanup claims due rows with a 30-second lease and a unique claim UUID; an expired worker
+cannot overwrite a newer claim. Requests use the public SDK timeout **0.5 seconds**, with region
+failover disabled, and run sequentially. Each public bound-token invocation shares at most four RPCs and one monotonic 2.5-second
+budget across both grants, explicit creation and failure cleanup. Successful first-reservation
+cleanup is deferred to mandatory post-create revalidation; precreate authority denials also attempt
+cleanup after retirement commits, using only the same remaining allowance. Exhaustion dispatches no
+further RPC and leaves the retirement durably due.
+Interactive standalone consumption allows at most four rooms/four requests with the same budget; maintenance allows at most sixteen rooms/32 requests and
+20 seconds shared across lifecycle batches. Budgets include retries; failures are deferred durably,
+not retried by generation-ledger timers. Fair ordering uses next-attempt time then exact name. Logs contain only
+bounded aggregate counts/outcome categories. A missing room is successful cleanup only for the
+SDK's actual `not_found` error. No list-all or prefix room discovery is performed.
+
+Active ownership is checked independently from expired-call sweep eligibility, including current
+call/generation, live account/session/anchor/lease, blocked pairs and channel permissions. Unknown
+or overfull SFU rosters retire the whole owned room. This intentionally fails closed; the same
+generation cannot be healed by issuing another token. Affected members must leave and enroll in
+a fresh call generation through the normal control flow. Source permissions are narrowed from
+current database authority intersected with existing effective SFU rights. LiveKit's empty source
+list with publishing enabled means unrestricted publication; repair replaces it with the explicit
+canonical sources. An empty intersection disables publishing, missing permissions disable all
+publication and subscription, and repair never expands an existing explicit restriction or enables
+data/metadata updates. This is eventual best-effort repair; neither
+instant physical revocation nor prevention of all physical room resurrection is guaranteed.
+
+Successful retired rows recur every five minutes when a consumer runs; active checks recur every
+30 seconds. These are eligibility times, **not a scheduler**. The existing hosted maintenance
+cadence must be monitored separately; an hourly job cannot promise five-minute cleanup.
+The activation-only dedicated Voice runner described below is required before leased product activation. Inspect
+count of due/leased/retired rows and oldest overdue time without exporting identities. SDK failure
+or unavailable configuration must never undo a committed suspension, block, role loss or revoke.
+The retained legacy channel-UUID room path remains separate, exact-name, best effort and is not
+retroactively covered by generation ownership evidence. Its existing single 65-second delayed
+reconciliation is preserved until coherent activation; this retry does not prove that refreshed
+legacy tokens have expired. Legacy deletion/reconciliation visits all exact owned channel names
+sequentially, with bounded individual RPCs, rather than dropping channels after the new ledger budget.
+
+The registry has a hard application admission cap of **100000 rows**. Only a new-room reservation
+counts under the shared Voice lock; existing active reservations do not scan/count the table.
+At capacity, new room grants fail closed for operator capacity review. Tombstones currently remain
+indefinitely, so storage is proportional to generations that might ever have received a capability.
+Do not prune after the app JWT expiry: pinned LiveKit 1.13.10 refreshes session tokens every five
+minutes with at least ten minutes validity. There is no automatic tombstone GC or prune command.
+Any later finite retention policy requires a separately reviewed SFU quiescence/recovery proof.
+
+**Later coherent activation gate, not applied by this change:** pin and verify the actual SFU
+1.13.10 image/digest, then set official `room.auto_create: false` only while all issuers/writers
+are quiesced and the legacy UI/token bypass is coherently removed or migrated to explicit server
+creation. Existing basic voice currently depends on auto-create. Product JWTs omit roomCreate and
+roomAdmin. Run isolated real absent-room rejection, explicit-create acceptance and authenticated
+three-browser/media acceptance before release. auto_create false is an admission barrier, not a
+cross-system atomic fence against already validated joins or late create completion.
+
+
+### Activation-only frequent Voice repair
+
+Current production basic Voice and migrations 0000–0029 do **not** imply this job is installed or
+safe to start. Migrations 0030/0031/0032, compatible writers, coherent product activation and all
+separate acceptance gates must be reviewed together. Do not install/enable these timers against
+current production merely because their templates exist. In particular, 0031 requires the complete
+writer/timer quiescence and compatible image readback above.
+
+`pnpm --filter web maintenance:voice` is dry-run by default. `--apply` invokes exactly one existing
+`sweepVoiceLifecycle` batch of at most eight eligible calls, with a fresh current time. It also runs
+the existing due-room consumer even if that batch is empty: no second loop or whole retention job
+is started. The shared SFU allowance stays 16 room claims, 32 sequential SDK requests and a
+20-second monotonic **scheduling** window. SQL and total wall-clock work are not bounded by that
+SDK window. The wrapper supplies 15-second SQL statement and 2-second lock timeouts, a 60-second
+outer job deadline plus five seconds kill grace; systemd allows 90 seconds plus 20 seconds stop
+cleanup. Claims abandoned by a crash remain recoverable after their existing 30-second leases.
+CLI exit closes its actual PostgreSQL pool in `finally`; failures/unavailable SDK work produce
+nonzero exit. CLI output explicitly allowlists only aggregate counts and flags, never IDs,
+room names, identities, keys or opaque native payloads.
+
+`scripts/production-voice-maintenance.sh` uses the already-built release `migrate` image with
+`--pull never`, no dependencies and no build. `ops/voice-maintenance/compose.yml` passes only the
+existing four `LIVEKIT_*` variables from the deployed protected `.env` through Compose and joins
+the same existing `dokploy-network` as web, without exposed ports. Keep `.env` root-owned mode600;
+never source, print or duplicate it. Before activation verify the chosen exact release image
+contains the CLI/tsx and that its configured SFU API is reachable from that network. The operator
+must record the resolved image digest/revision under deployment exclusion so a mutable image tag
+cannot be changed by an overlapping deploy.
+
+The Voice runner has its own flock and `opendiscord.voice-maintenance.project/run` labels. It
+refuses a previous same-project Voice container without deleting it. Cleanup verifies the unique
+run label then removes only that immutable container ID, including after a client timeout. A
+SIGKILL/daemon outage can leave an orphan; the next invocation fails closed for operator review.
+Never use broad container/orphan deletion. The hourly retention job uses different labels/lock;
+its existing database locks serialize shared Voice work safely. Contention can cause a bounded
+failure and retry; neither flock is a deployment-wide exclusion mechanism.
+
+The frequent job does not require a new successful backup each tick. It expires ephemeral leased
+membership and repairs already-authorized SFU revocation, using existing durable state; tying it
+to backup availability would prolong stale SFU access during a backup outage. The separate hourly
+destructive retention job retains its verified-backup gate. Backup/restore policy is unchanged:
+the encrypted recovery bundle additionally captures installed Voice repair/monitor units, wrapper,
+private operator environment/config and aggregate status when present. Restore these only with
+the matching compatible release, review root-only modes and paths, and keep timers stopped until
+restored database/readiness/auth/Voice acceptance passes. Do not blindly replay old status as
+fresh execution evidence.
+
+At coherent activation only, install the checked-in `.service`/`.timer` templates under
+`/etc/systemd/system`, the reviewed wrapper as `/usr/local/sbin/opendiscord-voice-maintenance`,
+and the existing monitor script as `/usr/local/sbin/opendiscord-operator-monitor`. Provision
+`/etc/opendiscord-voice-maintenance/environment` root-owned mode600 containing only the verified
+`OPENDISCORD_COMPOSE_DIR` and `OPENDISCORD_COMPOSE_PROJECT` settings (same checkout/project as the
+hourly job). The service creates root-only `/var/lib/opendiscord-voice-maintenance`. The timer
+uses `OnUnitInactiveSec=10s`, one second accuracy and no randomized delay, so its next run is
+approximately ten seconds **after completion**, not ten seconds after the previous start.
+
+Provision `/etc/opendiscord-monitor/voice.json` root-owned mode600 using the existing owner-only
+SMTP configuration/destination with `mode` set to `voice`. No new mailbox or secret copies are
+needed beyond the current per-mode JSON schema; never put values in Git/logs. The Voice monitor
+timer checks each minute through existing SMTP suppression/recovery logic; per-mode locks keep
+local backup checks independent. It alerts on missing/invalid status, completion older than 120
+seconds, a failed service/job, six consecutive SDK-failure results, or six consecutive limited
+results. `limited` is scheduling pressure (including an exactly full batch), **not proof of
+backlog**. SDK failures are exposed by the real existing consumer metrics, never inferred as
+success from a completed CLI. Job failure alerts also cover the first SDK failure. A backup,
+monitor-host or SMTP outage has separate alerts/limits; SMTP acceptance alone is not inbox proof.
+Do not enable Voice monitoring expectation before activation, or it would falsely alarm on the
+intentionally absent job. Record actual unit enablement/status, last invocation, alert delivery
+and recovery separately; this source change sends no mail and installs nothing.
+
+Ten seconds is an initial operating cadence, **not a revocation SLA**. Effective removal depends
+on room due times (active 30 seconds, tombstones five minutes), SQL contention, batch capacity,
+SDK completion, backoff and recurring rechecks. Monitor pressure and privately inspect aggregate
+count of due/leased/retired rows and oldest overdue age before changing capacity. Backlog or SFU/DB
+outages can extend eventual cleanup without a hard upper bound. Frozen JS, native auth cascades
+and crash recovery need this independent scheduler but still require isolated acceptance, plus
+separate real browser/media and refresh/reconnect/TOCTOU acceptance before activation.
+
+Canonical isolated CI checks wrapper locking/immutable cleanup with fake Docker, CLI pool closure
+and failure handling with SDK-port mocks, and systemd syntax on Linux. After the existing LiveKit
+startup, a CI-only real SDK/DB check creates an exact random room, starts its own actual CLI worker
+through a bounded loopback HTTP proxy and intercepts only that room's public SDK DeleteRoom after
+the durable claim commits. The proxy SIGKILLs only that child, without forwarding deletion or
+returning a fake SDK success. The real room and committed claim survive; normal workers cannot
+steal its unexpired lease while processing eight then one real calls. After the actual 30-second
+lease expires naturally, a normal CLI invocation must delete that exact SFU room through the real
+SDK, settle its claim and exit with its pool closed. No claim lease is shortened in SQL. Owned
+children, proxy connections, fixture rows and exact room are cleaned up under the CI step's
+outer deadline. This proves the isolated process-kill/lease-recovery path, not production timer
+cadence, host/container-daemon failure, real media or authenticated browser acceptance.
+
+
+### Private scanner operations (not installed by source)
+
+The dedicated [scanner operations artifact](../ops/scanner/README.md) pins a private ClamAV daemon,
+persistent freshclam definitions, a 4 GiB ordinary Compose cap and five-minute operator monitoring.
+Its source alone does not prove production activation. Self-hosted integration stays optional;
+the official instance adopts mandatory scanning only after the documented freshness/network/real
+upload/import gates. Missing engine then closes new uploads/imports while existing downloads remain
+unchanged. Loaded definitions older than 48 hours alarm; current app code has no age rejection gate.
+
+The encrypted backup job calls adjacent `capture-scanner-recovery.py`. The documented optional
+`OPENDISCORD_SCANNER_COMPOSE_DIR` becomes required when the captured running app has `CLAMAV_HOST`.
+It captures exact scanner Compose/environment, actual app scanner endpoint and installed monitor
+configuration/units, never signature databases. Install both backup scripts together; configure the
+variable through the existing protected backup service EnvironmentFile. Restore private scanner
+configuration and fresh definitions before app acceptance; retain failclosed policy during recovery.

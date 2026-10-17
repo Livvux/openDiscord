@@ -1,3 +1,6 @@
+import { consumeVoiceRooms } from "./voice-sfu";
+import { lockVoiceLifecycle } from "./voice-locks";
+import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { and, count, desc, eq, gt, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
@@ -27,12 +30,19 @@ function audit(tx: Db, actor: AdminActor, action: string, targetId: string, reas
 }
 
 /** Serializes admin membership/suspension changes, including concurrent last-admin attempts. */
-async function mutate<T>(actor: AdminActor, fn: (tx: Db) => Promise<T>) {
+async function mutate<T>(actor: AdminActor, fn: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
   return db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx, "auth");
     await tx.execute(sql`select pg_advisory_xact_lock(187412, 1)`);
     await requireInstanceAdmin(actor, tx);
     return fn(tx);
   });
+}
+
+async function mutateVoice<T>(actor: AdminActor, fn: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
+  const value = await mutate(actor, fn);
+  await consumeVoiceRooms();
+  return value;
 }
 
 export const USER_FILTERS = ["all", "pending", "active", "rejected", "suspended", "admins"] as const;
@@ -91,12 +101,13 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
   const targetId = parse(z.string().min(1).max(128), rawId);
   const enabled = parse(z.boolean(), suspended);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId)).for("update");
     if (!target) throw notFound("Account not found.");
     // Administrators must first be demoted; this protects the last admin and prevents self-lockout.
     if (enabled && await isInstanceAdmin(targetId, tx)) throw forbidden("Remove this account's instance administrator rights before suspending it.");
     if (enabled) {
+      await invalidateVoiceMembership(tx, { userId: targetId }, "account-suspended");
       await tx.insert(userSuspension).values({ userId: targetId, reason }).onConflictDoUpdate({
         target: userSuspension.userId, set: { reason, createdAt: new Date() },
       });
@@ -109,14 +120,15 @@ export async function setUserSuspension(actor: AdminActor, rawId: unknown, suspe
 async function disconnectUser(userId: string) {
   const memberships = await db.select({ communityId: member.communityId }).from(member).where(eq(member.userId, userId));
   await Promise.all(memberships.map((m) => publish({ type: "member.removed", communityId: m.communityId, userId })));
-  for (const m of memberships) afterAccessChange(m.communityId);
+  for (const m of memberships) await afterAccessChange(m.communityId);
 }
 export async function revokeUserSessions(actor: AdminActor, rawId: unknown, rawReason: unknown) {
   const targetId = parse(z.string().min(1).max(128), rawId);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, targetId));
     if (!target) throw notFound("Account not found.");
+    await invalidateVoiceMembership(tx, { userId: targetId }, "sessions-revoked");
     await tx.delete(session).where(eq(session.userId, targetId));
     await audit(tx, actor, "user.sessions.revoke", targetId, reason);
   });
@@ -126,7 +138,8 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
   const id = parse(uuid, rawId);
   const enabled = parse(z.boolean(), suspended);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
+    if (enabled) await invalidateVoiceMembership(tx, { communityId: id }, "community-suspended");
     const rows = await tx.update(community).set({ suspendedAt: enabled ? new Date() : null, suspensionReason: enabled ? reason : null })
       .where(eq(community.id, id)).returning({ id: community.id });
     if (!rows.length) throw notFound("Community not found.");
@@ -134,16 +147,17 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
   });
   if (enabled) {
     await publish({ type: "community.deleted", communityId: id });
-    afterAccessChange(id);
+    await afterAccessChange(id);
   }
 }
 export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEmail: unknown, rawReason: unknown) {
   const id = parse(uuid, rawId);
   const email = parse(z.email().max(254).transform((s) => s.toLowerCase()), rawEmail);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
     const [c] = await tx.select({ id: community.id }).from(community).where(eq(community.id, id)).for("update");
     if (!c) throw notFound("Community not found.");
+    const beforeVoice = await captureVoiceCapabilities(tx, { communityId: id });
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email)).for("update");
     if (!target) throw notFound("Account not found.");
     await assertActiveUser(target.id, tx);
@@ -153,17 +167,19 @@ export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEm
     const settings = await getInstanceSettings(tx);
     if (owned >= settings.ownedCommunities) throw forbidden("The new owner has reached the community ownership limit.");
     await tx.update(community).set({ ownerId: target.id }).where(eq(community.id, id));
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, "community.transfer", id, `${reason} (new owner: ${target.id})`);
   });
   await publish({ type: "channels.changed", communityId: id });
   // The previous owner may lose rights they relied on in voice.
-  afterAccessChange(id);
+  await afterAccessChange(id);
 }
 export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enabled: unknown, rawReason: unknown) {
   const id = parse(z.string().min(1).max(128), rawId);
   const grant = parse(z.boolean(), enabled);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
+    const beforeVoice = await captureVoiceCapabilities(tx, { userId: id });
     const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, id)).for("update");
     if (!target) throw notFound("Account not found.");
     if (grant) {
@@ -176,6 +192,7 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
       if (total <= 1 && await isInstanceAdmin(id, tx)) throw forbidden("The last instance administrator cannot be removed.");
       await tx.delete(instanceAdmin).where(eq(instanceAdmin.userId, id));
     }
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, grant ? "admin.grant" : "admin.revoke", id, reason);
   });
 }
@@ -198,11 +215,12 @@ export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision
   const targetId = parse(z.string().min(1).max(128), rawId);
   const decision = parse(z.enum(["approved", "rejected"]), rawDecision);
   const reason = parse(requiredReason, rawReason);
-  const target = await mutate(actor, async (tx) => {
+  const target = await mutateVoice(actor, async (tx) => {
     const [row] = await tx.select({ id: user.id, email: user.email, status: user.approvalStatus }).from(user).where(eq(user.id, targetId)).for("update");
     if (!row) throw notFound("Account not found.");
     if (row.status === decision) throw new AppError("conflict", `This account is already ${decision}.`);
     if (decision === "rejected" && row.status !== "pending") throw new AppError("conflict", "Only pending accounts can be rejected. Suspend active accounts instead.");
+    if (decision === "rejected") await invalidateVoiceMembership(tx, { userId: targetId }, "account-rejected");
     await tx.update(user).set({ approvalStatus: decision }).where(eq(user.id, targetId));
     if (decision === "rejected") await tx.delete(session).where(eq(session.userId, targetId));
     await audit(tx, actor, decision === "approved" ? "user.approve" : "user.reject", targetId, reason);
@@ -218,8 +236,10 @@ export async function setApproval(actor: AdminActor, rawId: unknown, rawDecision
 export async function setClosedAlpha(actor: AdminActor, rawEnabled: unknown, rawReason: unknown) {
   const closedAlpha = parse(z.boolean(), rawEnabled);
   const reason = parse(requiredReason, rawReason);
-  await mutate(actor, async (tx) => {
+  await mutateVoice(actor, async (tx) => {
+    const beforeVoice = await captureVoiceCapabilities(tx);
     await tx.insert(instanceSettings).values({ closedAlpha }).onConflictDoUpdate({ target: instanceSettings.id, set: { closedAlpha } });
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, closedAlpha ? "instance.closed_alpha.enable" : "instance.closed_alpha.disable", "instance", reason);
   });
 }
@@ -243,7 +263,7 @@ export async function resolveReport(actor: AdminActor, rawId: unknown, rawOutcom
   const id = parse(uuid, rawId);
   const outcome = parse(z.enum(["dismissed", "removed"]), rawOutcome);
   const reason = parse(requiredReason, rawReason);
-  const event = await mutate(actor, async (tx) => {
+  const event = await mutateVoice(actor, async (tx) => {
     const [report] = await tx.select().from(abuseReport).where(eq(abuseReport.id, id)).for("update");
     if (!report) throw notFound("Report not found.");
     if (report.status !== "open") throw new AppError("conflict", "This report has already been resolved.");
@@ -254,6 +274,7 @@ export async function resolveReport(actor: AdminActor, rawId: unknown, rawOutcom
           sql`${message.channelId} in (select ${channel.id} from ${channel} where ${channel.communityId} = ${report.communityId})`))
           .returning({ channelId: message.channelId, id: message.id });
       } else {
+        await invalidateVoiceMembership(tx, { communityId: report.communityId }, "community-suspended");
         await tx.update(community).set({ suspendedAt: new Date(), suspensionReason: reason }).where(eq(community.id, report.communityId));
       }
     }

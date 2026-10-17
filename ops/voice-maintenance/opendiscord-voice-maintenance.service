@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenDiscord bounded Voice lifecycle repair
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/opendiscord-voice-maintenance/environment
+ExecStart=/usr/local/sbin/opendiscord-voice-maintenance
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+StateDirectory=opendiscord-voice-maintenance
+StateDirectoryMode=0700

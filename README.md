@@ -11,8 +11,9 @@ and works without it.
 > video channels with screen sharing (optional LiveKit), presence, notifications (in-app, desktop, Web Push),
 > blocking, AutoMod, anti-raid controls, bots, webhooks and a public API, community export/import, GDPR
 > export and deletion, 2FA and passkeys — all covered by automated tests ([roadmap](docs/ROADMAP.md)).
-> **Direct messages are not built yet, and nothing is end-to-end encrypted**: the operator of an instance
-> can read community messages ([privacy](docs/PRIVACY.md)). No external security audit has been done.
+> Home with friends and profile status, custom emoji and stickers, public channels and discovery.
+> **Only 1:1 text DMs are end-to-end encrypted**; community messages, files and voice are not, so the
+> operator of an instance can read them ([privacy](docs/PRIVACY.md)). No external security audit has been done.
 
 ## Stack
 

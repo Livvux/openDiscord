@@ -1,0 +1,9 @@
+# Operator-only override; Compose reads the existing protected app .env directly.
+services:
+  migrate:
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    networks: [default, dokploy-network]

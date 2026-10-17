@@ -1,3 +1,6 @@
+import { voiceTransaction } from "./voice-sfu";
+import { lockVoiceLifecycle } from "./voice-locks";
+import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { requireBanReviewAuthority } from "./community-trust";
 import { getInstanceSettings } from "./instance-policy";
 // Members, roles, bans and the audit log. Every mutation re-checks authority inside a
@@ -88,15 +91,17 @@ export async function kickMember(actorId: string, rawCommunityId: unknown, rawTa
   const targetId = parse(z.string().min(1), rawTargetId);
   const reason = parse(reasonSchema, rawReason || undefined);
   if (targetId === actorId) throw invalid("Use “Leave community” instead.");
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     await lockCommunity(tx, communityId);
     const { authority } = await requireMember(tx, communityId, actorId, Permission.KickMembers);
     await requireTarget(tx, communityId, authority, targetId);
+    await invalidateVoiceMembership(tx, { communityId, userId: targetId }, "member-removed");
     await tx.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, targetId)));
     await tx.insert(auditLog).values({ communityId, actorId, action: "member.kick", targetId, reason });
   });
   await publish({ type: "member.removed", communityId, userId: targetId });
-  afterAccessChange(communityId);
+  await afterAccessChange(communityId);
 }
 
 export async function banMember(actorId: string, rawCommunityId: unknown, rawTargetId: unknown, rawReason?: unknown) {
@@ -104,16 +109,18 @@ export async function banMember(actorId: string, rawCommunityId: unknown, rawTar
   const targetId = parse(z.string().min(1), rawTargetId);
   const reason = parse(reasonSchema, rawReason || undefined);
   if (targetId === actorId) throw invalid("You can't ban yourself.");
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     await lockCommunity(tx, communityId);
     const { authority } = await requireMember(tx, communityId, actorId, Permission.BanMembers);
     await requireTarget(tx, communityId, authority, targetId);
     await tx.insert(ban).values({ communityId, userId: targetId, reason, moderatorId: actorId }).onConflictDoNothing();
+    await invalidateVoiceMembership(tx, { communityId, userId: targetId }, "member-removed");
     await tx.delete(member).where(and(eq(member.communityId, communityId), eq(member.userId, targetId)));
     await tx.insert(auditLog).values({ communityId, actorId, action: "member.ban", targetId, reason });
   });
   await publish({ type: "member.removed", communityId, userId: targetId });
-  afterAccessChange(communityId);
+  await afterAccessChange(communityId);
 }
 
 export interface BanSummary {
@@ -203,10 +210,13 @@ export async function updateRole(actorId: string, rawRoleId: unknown, rawName: u
   const roleId = parse(uuid, rawRoleId);
   const name = parse(roleName, rawName);
   const permissions = permissionsFromNames(parse(permissionNames, rawPermissions));
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     const { role: r, authority } = await requireManageableRole(tx, actorId, roleId);
     if (!canManageRole(authority, r.position, permissions)) throw forbidden("You can't grant permissions you don't have.");
+    const beforeVoice = await captureVoiceCapabilities(tx, { communityId: r.communityId });
     await tx.update(role).set({ name: r.isDefault ? r.name : name, permissions }).where(eq(role.id, roleId));
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await tx.insert(auditLog).values({ communityId: r.communityId, actorId, action: "role.update", targetId: roleId });
     return r.communityId;
   }).then(afterAccessChange);
@@ -214,10 +224,13 @@ export async function updateRole(actorId: string, rawRoleId: unknown, rawName: u
 
 export async function deleteRole(actorId: string, rawRoleId: unknown) {
   const roleId = parse(uuid, rawRoleId);
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     const { role: r } = await requireManageableRole(tx, actorId, roleId);
     if (r.isDefault) throw forbidden("The default role can't be deleted.");
+    const beforeVoice = await captureVoiceCapabilities(tx, { communityId: r.communityId });
     await tx.delete(role).where(eq(role.id, roleId));
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await tx.insert(auditLog).values({ communityId: r.communityId, actorId, action: "role.delete", targetId: r.name });
     return r.communityId;
   }).then(afterAccessChange);
@@ -226,16 +239,19 @@ export async function deleteRole(actorId: string, rawRoleId: unknown) {
 export async function setMemberRole(actorId: string, rawRoleId: unknown, rawTargetId: unknown, assigned: boolean) {
   const roleId = parse(uuid, rawRoleId);
   const targetId = parse(z.string().min(1), rawTargetId);
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     const { role: r, authority } = await requireManageableRole(tx, actorId, roleId);
     if (r.isDefault) throw invalid("Everyone has the default role.");
     if (targetId !== actorId) await requireTarget(tx, r.communityId, authority, targetId);
     else if (!(await loadAuthority(tx, r.communityId, targetId))) throw notFound("That person is not a member.");
+    const beforeVoice = await captureVoiceCapabilities(tx, { communityId: r.communityId });
     if (assigned) {
       await tx.insert(memberRole).values({ communityId: r.communityId, userId: targetId, roleId }).onConflictDoNothing();
     } else {
       await tx.delete(memberRole).where(and(eq(memberRole.roleId, roleId), eq(memberRole.userId, targetId)));
     }
+    await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await tx.insert(auditLog).values({
       communityId: r.communityId,
       actorId,

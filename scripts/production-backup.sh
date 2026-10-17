@@ -30,6 +30,8 @@ docker exec -i "$OPENDISCORD_DB_CONTAINER" pg_restore --list < "$work/database.d
 # Capture object references from this exact dump, not a later mutable database read.
 docker exec -i "$OPENDISCORD_DB_CONTAINER" pg_restore --data-only --table=attachment --file=- < "$work/database.dump" > "$work/attachments.sql"
 docker inspect "$OPENDISCORD_WEB_CONTAINER" --format '{{json .Config.Env}}' > "$work/web-env.json"
+# Capture before the storage helper deletes this private environment snapshot.
+python3 "$(dirname "$0")/capture-scanner-recovery.py" "$work"
 python3 - "$work" <<'PY'
 import json,pathlib,re,sys
 p=pathlib.Path(sys.argv[1]);env=dict(s.split('=',1) for s in json.loads((p/'web-env.json').read_text()) if '=' in s)
@@ -77,6 +79,24 @@ if test -f /etc/dokploy/traefik/dynamic/opendiscord-turn.yml; then
   cp /etc/dokploy/traefik/dynamic/opendiscord-turn.yml "$work/config/traefik-turn.yml"
 fi
 cp /etc/nftables.d/dokploy-public-ingress.nft "$work/config/firewall.nft"
+# Optional installed scheduling/configuration belongs in the same encrypted recovery bundle.
+mkdir "$work/config/voice-maintenance"
+for path in /etc/systemd/system/opendiscord-voice-maintenance.service \
+  /etc/systemd/system/opendiscord-voice-maintenance.timer \
+  /etc/systemd/system/opendiscord-voice-monitor.service \
+  /etc/systemd/system/opendiscord-voice-monitor.timer \
+  /usr/local/sbin/opendiscord-voice-maintenance \
+  /usr/local/sbin/opendiscord-operator-monitor \
+  /etc/opendiscord-voice-maintenance/environment \
+  /etc/opendiscord-monitor/voice.json \
+  /var/lib/opendiscord-voice-maintenance/status.json; do
+  if test -f "$path"; then
+    cp --parents "$path" "$work/config/voice-maintenance/"
+  fi
+done
+if test -f "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml"; then
+  cp "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml" "$work/config/voice-maintenance/compose.yml"
+fi
 # Stream tar directly to age: there is no unencrypted archive on persistent disk.
 tar -C "$work" -czf - database.dump media config manifest.txt | age -R "$recipient" -o "$work/recovery.tar.gz.age"
 bytes=$(stat -c %s "$work/recovery.tar.gz.age")

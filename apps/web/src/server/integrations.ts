@@ -1,3 +1,6 @@
+import { voiceTransaction } from "./voice-sfu";
+import { lockVoiceLifecycle } from "./voice-locks";
+import { invalidateVoiceMembership } from "./voice-control";
 import { assetText } from "@/lib/community-assets";
 // Bots and incoming webhooks. A bot is a member like anyone else: its roles decide what it may do,
 // and the public API calls the same services as the app. A webhook can only post plain messages into
@@ -64,6 +67,7 @@ export async function createIntegration(userId: string, rawCommunityId: unknown,
   const input = parse(createInput, rawInput);
   const token = newToken(input.kind === "bot" ? "od_bot" : "od_wh");
   const id = await db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx, "auth");
     await lockCommunity(tx, communityId);
     await requireMember(tx, communityId, userId, Permission.ManageCommunity);
     const [{ total }] = await tx.select({ total: count() }).from(integration)
@@ -95,10 +99,12 @@ export async function revokeIntegration(userId: string, rawId: unknown): Promise
   const id = parse(uuid, rawId);
   const [row] = await db.select().from(integration).where(and(eq(integration.id, id), isNull(integration.revokedAt)));
   if (!row) throw notFound("Integration not found.");
-  await db.transaction(async (tx) => {
+  await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     await lockCommunity(tx, row.communityId);
     await requireMember(tx, row.communityId, userId, Permission.ManageCommunity);
     await tx.update(integration).set({ revokedAt: new Date() }).where(eq(integration.id, id));
+    if (row.kind === "bot") await invalidateVoiceMembership(tx, { communityId: row.communityId, userId: row.userId }, "integration-revoked");
     if (row.kind === "bot") await tx.delete(member).where(and(eq(member.communityId, row.communityId), eq(member.userId, row.userId)));
     await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: `${row.kind}.revoke`, targetId: row.userId });
   });

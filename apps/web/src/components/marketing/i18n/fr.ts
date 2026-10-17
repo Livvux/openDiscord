@@ -12,7 +12,7 @@ export const fr: Messages = {
     selfHost: "Auto-héberger",
     roadmap: "Feuille de route",
     signIn: "Se connecter",
-    join: "Rejoindre la bêta",
+    join: "Rejoindre l’alpha",
     language: "Langue",
   },
   hero: {
@@ -103,7 +103,7 @@ export const fr: Messages = {
       {
         label: "Maintenant",
         title: "Alpha fermée",
-        items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP chiffrés avec vérification des appareils", "Recours, règles et durées de conservation"],
+        items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP chiffrés avec vérification des appareils", "Recours, règles et durées de conservation", "Emojis et stickers personnalisés", "Salons publics et découverte"],
       },
       {
         label: "Ensuite",
@@ -112,16 +112,16 @@ export const fr: Messages = {
       },
       {
         label: "Plus tard",
-        title: "La voix et au-delà",
-        items: ["Emojis et stickers personnalisés", "Applications natives", "Salons publics optionnels", "Découverte de communautés"],
+        title: "Applis et groupes",
+        items: ["Applications natives", "MP de groupe et appels en MP"],
       },
     ],
   },
   footer: {
     titleStart: "Ramenez votre communauté",
     titleAccent: "à la maison.",
-    lead: "Rejoignez la bêta sur invitation, ou découvrez ce que coûte le fonctionnement de l’instance hébergée.",
-    join: "Rejoindre la bêta",
+    lead: "Rejoignez l’alpha sur invitation, ou découvrez ce que coûte le fonctionnement de l’instance hébergée.",
+    join: "Rejoindre l’alpha",
     funding: "Financement et coûts de fonctionnement",
     tagline: "Esprits ouverts. Plus brillants ensemble.",
     nav: "Pied de page",
