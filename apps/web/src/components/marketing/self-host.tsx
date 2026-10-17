@@ -1,5 +1,6 @@
 import type { Messages } from "./i18n";
 import { InstallPanel, type InstallTab } from "./install-panel";
+import { GITHUB_URL } from "@/lib/site";
 import { container } from "./ui";
 
 export function SelfHost({ t }: { t: Messages["selfHost"] }) {
@@ -7,7 +8,8 @@ export function SelfHost({ t }: { t: Messages["selfHost"] }) {
     {
       label: t.tabSelfHost,
       lines: [
-        ["$", "git clone https://github.com/opendiscord/opendiscord"],
+        ["$", `git clone ${GITHUB_URL}`],
+        ["$", "cd openDiscord"],
         ["$", "cp .env.example .env", t.envNote],
         ["$", "docker compose up -d"],
         ["✓", "postgres  migrate  web  caddy", t.running],
