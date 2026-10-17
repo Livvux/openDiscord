@@ -246,8 +246,8 @@ describe("actual lifecycle mutators versus queued crypto with observed overlap",
         const survivorAuth = { userId: f.userId, sessionId: f.sessionId, memberId: f.snapshot.memberId, secret: f.secret };
         const priorBinding = { callId: f.snapshot.callId, memberId: f.snapshot.memberId, joinNonce: f.snapshot.joinNonce, expectedGeneration: p.snapshot.generation };
         const requests = [
-          { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: "signed_curve25519" } } } },
-          { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.request", body: { messages: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: { from_device: f.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } },
+          { kind: "claim", requestId: randomUUID(), nativeRequestId: randomUUID(), body: { one_time_keys: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: "signed_curve25519" } } } },
+          { kind: "send", requestId: randomUUID(), nativeRequestId: randomUUID(), nativeTxnId: randomUUID(), eventType: "m.key.verification.request", body: { messages: { [p.snapshot.voiceUserId]: { [p.snapshot.voiceDeviceId]: { from_device: f.snapshot.voiceDeviceId, transaction_id: randomUUID(), methods: ["m.sas.v1"], timestamp: Date.now() } } } } },
         ];
         for (const request of requests) await expect(handleVoiceCrypto(survivorAuth, { ...priorBinding, request })).rejects.toMatchObject({ code: "conflict" });
       } finally { await barrier.query("rollback"); await pending?.catch(() => {}); barrier.release(); }

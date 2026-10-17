@@ -14,12 +14,13 @@ const object = z.record(z.string().min(1).max(256), z.unknown());
 const requestId = z.string().min(1).max(128);
 // Supported pinned18.9.0 public request bodies, not SDK object instances or private native fields.
 export const voiceCryptoSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("upload"), body: object, requestId: requestId.optional() }).strict(),
+  z.object({ kind: z.literal("upload"), body: object, requestId: requestId.optional(), nativeRequestId: requestId.optional() }).strict(),
   z.object({ kind: z.literal("signing"), body: object }).strict(),
-  z.object({ kind: z.literal("query"), body: object, requestId: requestId.optional() }).strict(),
-  z.object({ kind: z.literal("claim"), body: object, requestId }).strict(),
-  z.object({ kind: z.literal("signatures"), body: object, requestId: requestId.optional() }).strict(),
-  z.object({ kind: z.literal("send"), body: object, eventType: z.string().max(100), requestId }).strict(),
+  z.object({ kind: z.literal("query"), body: object, requestId: requestId.optional(), nativeRequestId: requestId.optional() }).strict(),
+  z.object({ kind: z.literal("claim"), body: object, requestId, nativeRequestId: requestId }).strict(),
+  z.object({ kind: z.literal("signatures"), body: object, requestId: requestId.optional(), nativeRequestId: requestId.optional() }).strict(),
+  z.object({ kind: z.literal("send"), body: object, eventType: z.string().max(100), requestId, nativeRequestId: requestId, nativeTxnId: requestId }).strict(),
+  z.object({ kind: z.literal("retire"), body: object, eventType: z.string().max(100), requestId, nativeRequestId: requestId, nativeTxnId: requestId }).strict(),
   z.object({ kind: z.literal("sync") }).strict(),
   z.object({ kind: z.literal("ack"), cursor: z.string().regex(/^\d{1,15}$/) }).strict(),
 ]);
@@ -27,6 +28,7 @@ export const voiceCryptoInputSchema = z.object({ ...voiceBindingSchema.shape, re
 export type VoiceJoinAuth = z.infer<typeof voiceJoinAuthSchema>;
 export type VoiceMemberAuth = z.infer<typeof voiceMemberAuthSchema>;
 export type VoiceBinding = z.infer<typeof voiceBindingSchema>;
+export type VoiceDeviceOutcome = { nativeResponse: Record<string, never>; disposition: { status: "processed-current"; enqueued: 1 } | { status: "processed-retired"; enqueued: 0 } };
 export type VoiceCryptoRequest = z.infer<typeof voiceCryptoSchema>;
 export type VoiceMember = { memberId: string; userId: string; anchorDeviceId: string; voiceUserId: string; voiceDeviceId: string; joinNonce: string; participantIdentity: string; displayName: string; state: "waiting" | "active" };
 export type VoiceRemoval = { callId: string; memberId: string; participantIdentity: string; reason: string };

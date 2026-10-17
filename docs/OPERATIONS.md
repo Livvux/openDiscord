@@ -98,3 +98,48 @@ hosted installation uses a path-triggered oneshot running `scripts/secure-dokplo
 owner-only access after replacement. It reads only the file mode, never its contents, and does no
 work when the mode is already 0600. Keep its path unit scoped to the app's exact `.env`; do not
 change the permissions or runtime settings of unrelated deployments.
+## 0031 compatible writer rollout
+
+Migration `0031` and compatible application/operator code form one deployment boundary. Old
+admin/bootstrap writers take the admin advisory lock before auth writes; the new statement guards
+take DM `810025`, then Voice `810030`. Mixing old and new writers can deadlock even without Voice
+calls. Old import and maintenance paths introduce further inversions. This procedure is a rollout
+gate, not evidence of deployment or Voice/E2EE activation.
+
+1. Record immutable image digests and their exact reviewed Git SHA for web, migrate, bootstrap and
+   maintenance/operator images. Require successful checks for that exact revision. Verify an
+   encrypted pre-upgrade backup and rehearse its restore in an isolated database; record the
+   recovery choice before downtime. Do not substitute an unreviewed tag or mutable `latest`.
+2. Establish deployment-wide operational exclusion. Disable automatic deployments/restart overlap,
+   schedules and admissions. Drain and stop every old web replica and admin/bootstrap/manual/
+   maintenance writer using this database, including actual job containers and operator connections.
+   The maintenance script's flock serializes maintenance only; it is not a deployment mutex.
+   Stopping a Compose client does not prove its job container stopped.
+3. With explicit bounded drain, lock and statement budgets, inspect `pg_stat_activity` and `pg_locks`
+   by reviewed application identities. Report connection/transaction/lock metadata only, without
+   SQL query text or parameters. Confirm old processes cannot resume writes and their transactions
+   have drained. If they cannot drain within the budget, abort the upgrade. Do not blindly terminate
+   connections; termination requires a separate operational decision.
+4. Only then execute the exact pinned migrate image once under the same exclusion. Verify the
+   migration journal includes `0031`; all seven enabled BEFORE STATEMENT guards on `user`, `session`,
+   `account`, `verification`, `two_factor`, `passkey` and `dm_device` invoke
+   `voice_auth_statement_guard`, whose order is `810025` then `810030`. Verify the enabled AFTER DELETE
+   member backstop invokes `voice_member_delete_generation`. Trigger DDL can block. On timeout or
+   runner failure keep writers stopped and inspect the actual journal/functions/triggers; runner
+   failure alone does not prove atomic rollback.
+5. Start only the recorded compatible web/operator/maintenance images and verify their revisions
+   and absence of old replicas/jobs. Check readiness, real auth login/logout, admin policy/session
+   revoke, DM registration/upload/revoke, profile/non-revoking edits and maintenance dry-run/apply
+   under bounded conditions. Perform canonical cascade/generation acceptance in an isolated
+   environment. Do not create production test accounts or mutate customer sessions without
+   separately scoped authorization. Compose `depends_on` orders new startup only.
+6. Reopen schedules and admissions only after compatibility and readback pass. Record the actual
+   maintenance release image and cadence separately. No rolling old/new writer period is permitted.
+
+For recovery, quiesce and drain all compatible writers and schedules again first. Prefer a known
+compatible fix-forward image. Never routinely start old images against `0031` guards. Full restore
+requires preserving the current database, the verified pre-upgrade backup and matching old
+application/operator images, explicit acknowledgement of loss of all post-backup writes, and
+restore/readiness/auth/admin/maintenance readback before reopening. Rehearse auth/config/key
+compatibility. Never silently drop triggers or edit the migration journal; a reverse migration is a
+separate reviewed change including its journal consistency and loss of generation protection.
