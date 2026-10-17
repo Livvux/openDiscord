@@ -7,7 +7,7 @@ import { and, asc, count, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { dmConversation, member, user, userBlock } from "@/db/schema";
+import { dmConversation, friendship, member, user, userBlock } from "@/db/schema";
 import { enforceCap } from "./limits";
 import { invalid, notFound } from "./errors";
 import { parse } from "./validation";
@@ -36,10 +36,12 @@ export async function blockUser(actorId: string, rawTargetId: unknown): Promise<
       .limit(1);
     const [firstId, secondId] = [actorId, targetId].sort();
     const [conversation] = target ? [] : await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId))).limit(1);
-    if (!target && !conversation) throw notFound("Account not found.");
+    const [friend] = target || conversation ? [] : await tx.select({ id: friendship.firstId }).from(friendship).where(and(eq(friendship.firstId, firstId), eq(friendship.secondId, secondId))).limit(1);
+    if (!target && !conversation && !friend) throw notFound("Account not found.");
     const [{ total }] = await tx.select({ total: count() }).from(userBlock).where(eq(userBlock.blockerId, actorId));
     enforceCap(total, MAX_BLOCKS, `You can block at most ${MAX_BLOCKS} people.`);
     await tx.insert(userBlock).values({ blockerId: actorId, blockedId: targetId }).onConflictDoNothing();
+    await tx.delete(friendship).where(and(eq(friendship.firstId, firstId), eq(friendship.secondId, secondId)));
     await invalidateBlockedVoicePair(tx, actorId, targetId);
   });
 }
