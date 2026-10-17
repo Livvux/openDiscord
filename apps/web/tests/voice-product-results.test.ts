@@ -128,6 +128,14 @@ it.each([
   ["missing track resolver for private", "missing-track-resolver"],
   ["unsupported data type private detail", "unsupported-data"],
   ["Received encrypted packet but E2EE not set up", "missing-e2ee"],
+  ["could not get audio sender stats", "sender-stats"],
+  ["MissingKey: missing key at index 0 for participant private", "cryptor-missing-key"],
+  ["InvalidKey: Decryption failed: private", "cryptor-invalid-key"],
+  ["undefined: private detail", "cryptor-internal"],
+  ["could not update mute status for unpublished track", "unpublished-mute"],
+  ["Response received for unexpected RPC request private", "rpc-unexpected"],
+  ["failed to play processor element", "track-playback"],
+  ["error sending preconnect buffer", "track-publication"],
 ])("classifies a public failure prefix without retaining its detail", (text, code) => {
   const result = classifyVoiceProductConsole(text, "", "https://example.test/app");
   expect(result.code).toBe(code);
