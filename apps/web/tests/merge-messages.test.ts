@@ -7,6 +7,7 @@ const m = (id: string, content = id): MessageView => ({
   channelId: "c",
   authorId: "a",
   authorName: "A",
+  authorAvatar: null,
   authorBot: false,
   authorImported: false,
   content,

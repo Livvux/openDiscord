@@ -12,6 +12,7 @@ import { UserProfilePopover } from "./user-profile";
 export interface ListedMember {
   userId: string;
   name: string;
+  avatar: string | null;
   isOwner: boolean;
 }
 
@@ -111,7 +112,7 @@ function MemberGroups({ members, currentUserId, blockedIds }: MemberListProps) {
                   <UserProfilePopover userId={m.userId} currentUserId={currentUserId} render={
                     <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring">
                       <span className={group.label === "Offline" ? "opacity-50" : undefined}>
-                        <PresenceAvatar userId={m.userId} name={m.name} size="sm" announce />
+                        <PresenceAvatar userId={m.userId} name={m.name} avatar={m.avatar} size="sm" announce />
                       </span>
                       <span className={`truncate text-sm ${group.label === "Offline" ? "text-zinc-400" : "text-zinc-200"}`}>{m.name}</span>
                       {m.isOwner && <CrownIcon aria-label="Owner" className="size-3.5 shrink-0 text-amber-400" />}

@@ -7,6 +7,8 @@ import { usePresence } from "./presence-provider";
 interface PresenceAvatarProps {
   userId: string;
   name: string;
+  /** Profile picture id, if any. */
+  avatar?: string | null;
   size?: "sm" | "md" | "lg";
   /** Also say the status to screen readers (member lists; not every chat message). */
   announce?: boolean;
@@ -15,12 +17,12 @@ interface PresenceAvatarProps {
 }
 
 /** Avatar with a status dot. */
-export function PresenceAvatar({ userId, name, size, announce = false, status }: PresenceAvatarProps) {
+export function PresenceAvatar({ userId, name, avatar, size, announce = false, status }: PresenceAvatarProps) {
   const polled = usePresence(userId);
   const shown = status === undefined ? polled : status;
   return (
     <span className="relative inline-grid">
-      <Avatar name={name} size={size} />
+      <Avatar name={name} avatar={avatar} size={size} />
       {shown && (
         <>
           <span aria-hidden className={`absolute rounded-full ring-background ${size === "lg" ? "right-0.5 bottom-0.5 size-5 ring-4" : "-right-0.5 -bottom-0.5 size-3 ring-2"} ${PRESENCE_DOT[shown]}`} />

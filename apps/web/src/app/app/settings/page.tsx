@@ -6,6 +6,9 @@ import { DeleteAccount } from "@/components/app/settings/delete-account";
 import { EmailSettings } from "@/components/app/settings/email-settings";
 import { NotificationSettings } from "@/components/app/settings/notification-settings";
 import { ProfileForm } from "@/components/app/settings/profile-form";
+import { AvatarSettings } from "@/components/app/settings/avatar-settings";
+import { ownAvatar } from "@/server/avatars";
+import { mediaEnabled } from "@/server/media";
 import { PasskeySettings } from "@/components/app/settings/passkey-settings";
 import { Sessions } from "@/components/app/settings/sessions";
 import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings";
@@ -50,16 +53,18 @@ function Section({ title, description, children }: { title: string; description?
 
 async function Settings() {
   const user = await requirePageUser();
-  const [owned, has2fa, blocked, showPresence, profile] = await Promise.all([
+  const [owned, has2fa, blocked, showPresence, profile, avatar] = await Promise.all([
     ownedCommunityNames(user.id),
     twoFactorEnabled(user.id),
     listBlocked(user.id),
     presenceVisible(user.id),
     getProfile(user.id),
+    ownAvatar(user.id),
   ]);
   return (
     <div className="mx-auto max-w-2xl px-6">
       <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
+        {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />
       </Section>
       <Section title="Email address" description="Changes require a recent sign-in and verification. Your email is never shown to other members.">

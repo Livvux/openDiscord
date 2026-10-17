@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { auditLog, channel, integration, message, publicPost, reaction, user, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel } from "./access";
 import { enforceAutomod } from "./automod";
+import { avatarOf } from "./avatars";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
 import { AppError, forbidden, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
@@ -26,6 +27,8 @@ export interface MessageView {
   channelId: string;
   authorId: string;
   authorName: string;
+  /** Profile picture id; null without one and for imported authors. */
+  authorAvatar: string | null;
   /** Posted by a bot or webhook. */
   authorBot: boolean;
   /** Imported from another instance; `authorName` is the original name. */
@@ -52,6 +55,7 @@ const viewColumns = {
   // Imported messages show their original author's name.
   authorName: sql<string>`coalesce(${message.importedAuthor}, ${user.name})`,
   authorImported: sql<boolean>`${message.importedAuthor} is not null`,
+  authorAvatar: sql<string | null>`case when ${message.importedAuthor} is null then ${avatarOf(message.authorId)} end`,
   authorBot: sql<boolean>`exists (select 1 from ${integration} where ${integration.userId} = ${message.authorId})`,
   content: message.content,
   createdAt: message.createdAt,
@@ -61,7 +65,7 @@ const viewColumns = {
   threadId: message.threadId,
 };
 
-interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "authorBot" | "authorImported" | "content" | "threadId"> {
+interface MessageRow extends Pick<MessageView, "id" | "channelId" | "authorId" | "authorName" | "authorAvatar" | "authorBot" | "authorImported" | "content" | "threadId"> {
   createdAt: Date;
   editedAt: Date | null;
   replyToId: string | null;

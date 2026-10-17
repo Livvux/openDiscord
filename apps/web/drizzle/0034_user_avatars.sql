@@ -1,0 +1,4 @@
+ALTER TABLE "attachment" ADD COLUMN "avatar_user_id" text;--> statement-breakpoint
+ALTER TABLE "attachment" ADD CONSTRAINT "attachment_avatar_user_id_user_id_fk" FOREIGN KEY ("avatar_user_id") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "attachment_avatar_idx" ON "attachment" USING btree ("avatar_user_id");--> statement-breakpoint
+ALTER TABLE "attachment" ADD CONSTRAINT "attachment_avatar_link_valid" CHECK ("attachment"."avatar_user_id" is null or ("attachment"."message_id" is null and "attachment"."channel_id" is null and "attachment"."asset_id" is null and "attachment"."linked_at" is not null));

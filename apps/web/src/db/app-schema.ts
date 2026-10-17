@@ -343,6 +343,8 @@ export const attachment = pgTable(
     channelId: uuid("channel_id").references(() => channel.id, { onDelete: "set null" }),
     assetId: uuid("asset_id").references(() => communityAsset.id, { onDelete: "set null" }),
     uploaderId: text("uploader_id").references(() => user.id, { onDelete: "set null" }),
+    /** The account whose profile picture this is; cleared on replace/removal/account deletion, then swept. */
+    avatarUserId: text("avatar_user_id").references(() => user.id, { onDelete: "set null" }),
     /** Set once when sent; a removed message's images can never be re-attached. */
     linkedAt: timestamp("linked_at", { withTimezone: true }),
     key: text("key").notNull().unique(),
@@ -356,6 +358,8 @@ export const attachment = pgTable(
   },
   (t) => [
     uniqueIndex("attachment_asset_idx").on(t.assetId),
+    uniqueIndex("attachment_avatar_idx").on(t.avatarUserId),
+    check("attachment_avatar_link_valid", sql`${t.avatarUserId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.assetId} is null and ${t.linkedAt} is not null)`),
     check("attachment_asset_link_valid", sql`${t.assetId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.linkedAt} is not null)`),
     index("attachment_message_idx").on(t.messageId),
     index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null and ${t.assetId} is null`),

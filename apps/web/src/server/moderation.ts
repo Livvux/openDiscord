@@ -9,6 +9,7 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, max, sql } from
 import { db } from "@/db";
 import { auditLog, ban, banAppeal, member, memberRole, role, user } from "@/db/schema";
 import { loadAuthority, lockCommunity, requireMember, type Db } from "./access";
+import { avatarOf } from "./avatars";
 import { forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
 import { canManageRole, has, outranks, Permission, permissionsFromNames, type MemberAuthority } from "./permissions";
@@ -20,6 +21,7 @@ import { z } from "zod";
 export interface MemberSummary {
   userId: string;
   name: string;
+  avatar: string | null;
   isOwner: boolean;
   roleIds: string[];
   joinedAt: Date;
@@ -38,7 +40,7 @@ export async function listMembers(userId: string, rawCommunityId: unknown): Prom
   const communityId = parse(uuid, rawCommunityId);
   const { community } = await requireMember(db, communityId, userId);
   const rows = await db
-    .select({ userId: member.userId, name: user.name, joinedAt: member.joinedAt })
+    .select({ userId: member.userId, name: user.name, avatar: avatarOf(user.id), joinedAt: member.joinedAt })
     .from(member)
     .innerJoin(user, eq(user.id, member.userId))
     .where(eq(member.communityId, communityId))

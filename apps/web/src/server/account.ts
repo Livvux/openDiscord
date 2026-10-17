@@ -7,10 +7,11 @@ import { exportDirectData } from "./direct-messages";
 import { listBlocked } from "./blocks";
 import { listFriends } from "./friends";
 import { getProfile } from "./profile";
+import { ownAvatar } from "./avatars";
 import { notFound } from "./errors";
 
-/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. */
-export const EXPORT_FORMAT_VERSION = 9;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. 10: profile picture. */
+export const EXPORT_FORMAT_VERSION = 10;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
@@ -23,7 +24,7 @@ export interface UserExport {
   format: "opendiscord.user-export";
   version: number;
   exportedAt: string;
-  profile: { id: string; name: string; email: string; emailVerified: boolean; createdAt: string; bio: string; customStatus: string };
+  profile: { id: string; name: string; email: string; emailVerified: boolean; createdAt: string; bio: string; customStatus: string; avatarUrl: string | null };
   friends: { id: string; name: string; state: "friend" | "incoming" | "outgoing"; since: string }[];
   sessions: { createdAt: string; expiresAt: string; userAgent: string | null }[];
   security: { twoFactorEnabled: boolean; passkeys: { name: string | null; deviceType: string; createdAt: string | null }[] };
@@ -40,7 +41,7 @@ export interface UserExport {
 export async function exportUserData(userId: string): Promise<UserExport> {
   const [profile] = await db.select().from(user).where(eq(user.id, userId));
   if (!profile) throw notFound("Account not found.");
-  const [sessions, passkeys, owned, memberships, messages, blocked, restrictions, appeals, publicPosts, publicChannels, profileText, friends] = await Promise.all([
+  const [sessions, passkeys, owned, memberships, messages, blocked, restrictions, appeals, publicPosts, publicChannels, profileText, friends, avatar] = await Promise.all([
     db.select().from(session).where(eq(session.userId, userId)).orderBy(asc(session.createdAt)),
     db.select().from(passkey).where(eq(passkey.userId, userId)),
     db.select().from(community).where(eq(community.ownerId, userId)),
@@ -78,6 +79,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       .innerJoin(community, eq(community.id, channel.communityId)).where(eq(community.ownerId, userId)).orderBy(asc(publicChannel.channelId)),
     getProfile(userId),
     listFriends(userId),
+    ownAvatar(userId),
   ]);
   const images = messages.length === 0 ? [] : await db.select({
     id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, filename: attachment.filename, size: attachment.size,
@@ -105,6 +107,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
       emailVerified: profile.emailVerified,
       createdAt: profile.createdAt.toISOString(),
       ...profileText,
+      avatarUrl: avatar ? `/api/avatars/${avatar}` : null,
     },
     friends: friends.map(({ id, name, state, since }) => ({ id, name, state, since })),
     sessions: sessions.map((s) => ({

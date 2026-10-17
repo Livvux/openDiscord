@@ -1,11 +1,26 @@
-/** Initial on a translucent disc, as in the landing-page preview. No uploaded images, so no third-party requests. */
-export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" | "lg" }) {
+"use client";
+
+import Image from "next/image";
+import { useState } from "react";
+
+const SIZES = { sm: { className: "size-7 text-[11px]", px: 28 }, md: { className: "size-8 text-xs", px: 32 }, lg: { className: "size-20 text-3xl", px: 80 } };
+
+/** The profile picture (served only through the access-checked route), else the initial on a translucent disc. */
+export function Avatar({ name, avatar = null, size = "md" }: { name: string; avatar?: string | null; size?: "sm" | "md" | "lg" }) {
+  // Remembers which picture failed, so a newer one is tried again.
+  const [failed, setFailed] = useState<string | null>(null);
+  const { className, px } = SIZES[size];
+  if (avatar && failed !== avatar) {
+    return (
+      <Image src={`/api/avatars/${avatar}`} alt="" aria-hidden width={px} height={px} unoptimized draggable={false}
+        onError={() => setFailed(avatar)} className={`${className} shrink-0 rounded-full bg-white/10 object-cover select-none`} />
+    );
+  }
   const initial = [...name.trim()][0]?.toUpperCase() ?? "?";
-  const sizes = { sm: "size-7 text-[11px]", md: "size-8 text-xs", lg: "size-20 text-3xl" };
   return (
     <span
       aria-hidden
-      className={`${sizes[size]} grid shrink-0 place-items-center rounded-full bg-white/10 font-medium text-zinc-100 select-none`}
+      className={`${className} grid shrink-0 place-items-center rounded-full bg-white/10 font-medium text-zinc-100 select-none`}
     >
       {initial}
     </span>

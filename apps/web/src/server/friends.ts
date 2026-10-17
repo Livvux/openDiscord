@@ -6,6 +6,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
 import { dmConversation, friendship, member, user, userBlock, userPresence, userProfile } from "@/db/schema";
+import { avatarOf } from "./avatars";
 import { AppError, invalid, notFound } from "./errors";
 import { consume, enforceCap } from "./limits";
 import { AccountBlocked, assertActiveUser } from "./instance-policy";
@@ -32,6 +33,7 @@ const involves = (id: string) => or(eq(friendship.firstId, id), eq(friendship.se
 export interface FriendView {
   id: string;
   name: string;
+  avatar: string | null;
   /** accepted, or a pending request in either direction. */
   state: "friend" | "incoming" | "outgoing";
   /** Present only for friends who show their presence and are online. */
@@ -44,6 +46,7 @@ export interface FriendView {
 export interface PersonResult {
   id: string;
   name: string;
+  avatar: string | null;
   relation: FriendView["state"] | null;
 }
 
@@ -135,7 +138,7 @@ export async function listFriends(actorId: string): Promise<FriendView[]> {
   const ids = rows.map(peerOf);
   const [people, presence, blocked] = await Promise.all([
     db
-      .select({ id: user.id, name: user.name, customStatus: userProfile.customStatus, bio: userProfile.bio })
+      .select({ id: user.id, name: user.name, avatar: avatarOf(user.id), customStatus: userProfile.customStatus, bio: userProfile.bio })
       .from(user)
       .leftJoin(userProfile, eq(userProfile.userId, user.id))
       .where(inArray(user.id, ids)),
@@ -157,6 +160,7 @@ export async function listFriends(actorId: string): Promise<FriendView[]> {
       return {
         id,
         name: person.name,
+        avatar: person.avatar,
         state: friend ? "friend" : r.requestedBy === actorId ? "outgoing" : "incoming",
         presence: friend ? (online.get(id) ?? null) : null,
         customStatus: friend ? (person.customStatus ?? "") : "",
@@ -174,7 +178,7 @@ export async function searchPeople(actorId: string, rawQuery: unknown): Promise<
   const shared = alias(member, "shared");
   const pattern = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const rows = await db
-    .selectDistinct({ id: user.id, name: user.name })
+    .selectDistinct({ id: user.id, name: user.name, avatar: avatarOf(user.id) })
     .from(member)
     .innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actorId)))
     .innerJoin(user, eq(user.id, member.userId))

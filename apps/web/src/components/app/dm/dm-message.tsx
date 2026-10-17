@@ -13,9 +13,10 @@ export type MessageView = Awaited<ReturnType<PrivateMessaging["decrypt"]>>[numbe
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
 
 /** A private message in the channel layout. These actions use only text already decrypted in this browser. Reporting keeps its explicit disclosure step. */
-export function PrivateMessageItem({ message, authorName, onError, onReport }: {
+export function PrivateMessageItem({ message, authorName, authorAvatar, onError, onReport }: {
   message: MessageView;
   authorName: string;
+  authorAvatar: string | null;
   onError: (error: string) => void;
   onReport: () => void;
 }) {
@@ -34,7 +35,7 @@ export function PrivateMessageItem({ message, authorName, onError, onReport }: {
     <ContextMenu onOpenChange={(open) => { if (open) handoffFocus.current = false; }}>
       {/* Direct <p> children (header, then body) are a contract with desktop/tests/native_app_flows.py. */}
       <ContextMenuTrigger render={<li />} className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-4 py-1.5 outline-none hover:bg-white/[0.03] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&>*:not(:first-child)]:col-start-2">
-        <span className="row-span-4 pt-0.5"><Avatar name={authorName} /></span>
+        <span className="row-span-4 pt-0.5"><Avatar name={authorName} avatar={authorAvatar} /></span>
         <p className="flex flex-wrap items-baseline gap-x-1.5">
           <span className={`font-medium ${nameColor(message.senderId)}`}>{message.own ? "You" : authorName}</span>{" "}
           <span aria-hidden className="text-zinc-500">·</span>{" "}

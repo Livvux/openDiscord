@@ -83,7 +83,7 @@ export function MembersManager({ communityId, currentUserId, authority, members,
               ) : undefined}
             >
               <li className="flex flex-wrap items-center gap-3 px-3 py-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
-                <PresenceAvatar userId={m.userId} name={m.name} size="sm" announce />
+                <PresenceAvatar userId={m.userId} name={m.name} avatar={m.avatar} size="sm" announce />
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-1.5 font-medium">
                     {m.name}

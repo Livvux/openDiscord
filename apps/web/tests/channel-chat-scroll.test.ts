@@ -111,7 +111,7 @@ const props: ComponentProps<typeof ChannelChat> = {
   mediaEnabled: false, communityId: "community", lastReadId: null, blockedIds: [],
 };
 const message = (id: string): MessageView => ({
-  id, channelId: "channel", authorId: "author", authorName: "Author", authorBot: false, authorImported: false,
+  id, channelId: "channel", authorId: "author", authorName: "Author", authorAvatar: null, authorBot: false, authorImported: false,
   content: id, createdAt: "2026-01-01T00:00:00.000Z", editedAt: null, attachments: [], assets: [], mentions: [],
   replyTo: null, reactions: [], pinned: false, threadId: null, thread: null,
 });
