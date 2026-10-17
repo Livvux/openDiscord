@@ -11,6 +11,7 @@ import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BAC
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
 import { requireInstanceAdmin, type AdminActor } from "./instance-admin";
+import { areFriends } from "./friends";
 import { assertActiveUser } from "./instance-policy";
 import { parse, uuid } from "./validation";
 
@@ -39,7 +40,7 @@ async function reachable(tx: Tx | typeof db, actor: string, target: string): Pro
   const [first, second] = pair(actor, target);
   const shared = alias(member, "dm_shared_member");
   const found = await tx.select({ id: member.userId }).from(member).innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actor))).where(eq(member.userId, target)).limit(1);
-  if (!found.length && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length) throw notFound("Account not found.");
+  if (!found.length && !(await areFriends(tx, actor, target)) && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length) throw notFound("Account not found.");
   if (await blocked(tx, actor, target)) throw notFound("Account not found.");
 }
 async function cryptoReachable(tx: Tx, actor: string, target: string): Promise<void> {
@@ -82,10 +83,17 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
     await assertActiveUser(target, tx);
     const [firstId, secondId] = pair(actor, target);
     const [existing] = await tx.select().from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId)));
+    const friends = await areFriends(tx, actor, target);
+    if (existing && existing.status !== "accepted" && friends) {
+      await tx.update(dmConversation).set({ status: "accepted" }).where(eq(dmConversation.id, existing.id));
+      return existing.id;
+    }
     if (existing?.status === "rejected") throw forbidden("This person is not accepting this request.");
     if (existing) return existing.id;
     if (await tx.$count(dmConversation, or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))) >= 500) throw invalid("You have reached the conversation limit.");
-    const [created] = await tx.insert(dmConversation).values({ firstId, secondId, requestedBy: actor }).onConflictDoNothing().returning({ id: dmConversation.id });
+    // Friends already agreed to hear from each other, so there's no separate message request.
+    const status = friends ? "accepted" : "pending";
+    const [created] = await tx.insert(dmConversation).values({ firstId, secondId, requestedBy: actor, status }).onConflictDoNothing().returning({ id: dmConversation.id });
     if (created) return created.id;
     const [raced] = await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, firstId), eq(dmConversation.secondId, secondId)));
     return raced.id;
