@@ -16,7 +16,6 @@ export const de: Messages = {
     language: "Sprache",
   },
   hero: {
-    badge: "Open Source – jede Zeile lesbar",
     titleStart: "Communities gehören",
     titleAccent: "allen.",
     lead: "openDiscord ist eine Open-Source-Plattform für Communities. Chatte auf opendiscord.app oder betreibe exakt dasselbe Release auf deinem eigenen Server. Kein Lock-in, und einfacher Chat landet nie hinter einer Paywall.",
@@ -26,17 +25,8 @@ export const de: Messages = {
   },
   mockup: {
     label: "Vorschau des openDiscord-Clients mit Communities, Kanälen und Nachrichten",
-    community: "Lerngruppe",
-    textChannels: "Textkanäle",
-    composer: "Nachricht an #general",
-    typing: "Ife schreibt…",
-    messages: [
-      "Unsere Lerngruppe stand an einem Abend. Den Rest haben Einladungslinks erledigt.",
-      "Dasselbe Release auf meinem eigenen Server. docker compose up und es lief 🚀",
-      "Gründe für Kicks und Bans landen im Audit-Log. Unsere Mods lieben es.",
-      "Und meine Daten exportiere ich mit einem Klick. So muss das sein.",
-    ],
   },
+  media: { play: "Video abspielen", pause: "Video pausieren" },
   marquee: {
     label: "Im ersten Release enthalten",
     items: [
@@ -45,13 +35,15 @@ export const de: Messages = {
     ],
   },
   features: {
-    eyebrow: "Open Source · Echte Menschen · Bessere Communities",
     titleStart: "Alles, was eine Community braucht.",
     titleAccent: "Nichts, was sie mieten muss.",
     realtime: {
       title: "Echtzeit, aber zuerst gespeichert",
       body: "Jede Nachricht landet in PostgreSQL, bevor sie jemand sieht. Nach einem Verbindungsabbruch holt der Client alles aus der Datenbank nach.",
-      stages: ["Nachricht", "PostgreSQL", "Alle"],
+    },
+    threads: {
+      title: "Threads halten Kanäle lesbar",
+      body: "Antworte im Thread, statt den Kanal zu fluten. Reaktionen, Erwähnungen und Suche funktionieren überall gleich.",
     },
     invite: {
       title: "Standardmäßig nur mit Einladung",
@@ -60,12 +52,10 @@ export const de: Messages = {
     moderation: {
       title: "Moderation eingebaut",
       body: "Rollen mit klarer Hierarchie, Kick und Ban mit Begründung, ein Audit-Log und Rate-Limits ab dem ersten Tag.",
-      log: ["hat spam-bot gebannt", "hat die Rolle von Ife geändert", "hat eine Nachricht gelöscht"],
     },
     data: {
       title: "Deine Daten, deine Entscheidung",
       body: "Exportiere alles, was du geschrieben hast, oder lösche dein Konto mit einem Klick. Keine Dark Patterns, kein Werbe-Tracking.",
-      export: "Meine Daten exportieren",
     },
     encryption: {
       title: "Ehrlich bei Verschlüsselung",
@@ -76,14 +66,7 @@ export const de: Messages = {
       no: "Serverseitig",
     },
   },
-  stats: [
-    { value: "AGPL-3.0", label: "Jede Zeile ist öffentlich" },
-    { value: "0", label: "Werbe-Tracker" },
-    { value: "1", label: "Compose-Datei zum Selbsthosten" },
-    { value: "0 €", label: "Für einfachen Chat, für immer" },
-  ],
   selfHost: {
-    eyebrow: "Selbst hosten",
     titleStart: "Eine Compose-Datei.",
     titleAccent: "Dein Server. Deine Regeln.",
     lead: "Die offizielle Instanz und deine Instanz nutzen dasselbe Image. Richte eine Domain auf einen kleinen VPS, setze zwei Secrets, und du hast einen Community-Server mit Backups unter deiner Kontrolle.",
@@ -114,7 +97,6 @@ export const de: Messages = {
     },
   },
   roadmap: {
-    eyebrow: "Offen entwickelt",
     titleStart: "Kleines erstes Release.",
     titleAccent: "Öffentliche Roadmap.",
     stages: [
@@ -146,6 +128,7 @@ export const de: Messages = {
     discover: "Öffentliche Kanäle entdecken",
     privacy: "Datenschutz",
     terms: "Nutzungsbedingungen",
+    guidelines: "Richtlinien",
     imprint: "Impressum",
     signIn: "Anmelden",
   },
