@@ -197,6 +197,10 @@ jobs:
       - name: Desktop and mobile browser shard
         env:
           SHARD: ${{ matrix.shard }}
+          # Playwright splits shards by test count; voice-worker's many sub-second tests gave shard 1
+          # ~2x the runtime of shard 3. Weights come from measured durations (PR #97, --reporter=list);
+          # stale weights only skew balance, every test still runs on exactly one shard.
+          PWTEST_SHARD_WEIGHTS: "2:4:5"
         run: pnpm --filter web exec playwright test --project=desktop --project=mobile --shard="$SHARD/3" --workers=2 --reporter=list --output=test-results/browser
       # Each shard owns its database. The instance-wide alpha switch runs only after
       # this runner's ordinary tests finish, with no other tests using that database.
