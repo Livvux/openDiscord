@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Request, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
 import { classifyVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
 import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
@@ -128,6 +128,21 @@ test.describe("genuine Next product encrypted Voice", () => {
           if (result.ok) entry.transport.push(...result.value);
         }));
       });
+      const tokenBodies = new WeakMap<Request, Promise<unknown>>();
+      await page.route("**/api/voice/control", async route => {
+        const request = route.request();
+        const body: unknown = request.method() === "POST" ? request.postDataJSON() : null;
+        if (!body || typeof body !== "object" || !("action" in body) || body.action !== "token") {
+          await route.continue(); return;
+        }
+        // Forward this request once and deliver the actual server response unchanged. Keep
+        // its body in the test runner so Chromium cannot evict it before JWT verification.
+        const upstream = await route.fetch({ maxRedirects: 0, maxRetries: 0 });
+        const captured: Promise<unknown> = upstream.json();
+        tokenBodies.set(request, captured);
+        void captured.catch(() => {});
+        await route.fulfill({ response: upstream });
+      });
       const onResponse = (response: Response) => {
         if (!observing) return;
         const request = response.request();
@@ -151,7 +166,9 @@ test.describe("genuine Next product encrypted Voice", () => {
         let bodyError = "";
         const work = observeVoiceProductResult(async checkpoint => {
           if (response.status() !== 200) throw new Error("Product token grant failed.");
-          const raw: unknown = await response.json().catch((error: Error) => { bodyError = error.message.slice(0, 200); throw error; }); checkpoint("verify");
+          const captured = tokenBodies.get(request);
+          if (!captured) throw new Error("Missing original product token response.");
+          const raw = await captured.catch(error => { bodyError = "unreadable-token-response"; throw error; }); checkpoint("verify");
           if (!raw || typeof raw !== "object" || !("token" in raw) || typeof raw.token !== "string" || !("sources" in raw) || !strings(raw.sources) || !("participantIdentity" in raw) || !("roomName" in raw)) throw new Error("Invalid product token response.");
           const claims = await verifier.verify(raw.token, 0); checkpoint("result");
           const sources: unknown = claims.video?.canPublishSources ?? [];
