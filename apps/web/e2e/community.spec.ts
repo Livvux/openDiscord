@@ -7,6 +7,7 @@ import {
   PASSWORD,
   sendMessage,
   signUp,
+  openAccountSettings,
 } from "./helpers";
 
 // Multi-user flows run on desktop only; the mobile project covers navigation separately.
@@ -129,7 +130,7 @@ test.describe("communities", () => {
     await createCommunity(page, "Temporary");
     await sendMessage(page, "exported words");
 
-    await page.getByRole("link", { name: /Account settings/ }).click();
+    await openAccountSettings(page);
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("link", { name: "Download my data" }).click();
     const download = await downloadPromise;
@@ -148,7 +149,7 @@ test.describe("communities", () => {
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page).toHaveURL(/\/app$/);
 
-    await page.getByRole("link", { name: /Account settings/ }).click();
+    await openAccountSettings(page);
     await page.getByLabel("Confirm with your password").fill(PASSWORD);
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Delete my account" }).click();

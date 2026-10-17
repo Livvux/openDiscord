@@ -1,3 +1,4 @@
+import { EmojiText } from "@/components/app/emoji-text";
 import { ASSET_TOKEN_SOURCE, assetText } from "./community-assets";
 // A small, safe Markdown subset for chat: code blocks, quotes, inline code, bold, italic, strikethrough,
 // autolinked http(s) URLs and mention tokens. Output is React elements only, never raw HTML, so message
@@ -18,7 +19,7 @@ function inline(text: string, mention: MentionRenderer, prefix: string, asset: A
   let last = 0;
   let i = 0;
   for (const m of text.matchAll(INLINE)) {
-    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m.index > last) out.push(<EmojiText key={`${prefix}-text-${m.index}`} text={text.slice(last, m.index)} />);
     const key = `${prefix}-${i++}`;
     const [token, code, bold, strike, italic, mentionToken, url, assetToken] = m;
     if (code) out.push(<code key={key} className="rounded bg-white/10 px-1 py-0.5 font-mono text-[0.85em]">{code.slice(1, -1)}</code>);
@@ -52,7 +53,7 @@ function inline(text: string, mention: MentionRenderer, prefix: string, asset: A
     else out.push(token);
     last = m.index + token.length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(<EmojiText key={`${prefix}-text-end`} text={text.slice(last)} />);
   return out;
 }
 

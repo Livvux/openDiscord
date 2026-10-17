@@ -10,7 +10,8 @@ import { shortFilename } from "@/lib/filename";
 import { encodeMentions, mentionQuery, type Mention } from "@/lib/mentions";
 
 import { assetShortcode, encodeAssetShortcodes, type AssetRef } from "@/lib/community-assets";
-import { CommunityAssetPicker } from "../community-asset-picker";
+import { EmojiSelector } from "../emoji-selector";
+import { insertEmoji } from "@/lib/emoji";
 
 interface ComposerProps {
   isPublic?: boolean;
@@ -79,7 +80,6 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
   const [activeOption, setActiveOption] = useState(0);
   const picked = useRef<Mention[]>([]);
   const pickedAssets = useRef<AssetRef[]>([]);
-  const [pickingAssets, setPickingAssets] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   // Hidden copies of previous routes stay mounted, so ids must be unique per instance.
@@ -270,14 +270,18 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           {failed.name}: {failed.error} Remove it to send.
         </p>
       )}
-      {pickingAssets && <CommunityAssetPicker channelId={channelId} onPick={(asset) => {
-        pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
-        setDraft(`${draft}${draft && !draft.endsWith(" ") ? " " : ""}${assetShortcode(asset)} `);
-        setPickingAssets(false);
-        textarea.current?.focus();
-      }} />}
       <div className="flex items-end gap-2 py-1 pr-1 pl-2">
-        {!isPublic && <Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose community emoji or sticker" aria-expanded={pickingAssets} onClick={() => setPickingAssets((value) => !value)}><SmilePlusIcon /></Button>}
+        <EmojiSelector channelId={isPublic ? undefined : channelId} stickers={!isPublic} returnFocusTo={textarea}
+          trigger={<Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose community emoji or sticker"><SmilePlusIcon /></Button>}
+          onPick={(emoji, asset) => {
+            const insertion = asset ? `${assetShortcode(asset)} ` : emoji;
+            const result = insertEmoji(draft, insertion, textarea.current?.selectionStart ?? draft.length, textarea.current?.selectionEnd ?? draft.length, MESSAGE_MAX_LENGTH);
+            if (!result) return;
+            if (asset) pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
+            pendingCaret.current = result.caret;
+            setDraft(result.value);
+            setMentionAt(null);
+          }} />
         {mediaEnabled && (
           <>
             <input
