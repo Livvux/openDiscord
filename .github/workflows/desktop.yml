@@ -39,8 +39,18 @@ jobs:
           workspaces: desktop
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Cached binaries: compiling these from source took 3.5-7 min per OS on every run.
       - name: Install Tauri bundler
-        run: cargo install tauri-cli --version '^2' --locked
+        uses: taiki-e/cache-cargo-install-action@v3
+        with: { tool: tauri-cli@2 }
+      - name: Install cargo-audit
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@v2
+        with: { tool: cargo-audit }
+      - name: Install Tauri WebDriver
+        if: runner.os == 'Linux'
+        uses: taiki-e/cache-cargo-install-action@v3
+        with: { tool: tauri-driver }
       - name: Generate native icons from existing brand
         run: cargo tauri icon ../apps/web/public/brand/symbol-flat.svg
       - run: cargo fmt --check
@@ -52,7 +62,6 @@ jobs:
       - name: Dependency security and license inventory
         if: runner.os == 'Linux'
         run: |
-          cargo install cargo-audit --locked
           cargo audit
           cargo metadata --locked --format-version 1 > dependency-metadata.json
       - name: Build native preview bundles
@@ -70,7 +79,6 @@ jobs:
       - name: Linux native runtime acceptance
         if: runner.os == 'Linux'
         run: |
-          cargo install tauri-driver --locked
           openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/desktop-fixture.key -out /tmp/desktop-fixture.crt -days 1 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
           sudo cp /tmp/desktop-fixture.crt /usr/local/share/ca-certificates/desktop-fixture.crt
           sudo update-ca-certificates
