@@ -14,7 +14,6 @@ export const en = {
     language: "Language",
   },
   hero: {
-    badge: "Open source, read every line",
     titleStart: "Communities belong to",
     titleAccent: "everyone.",
     lead: "openDiscord is an open-source community platform. Chat on opendiscord.app, or run the exact same release on your own server. No lock-in, and basic chat is never behind a paywall.",
@@ -24,17 +23,8 @@ export const en = {
   },
   mockup: {
     label: "Preview of the opendiscord chat client with communities, channels and messages",
-    community: "Study Hall",
-    textChannels: "Text channels",
-    composer: "Message #general",
-    typing: "Ife is typing…",
-    messages: [
-      "Set up our study group in an evening. Invite links did the rest.",
-      "Same release on my own box. docker compose up and it was running 🚀",
-      "Kick and ban reasons land in the audit log. Our mods love it.",
-      "And exporting my data is one click. As it should be.",
-    ],
   },
+  media: { play: "Play video", pause: "Pause video" },
   marquee: {
     label: "Included in the first release",
     items: [
@@ -43,13 +33,15 @@ export const en = {
     ],
   },
   features: {
-    eyebrow: "Open source · Real people · Better communities",
     titleStart: "Everything a community needs.",
     titleAccent: "Nothing it has to rent.",
     realtime: {
       title: "Real-time, written down first",
       body: "Every message lands in PostgreSQL before anyone sees it. After a dropped connection, the client catches up from the database.",
-      stages: ["Message", "PostgreSQL", "Everyone"],
+    },
+    threads: {
+      title: "Threads that keep channels readable",
+      body: "Reply in a thread instead of flooding the channel. Reactions, mentions and search work the same everywhere.",
     },
     invite: {
       title: "Invite-only by default",
@@ -58,12 +50,10 @@ export const en = {
     moderation: {
       title: "Moderation built in",
       body: "Roles with a clear hierarchy, kick and ban with reasons, an audit log and rate limits from day one.",
-      log: ["banned spam-bot", "changed role of Ife", "deleted a message"],
     },
     data: {
       title: "Your data, your call",
       body: "Export everything you've written or delete your account in a click. No dark patterns, no ad tracking.",
-      export: "Export my data",
     },
     encryption: {
       title: "Honest about encryption",
@@ -74,14 +64,7 @@ export const en = {
       no: "Server-side",
     },
   },
-  stats: [
-    { value: "AGPL-3.0", label: "Every line is public" },
-    { value: "0", label: "Ad trackers" },
-    { value: "1", label: "Compose file to self-host" },
-    { value: "€0", label: "For basic chat, forever" },
-  ],
   selfHost: {
-    eyebrow: "Self-host",
     titleStart: "One compose file.",
     titleAccent: "Your server. Your rules.",
     lead: "The official instance and your instance run the same image. Point a domain at a small VPS, set two secrets and you have a community server with backups you control.",
@@ -112,7 +95,6 @@ export const en = {
     },
   },
   roadmap: {
-    eyebrow: "Built in the open",
     titleStart: "Small first release.",
     titleAccent: "Public roadmap.",
     stages: [
@@ -144,6 +126,7 @@ export const en = {
     discover: "Discover public channels",
     privacy: "Privacy",
     terms: "Terms",
+    guidelines: "Guidelines",
     imprint: "Imprint",
     signIn: "Sign in",
   },
