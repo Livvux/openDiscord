@@ -1,11 +1,11 @@
-import { HomeIcon, MailIcon, UsersIcon } from "lucide-react";
-import Link from "next/link";
+import { MailIcon, UsersIcon } from "lucide-react";
 import { Suspense } from "react";
+import { DmDeviceBootstrap } from "@/components/app/dm/dm-device-bootstrap";
+import { DirectMessageList } from "@/components/app/home/direct-message-list";
 import { HomeNavLink } from "@/components/app/home/home-nav-link";
-import { MobilePanel } from "@/components/app/mobile-nav";
-import { PresenceAvatar } from "@/components/app/presence-avatar";
 import { HomeRefresher } from "@/components/app/home/home-refresher";
-import { UserContextMenu } from "@/components/app/user-context-menu";
+import { MobilePanel } from "@/components/app/mobile-nav";
+import type { PresenceStatus } from "@/lib/presence";
 import { homeConversations, homeFriends } from "@/server/home";
 import { requirePageUser } from "@/server/session";
 
@@ -28,40 +28,19 @@ export default function HomeLayout({ children }: LayoutProps<"/app">) {
 
 async function HomeSidebar() {
   const user = await requirePageUser();
-  const [friends, { incomingRequests }] = await Promise.all([homeFriends(user.id), homeConversations(user.id)]);
-  const online = friends.filter((f) => f.state === "friend" && f.presence);
+  const [friends, { recent, incomingRequests }] = await Promise.all([homeFriends(user.id), homeConversations(user.id)]);
   const incoming = friends.filter((f) => f.state === "incoming").length;
+  const presence: Record<string, PresenceStatus> = Object.fromEntries(friends.flatMap((f) => (f.presence ? [[f.id, f.presence]] : [])));
+  const relations = Object.fromEntries(friends.map((f) => [f.id, f.state]));
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3">
+      <DmDeviceBootstrap userId={user.id} />
       <ul className="space-y-0.5">
-        <li><HomeNavLink href="/app" icon={<HomeIcon />} label="Overview" /></li>
-        <li><HomeNavLink href="/app/friends" icon={<UsersIcon />} label="Friends" badge={incoming} /></li>
-        <li><HomeNavLink href="/app/messages" icon={<MailIcon />} label="Private messages" badge={incomingRequests} /></li>
+        <li><HomeNavLink href="/app" icon={<UsersIcon />} label="Friends" badge={incoming} /></li>
+        <li><HomeNavLink href="/app/messages" icon={<MailIcon />} label="Message requests" badge={incomingRequests} /></li>
       </ul>
-      <h3 className="px-2 pt-5 pb-1 text-[11px] tracking-widest text-zinc-400 uppercase">Online friends — {online.length}</h3>
-      {online.length === 0 ? (
-        <p className="px-2 text-xs text-muted-foreground">Nobody online right now.</p>
-      ) : (
-        <ul className="space-y-0.5">
-          {online.map((f) => (
-            <li key={f.id}>
-              <UserContextMenu userId={f.id} name={f.name} currentUserId={user.id} relation={f.state}>
-                <Link
-                  href={`/app/messages?to=${encodeURIComponent(f.id)}`}
-                  aria-label={`Message ${f.name}`}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
-                >
-                  <PresenceAvatar userId={f.id} name={f.name} size="sm" status={f.presence} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{f.name}</span>
-                    {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
-                  </span>
-                </Link>
-              </UserContextMenu>
-            </li>
-          ))}
-        </ul>
-      )}
+      <h3 className="px-2 pt-5 pb-1 text-[11px] tracking-widest text-zinc-400 uppercase">Direct messages</h3>
+      <DirectMessageList userId={user.id} initial={recent} presence={presence} relations={relations} />
     </div>
   );
 }

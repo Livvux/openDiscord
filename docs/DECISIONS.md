@@ -80,7 +80,11 @@ One-to-one DMs use the maintained Matrix Rust crypto state machine through pinne
 Olm distributes device keys; Megolm encrypts conversation events. We implement the bounded Matrix
 transport shapes over authenticated application accounts, not federation or a Matrix homeserver.
 The SDK performs signature validation, SAS verification, ratcheting and message encryption.
-Every active sending/receiving device must be verified; unknown devices fail closed.
+Contacts are trusted on first use, as in Matrix clients: a peer device is accepted when the peer's
+pinned cross-signing identity signed it, and a changed identity blocks the conversation until SAS
+verification. SAS remains available to upgrade a contact to verified. Unsigned devices and our own
+unverified devices never receive keys. (Until October 2026 every device had to be SAS-verified before
+the first message; in practice that kept friends from messaging at all, see PRIVATE-MESSAGES.md.)
 
 This supersedes the earlier MLS/Signal preference. Upstream OpenMLS browser bindings remain
 experimental; its audited core does not make an unaudited browser/storage integration audited.

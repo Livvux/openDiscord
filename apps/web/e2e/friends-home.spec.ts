@@ -11,26 +11,28 @@ test.describe("home, friends and account menu", () => {
     const invitePath = await createInviteLink(owner);
     const friend = await joinAsNewUser(browser, "Finn Friend", invitePath);
 
-    // /app is a persistent Home, not a redirect into the first community.
+    // /app is a persistent Home showing friends, as in Discord: not a redirect into the first community.
     await owner.goto("/app");
     await expect(owner).toHaveURL(/\/app$/);
-    await expect(owner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
-    await expect(owner.getByRole("heading", { name: "Your communities" })).toBeVisible();
-    await expect(owner.getByRole("link", { name: /Hangout/ }).last()).toBeVisible();
+    await expect(owner.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
+    for (const tab of [/^Online/, /^All/, /^Pending/, /^Blocked/, /^Add Friend/]) {
+      await expect(owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: tab })).toBeVisible();
+    }
+    await expect(owner.getByRole("navigation", { name: "Home" }).getByRole("link", { name: /^Friends/ })).toHaveAttribute("aria-current", "page");
     await expectNoA11yViolations(owner);
 
     // Find a community member by name and send a request.
-    await owner.goto("/app/friends");
+    await owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: "Add Friend" }).click();
     await owner.getByLabel("Search your communities").fill("Finn");
     await owner.getByRole("button", { name: "Search" }).click();
     await owner.getByRole("button", { name: "Add Finn Friend as a friend" }).click();
     await expect(owner.getByRole("status").filter({ hasText: "Friend request sent." })).toBeVisible();
     await expectNoA11yViolations(owner);
 
-    // The recipient sees it on Home and accepts it from Friends.
-    await friend.goto("/app");
-    await expect(friend.getByRole("link", { name: /1 friend request from Hana Home/ })).toBeVisible();
+    // The recipient sees it on Home (Pending opens first) and accepts it; the old /app/friends URL still works.
     await friend.goto("/app/friends");
+    await expect(friend).toHaveURL(/\/app$/);
+    await expect(friend.getByRole("navigation", { name: "Home" }).getByRole("link", { name: "Friends, 1 pending" })).toBeVisible();
     await friend.getByRole("button", { name: "Accept friend request from Hana Home" }).click();
     await friend.getByRole("button", { name: "All", exact: false }).click();
     await expect(friend.getByRole("link", { name: "Message Hana Home" })).toBeVisible();
@@ -46,15 +48,15 @@ test.describe("home, friends and account menu", () => {
     await friend.keyboard.press("Escape");
 
     await expect(async () => {
-      await owner.goto("/app/friends");
-      await expect(owner.getByRole("main").getByText("Shipping features")).toBeVisible({ timeout: 2_000 });
+      await owner.goto("/app");
+      await expect(owner.getByRole("region", { name: "Your friends" }).getByText("Shipping features")).toBeVisible({ timeout: 2_000 });
     }).toPass({ timeout: 20_000 });
 
     // Friends open encrypted DMs directly, without a message request.
     await owner.getByRole("main").getByRole("link", { name: "Message Finn Friend" }).click();
     await expect(owner).toHaveURL(/\/app\/messages\?to=/);
-    await owner.getByRole("button", { name: "Send message request" }).click();
-    await expect(owner.getByRole("log", { name: "Private conversation with Finn Friend" })).toBeVisible();
+    await expect(owner.getByRole("log", { name: "Private conversation with Finn Friend" })).toBeVisible({ timeout: 30_000 });
+    await expect(owner.getByRole("button", { name: "Send message request" })).toHaveCount(0);
     await expect(owner.getByText("Your message request is waiting for acceptance.")).toHaveCount(0);
 
     // Sign out from the account menu.

@@ -65,8 +65,8 @@ describe("per-message processing failure boundaries", () => {
     outgoingRequests: vi.fn(async () => []),
     queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
     markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})),
-    decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true })),
-    close: vi.fn(),
+    decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
+    shareRoomKey: vi.fn(async () => []), close: vi.fn(),
   };
   const history = {
     cached: vi.fn(async () => []), archives: vi.fn(async () => []), pendingIdentity: vi.fn(async () => null),
@@ -76,7 +76,7 @@ describe("per-message processing failure boundaries", () => {
   beforeEach(async () => {
     decrypted = decryptedFixture();
     machine.decryptRoomEvent.mockResolvedValue(decrypted);
-    machine.getDevice.mockResolvedValue({ isVerified: () => true });
+    machine.getDevice.mockResolvedValue({ isVerified: () => true, isCrossSignedByOwner: () => false });
     history.acceptEvent.mockResolvedValue(undefined);
     fixtures.initialize.mockResolvedValue(machine);
     fixtures.openHistory.mockResolvedValue(history);
@@ -97,7 +97,7 @@ describe("per-message processing failure boundaries", () => {
       case "sdk_decrypt": machine.decryptRoomEvent.mockRejectedValueOnce(new Error("private SDK exception")); break;
       case "shield": decrypted.shieldState.mockReturnValueOnce(shieldFixture(C.ShieldColor.Red)); break;
       case "sender_binding": decrypted.senderDevice = new C.DeviceId(randomUUID()); break;
-      case "device_trust": machine.getDevice.mockResolvedValueOnce({ isVerified: () => false }); break;
+      case "device_trust": machine.getDevice.mockResolvedValueOnce({ isVerified: () => false, isCrossSignedByOwner: () => false }); break;
       case "plaintext_schema": decrypted.event = "private invalid JSON"; break;
       case "message_binding": decrypted.event = JSON.stringify({ content: { ...plain, transaction: randomUUID() } }); break;
       case "history_schema": envelope.content = {}; break;
@@ -112,13 +112,13 @@ describe("per-message processing failure boundaries", () => {
     if (stage !== "replay_storage") expect(history.acceptEvent).not.toHaveBeenCalled();
   });
 
-  it.each([C.ShieldColor.Red, C.ShieldColor.Grey])("preserves strict shield rejection for public color %s without reading descriptions", async (color) => {
+  it.each([C.ShieldColor.Red, C.ShieldColor.Grey])("preserves shield rejection for public color %s without reading descriptions", async (color) => {
     decrypted.shieldState.mockReturnValueOnce(shieldFixture(color, C.ShieldStateCode.UnverifiedIdentity));
     const [row] = await client.decrypt([envelope], conversation, peer);
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
     expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: publicShieldColor(color, C), shieldCode: "UnverifiedIdentity" });
-    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(false);
     expect(machine.getDevice).not.toHaveBeenCalled();
     expect(history.acceptEvent).not.toHaveBeenCalled();
   });
@@ -131,7 +131,7 @@ describe("per-message processing failure boundaries", () => {
       expect(row.body).toBeNull();
       expect(row.error).toBe(genericError);
       expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
-      expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+      expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(false);
       expect(machine.getDevice).not.toHaveBeenCalled();
       expect(history.acceptEvent).not.toHaveBeenCalled();
     } finally { error.free(); }
@@ -143,7 +143,7 @@ describe("per-message processing failure boundaries", () => {
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
     expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
-    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(false);
     expect(machine.getDevice).not.toHaveBeenCalled();
     expect(history.acceptEvent).not.toHaveBeenCalled();
   });
@@ -159,16 +159,37 @@ describe("per-message processing failure boundaries", () => {
     } finally { error.free(); }
   });
 
-  it("adds no diagnostic metadata to successful rows and preserves strict SDK and replay checks", async () => {
+  it("adds no diagnostic metadata to successful rows and preserves SDK and replay checks", async () => {
     const [row] = await client.decrypt([envelope], conversation, peer);
     expect(row.body).toBe(plain.body);
     expect(row).not.toHaveProperty("diagnostic");
     expect(row).not.toHaveProperty("error");
     expect(machine.decryptRoomEvent.mock.calls[0][2].sender_device_trust_requirement).toBe(C.TrustRequirement.CrossSigned);
-    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(decrypted.shieldState).toHaveBeenCalledExactlyOnceWith(false);
     expect(machine.getDevice).toHaveBeenCalledWith(decrypted.sender, decrypted.senderDevice);
     expect(history.acceptEvent).toHaveBeenCalledWith(envelope);
     expect(history.put).toHaveBeenCalledOnce();
+  });
+
+  it("trusts an unverified peer device on first use when its owner's identity signed it", async () => {
+    machine.getDevice.mockResolvedValueOnce({ isVerified: () => false, isCrossSignedByOwner: () => true });
+    const [row] = await client.decrypt([envelope], conversation, peer);
+    expect(row.body).toBe(plain.body);
+  });
+
+  it("rejects a cross-signed device once the peer's pinned identity changed", async () => {
+    const changed = Object.assign(Object.create(C.OtherUserIdentity.prototype), { identityNeedsUserApproval: () => true, hasVerificationViolation: () => false });
+    machine.getIdentity.mockResolvedValueOnce(changed);
+    machine.getDevice.mockResolvedValueOnce({ isVerified: () => false, isCrossSignedByOwner: () => true });
+    const [row] = await client.decrypt([envelope], conversation, peer);
+    expect(row.body).toBeNull();
+    expect(row.diagnostic).toEqual({ stage: "device_trust", code: "unknown" });
+  });
+
+  it("refuses to send before sharing keys when this account's own identity isn't trusted", async () => {
+    machine.getIdentity.mockResolvedValueOnce({ isVerified: () => false });
+    await expect(client.send(conversation, peer, "hi")).rejects.toThrow(/Verify this browser/);
+    expect(machine.shareRoomKey).not.toHaveBeenCalled();
   });
 
   it("keeps failures per envelope and drops their classification on a later successful refresh", async () => {

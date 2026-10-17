@@ -1,7 +1,8 @@
 "use client";
 
 import { MenuIcon } from "lucide-react";
-import { createContext, useContext, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { createContext, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 // Below the md breakpoint the community rail and channel list become an off-canvas panel.
@@ -21,12 +22,22 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
+      <Suspense><CloseOnNavigation close={() => setOpen(false)} /></Suspense>
       {children}
       {open && (
         <div aria-hidden className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setOpen(false)} />
       )}
     </MobileNavContext.Provider>
   );
+}
+
+/** Any navigation (e.g. creating a community) closes the overlay, not only links inside it. */
+function CloseOnNavigation({ close }: { close: () => void }) {
+  const pathname = usePathname();
+  const latest = useRef(close);
+  useEffect(() => { latest.current = close; });
+  useEffect(() => { latest.current(); }, [pathname]);
+  return null;
 }
 
 /** Wraps a sidebar: always visible from md up, an overlay panel below when opened. */

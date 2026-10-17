@@ -201,6 +201,22 @@ export class PrivateMessaging {
       return devices.devices().filter((d) => !d.isDeleted()).map((d) => ({ userId, id: d.deviceId.toString(), verified: d.isVerified() || (userId === this.userId && d.deviceId.toString() === this.deviceId), fingerprint: d.ed25519Key?.toBase64() ?? "" }));
     });
   }
+  /**
+   * Trust on first use, as in Matrix clients: a peer device is accepted when the peer's pinned
+   * cross-signing identity signed it; SAS verification upgrades it to verified. Our own other
+   * devices still need verification, so an unverified browser on this account never gets keys.
+   */
+  private async acceptsDevice(userId: string, device: Matrix.Device): Promise<boolean> {
+    if (device.isVerified()) return true;
+    if (userId === this.userId) return device.deviceId.toString() === this.deviceId;
+    return device.isCrossSignedByOwner();
+  }
+  /** A peer identity that changed after we pinned (or verified) it blocks until it is verified again. */
+  private async identityChanged(userId: string): Promise<boolean> {
+    if (userId === this.userId) return false;
+    const identity = await this.machine.getIdentity(new this.C.UserId(matrixUser(userId)));
+    return identity instanceof this.C.OtherUserIdentity && (identity.identityNeedsUserApproval() || identity.hasVerificationViolation());
+  }
   async startVerification(userId: string, id: string): Promise<void> {
     return this.serial(async () => {
       await this.query([userId]);
@@ -241,11 +257,16 @@ export class PrivateMessaging {
   async send(conversation: string, peer: string, text: string): Promise<void> {
     return this.serial(async () => {
       await this.query([this.userId, peer]);
+      // identityBasedStrategy also shares with own devices signed by our identity, so that identity must be the one we hold or verified.
+      if (!(await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId))))?.isVerified()) throw new Error("Verify this browser with your other device in Devices and recovery before sending.");
       const identities = [this.userId, peer];
       const roster: string[] = [];
       for (const user of identities) {
-        const devices = (await this.machine.getUserDevices(new this.C.UserId(matrixUser(user)))).devices().filter((d) => !d.isDeleted());
-        if (!devices.length || devices.some((d) => !d.isVerified() && !(user === this.userId && d.deviceId.toString() === this.deviceId))) throw new Error("Verify every active device before sending. Revoke unused devices in their account.");
+        if (await this.identityChanged(user)) throw new Error("This person's encryption identity changed. Verify their device in Devices and recovery before sending.");
+        const all = (await this.machine.getUserDevices(new this.C.UserId(matrixUser(user)))).devices().filter((d) => !d.isDeleted());
+        const devices: Matrix.Device[] = [];
+        for (const d of all) if (await this.acceptsDevice(user, d)) devices.push(d);
+        if (!devices.length) throw new Error(user === this.userId ? "This browser's encryption device is unavailable. Reload, then retry." : "This person hasn't set up encrypted messages yet. Ask them to open openDiscord once, then retry.");
         roster.push(...devices.map((d) => `${user}/${d.deviceId.toString()}/${d.ed25519Key?.toBase64()}`));
       }
       const room = matrixRoom(conversation), rosterKey = roster.sort().join("|");
@@ -253,7 +274,8 @@ export class PrivateMessaging {
       const claim = await this.machine.getMissingSessions(identities.map((id) => new this.C.UserId(matrixUser(id))));
       if (claim) await this.outgoing(claim);
       const settings = new this.C.EncryptionSettings();
-      settings.sharingStrategy = this.C.CollectStrategy.onlyTrustedDevices();
+      // Only devices signed by their owner's identity receive keys; the roster above already refused changed identities.
+      settings.sharingStrategy = this.C.CollectStrategy.identityBasedStrategy();
       for (const request of await this.machine.shareRoomKey(new this.C.RoomId(room), identities.map((id) => new this.C.UserId(matrixUser(id))), settings)) await this.outgoing(request);
       const transaction = crypto.randomUUID();
       const plain = plainMessageSchema.parse({ msgtype: "m.text", body: text, conversation, transaction });
@@ -275,7 +297,8 @@ export class PrivateMessaging {
           stage = "sdk_decrypt";
           const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
           stage = "shield";
-          const shield = decrypted.shieldState(true);
+          // Lax shield: an unverified but cross-signed sender passes; verification violations and unsigned devices stay red.
+          const shield = decrypted.shieldState(false);
           const shieldColor = shield.color;
           shieldDiagnostic = { shieldColor: publicShieldColor(shieldColor, this.C), shieldCode: publicShieldCode(shield.code, this.C) };
           if (shieldColor !== this.C.ShieldColor.None) throw new Error("The SDK could not authenticate this message sender.");
@@ -283,7 +306,7 @@ export class PrivateMessaging {
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           stage = "device_trust";
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
-          if (!device?.isVerified() && !(envelope.senderId === this.userId && decrypted.senderDevice.toString() === this.deviceId)) throw new Error("Verify the sender's device to read this message.");
+          if (!device || await this.identityChanged(envelope.senderId) || !(await this.acceptsDevice(envelope.senderId, device))) throw new Error("Verify the sender's device to read this message.");
           stage = "plaintext_schema";
           const plain = plainMessageSchema.parse(z.object({ content: z.unknown() }).parse(JSON.parse(decrypted.event)).content);
           stage = "message_binding";

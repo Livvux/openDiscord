@@ -47,7 +47,7 @@ test("authenticator app (TOTP) two-factor sign-in with backup code fallback", as
   await signInWithPassword(page, email);
   await page.getByLabel(/6-digit code/).fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
-  await expect(page.getByRole("heading", { name: "Welcome, Tara Totp" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
   // A backup code works once.
   await signOut(page);
@@ -55,7 +55,7 @@ test("authenticator app (TOTP) two-factor sign-in with backup code fallback", as
   await page.getByRole("button", { name: "Use a backup code instead" }).click();
   await page.getByLabel("Backup code").fill(backupCode);
   await page.getByRole("button", { name: "Verify" }).click();
-  await expect(page.getByRole("heading", { name: "Welcome, Tara Totp" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 });
 
 test("passkey registration and passwordless sign-in", async ({ browser }) => {
@@ -75,7 +75,7 @@ test("passkey registration and passwordless sign-in", async ({ browser }) => {
 
   await signOut(page);
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page.getByRole("heading", { name: "Welcome, Pat Passkey" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
   await page.goto("/app/settings");
   await page.getByRole("button", { name: "Remove passkey Test laptop" }).click();

@@ -7,11 +7,14 @@ import { blockUser, removeFriend, respondToFriendRequest, searchPeople, sendFrie
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { BlockedUser } from "@/server/blocks";
 import type { FriendView, PersonResult } from "@/server/friends";
+import { BlockedList } from "../settings/blocked-list";
 import { PresenceAvatar } from "../presence-avatar";
 import { UserContextMenu } from "../user-context-menu";
+import { UserProfilePopover } from "../user-profile";
 
-type Filter = "online" | "all" | "pending";
+type Filter = "online" | "all" | "pending" | "blocked" | "add";
 type Notice = { ok: boolean; text: string } | null;
 const SENT: Record<"sent" | "accepted" | "already", string> = {
   sent: "Friend request sent.",
@@ -22,13 +25,14 @@ const SENT: Record<"sent" | "accepted" | "already", string> = {
 interface FriendsViewProps {
   userId: string;
   friends: FriendView[];
+  blocked: BlockedUser[];
   initialCode: string;
 }
 
-export function FriendsView({ userId, friends, initialCode }: FriendsViewProps) {
+export function FriendsView({ userId, friends, blocked, initialCode }: FriendsViewProps) {
   const accepted = friends.filter((f) => f.state === "friend");
   const pending = friends.filter((f) => f.state !== "friend");
-  const [filter, setFilter] = useState<Filter>(pending.some((f) => f.state === "incoming") ? "pending" : "all");
+  const [filter, setFilter] = useState<Filter>(initialCode ? "add" : pending.some((f) => f.state === "incoming") ? "pending" : "all");
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, startTransition] = useTransition();
 
@@ -44,48 +48,63 @@ export function FriendsView({ userId, friends, initialCode }: FriendsViewProps) 
     { id: "online", label: "Online", count: accepted.filter((f) => f.presence).length },
     { id: "all", label: "All", count: accepted.length },
     { id: "pending", label: "Pending", count: pending.length },
+    { id: "blocked", label: "Blocked", count: blocked.length },
   ];
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto grid max-w-3xl gap-6 p-4 md:p-6">
-        <AddFriend userId={userId} initialCode={initialCode} />
+      <div className="grid gap-4 p-4 md:px-6">
+        <div role="group" aria-label="Filter friends" className="flex flex-wrap items-center gap-1">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              aria-pressed={filter === t.id}
+              onClick={() => setFilter(t.id)}
+              className={`min-h-8 rounded-md px-3 py-1 text-sm focus-visible:outline-2 focus-visible:outline-ring ${filter === t.id ? "bg-white/10 text-zinc-50" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
+            >
+              {t.label} <span className="text-muted-foreground">{t.count}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            aria-pressed={filter === "add"}
+            onClick={() => setFilter("add")}
+            className={`min-h-8 rounded-md px-3 py-1 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring ${filter === "add" ? "bg-transparent text-brand-mint" : "bg-emerald-700 text-white hover:bg-emerald-600"}`}
+          >
+            Add Friend
+          </button>
+        </div>
 
-        <section aria-labelledby="friends-list-heading" className="grid gap-3">
-          <h2 id="friends-list-heading" className="sr-only">Your friends</h2>
-          <div role="group" aria-label="Filter friends" className="flex gap-1">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={filter === t.id}
-                onClick={() => setFilter(t.id)}
-                className={`rounded-md px-3 py-1 text-sm focus-visible:outline-2 focus-visible:outline-ring ${filter === t.id ? "bg-white/10 text-zinc-50" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
-              >
-                {t.label} <span className="text-muted-foreground">{t.count}</span>
-              </button>
-            ))}
-          </div>
+        {filter === "add" ? <AddFriend userId={userId} initialCode={initialCode} /> : filter === "blocked" ? <BlockedList blocked={blocked} currentUserId={userId} /> : (
+        <section aria-label="Your friends" className="grid gap-3">
+          <h2 className="text-xs font-semibold tracking-widest text-zinc-400 uppercase">
+            {tabs.find((t) => t.id === filter)!.label} — {shown.length}
+          </h2>
           {notice && (
             <p role={notice.ok ? "status" : "alert"} className={`text-sm ${notice.ok ? "text-success" : "text-destructive"}`}>{notice.text}</p>
           )}
           <div>
             {shown.length === 0 ? (
               <p className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-muted-foreground">
-                {filter === "pending" ? "No pending requests." : filter === "online" ? "No friends online right now." : "No friends yet. Add someone above."}
+                {filter === "pending" ? "No pending requests." : filter === "online" ? "No friends online right now." : "No friends yet. Choose Add Friend to find someone."}
               </p>
             ) : (
               <ul className="divide-y divide-white/5 rounded-xl border border-white/5">
                 {shown.map((f) => (
                   <UserContextMenu key={f.id} userId={f.id} name={f.name} currentUserId={userId} relation={f.state} disabled={busy} onChanged={() => setNotice(null)} onError={(error) => setNotice({ ok: false, text: error })}>
                     <li className="flex items-center gap-3 px-3 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
-                      <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium text-zinc-100">{f.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {f.state === "incoming" ? "Incoming friend request" : f.state === "outgoing" ? "Outgoing friend request" : f.customStatus || f.bio || (f.presence ? "Online" : "Offline")}
-                        </p>
-                      </div>
+                      <UserProfilePopover userId={f.id} currentUserId={userId} render={
+                        <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring">
+                          <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-zinc-100">{f.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {f.state === "incoming" ? "Incoming friend request" : f.state === "outgoing" ? "Outgoing friend request" : f.customStatus || f.bio || (f.presence ? "Online" : "Offline")}
+                            </span>
+                          </span>
+                        </button>
+                      } />
                       <div className="flex shrink-0 gap-1">
                         {f.state === "friend" && (
                           <>
@@ -125,6 +144,7 @@ export function FriendsView({ userId, friends, initialCode }: FriendsViewProps) 
             )}
           </div>
         </section>
+        )}
       </div>
     </div>
   );
@@ -149,7 +169,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/app/friends?add=${encodeURIComponent(userId)}`);
+      await navigator.clipboard.writeText(`${window.location.origin}/app?add=${encodeURIComponent(userId)}`);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {

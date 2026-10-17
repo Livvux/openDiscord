@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 const HOME_PATHS = ["/app", "/app/friends", "/app/messages"];
 
@@ -33,7 +33,10 @@ interface HomeNavLinkProps {
 }
 
 export function HomeNavLink({ href, icon, label, badge = 0 }: HomeNavLinkProps) {
-  const active = usePathname() === href;
+  // An open conversation (?to=) highlights its own row in the DM list instead.
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const active = pathname === href && !params.has("to");
   return (
     <Link
       href={href}

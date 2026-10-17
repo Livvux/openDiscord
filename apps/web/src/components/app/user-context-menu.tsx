@@ -8,6 +8,7 @@ import { blockUser, removeFriend, respondToFriendRequest, sendFriendRequest, unb
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuLinkItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { ActionResult } from "@/server/errors";
 import type { FriendView } from "@/server/friends";
+import { UserProfilePopover } from "./user-profile";
 
 interface UserContextMenuProps {
   userId: string;
@@ -20,8 +21,8 @@ interface UserContextMenuProps {
   /** Already-authorized moderation items from the member surface. The server checks every action again. */
   moderation?: ReactNode;
   disabled?: boolean;
-  /** Author/avatar buttons can also expose the same menu with a normal click. */
-  openOnClick?: boolean;
+  /** Name/avatar buttons: a normal click opens the profile card, right click keeps this menu. */
+  profileOnClick?: boolean;
   onChanged?: () => void;
   onError?: (error: string) => void;
 }
@@ -29,7 +30,7 @@ interface UserContextMenuProps {
 type Notice = { ok: boolean; text: string };
 
 /** Shared person actions for friend rows, community members, message authors and DM peers. */
-export function UserContextMenu({ userId, name, currentUserId, blocked = false, relation, children, moderation, disabled = false, openOnClick = false, onChanged, onError }: UserContextMenuProps) {
+export function UserContextMenu({ userId, name, currentUserId, blocked = false, relation, children, moderation, disabled = false, profileOnClick = false, onChanged, onError }: UserContextMenuProps) {
   const trigger = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -100,16 +101,8 @@ export function UserContextMenu({ userId, name, currentUserId, blocked = false, 
       <ContextMenu open={open} onOpenChange={setOpen}>
         <ContextMenuTrigger
           ref={trigger}
-          render={children}
+          render={profileOnClick ? <UserProfilePopover userId={userId} currentUserId={currentUserId} render={children} /> : children}
           aria-busy={busy || undefined}
-          aria-haspopup={openOnClick ? "menu" : undefined}
-          aria-expanded={openOnClick ? open : undefined}
-          onClick={openOnClick ? (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            const rect = event.currentTarget.getBoundingClientRect();
-            event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left, clientY: rect.bottom }));
-          } : undefined}
         />
         <ContextMenuContent aria-label="User actions" finalFocus={trigger}>
           <ContextMenuLabel>{name}{isSelf ? " (you)" : ""}</ContextMenuLabel>
