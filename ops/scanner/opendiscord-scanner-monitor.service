@@ -1,0 +1,9 @@
+[Unit]
+Description=OpenDiscord private scanner operator alert check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/opendiscord-operator-monitor --config /etc/opendiscord-monitor/scanner.json
+TimeoutStartSec=90
+KillMode=control-group
+UMask=0077

@@ -2,6 +2,7 @@
 // - Cloudflare Turnstile on sign-up (allowed app-wide: client-side navigation keeps the CSP of the
 //   page it started from);
 // - the operator's LiveKit server for voice, known only from runtime settings.
+// - Product Hunt's badge image (no third-party scripts).
 // Inline scripts are Next.js bootstrap code; a nonce-based CSP would force every page dynamic.
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -26,7 +27,7 @@ export const CSP = [
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${dev ? " 'unsafe-eval'" : ""} ${TURNSTILE}`,
   `frame-src 'self' ${TURNSTILE}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://api.producthunt.com/widgets/embed-image/",
   "font-src 'self'",
   `connect-src 'self'${liveKitOrigins()}`,
   "worker-src 'self'",

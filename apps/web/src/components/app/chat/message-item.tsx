@@ -5,7 +5,7 @@ import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
 import { CornerUpLeftIcon, FileDownIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useId, useRef, useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
@@ -17,9 +17,10 @@ import { ReportDialog } from "../report-dialog";
 import { nameColor } from "../avatar";
 import { PresenceAvatar } from "../presence-avatar";
 
-import { assetText, assetTokens, assetToken, decodeAssetTokens, encodeAssetShortcodes, type AssetView } from "@/lib/community-assets";
+import { assetText, assetTokens, decodeAssetTokens, encodeAssetShortcodes, type AssetView } from "@/lib/community-assets";
 import { CommunityAssetImage } from "../community-asset-image";
-import { CommunityAssetPicker } from "../community-asset-picker";
+import { EmojiSelector } from "../emoji-selector";
+import { EmojiText } from "../emoji-text";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -29,8 +30,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
-
-export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "👀", "✅"];
 
 /** Renders stored content: the Markdown subset, with `<@id>` tokens as readable, highlighted names. */
 export function MessageContent({ content, mentions, currentUserId, assets = [] }: { content: string; mentions: readonly Mention[]; currentUserId?: string; assets?: readonly AssetView[] }) {
@@ -47,32 +46,6 @@ export function MessageContent({ content, mentions, currentUserId, assets = [] }
     const asset = assets.find((item) => item.id === ref?.id && item.name === ref.name && item.kind === ref.kind);
     return asset ? <CommunityAssetImage key={key} asset={asset} /> : <span key={key}>{assetText(token)}</span>;
   });
-}
-
-function ReactionPicker({ onPick, onClose, channelId }: { channelId: string; onPick: (emoji: string) => void; onClose: () => void }) {
-  return (
-    <div
-      role="group"
-      aria-label="Add a reaction"
-      onKeyDown={(e) => e.key === "Escape" && onClose()}
-      // Inline, not floating: rows use content-visibility, whose paint containment would clip a popover.
-      className="mt-1 flex w-fit flex-wrap gap-0.5 rounded-lg border bg-popover p-1 shadow-lg"
-    >
-      <CommunityAssetPicker channelId={channelId} emojiOnly onPick={(asset) => onPick(assetToken(asset))} />
-      {QUICK_REACTIONS.map((emoji, i) => (
-        <button
-          key={emoji}
-          type="button"
-          autoFocus={i === 0}
-          aria-label={`React with ${emoji}`}
-          onClick={() => onPick(emoji)}
-          className="grid size-8 place-items-center rounded-md text-lg hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          {emoji}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 interface MessageItemProps {
@@ -99,8 +72,6 @@ interface MessageItemProps {
 export function MessageItem(props: MessageItemProps) {
   const { message, currentUserId, blocked, grouped, canEdit, canDelete, canReact, canPin, replyBlocked, onDeleted, onReply, onOpenThread, publicGeneration } = props;
   const [editing, setEditing] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const reactButton = useRef<HTMLButtonElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -131,14 +102,7 @@ export function MessageItem(props: MessageItemProps) {
     });
   }
 
-  function closePicker() {
-    setPicking(false);
-    // The picker unmounts; keep keyboard focus where it was opened.
-    reactButton.current?.focus();
-  }
-
   function react(emoji: string) {
-    closePicker();
     run(() => toggleReaction(message.id, emoji));
   }
 
@@ -274,7 +238,7 @@ export function MessageItem(props: MessageItemProps) {
                     onClick={() => react(r.emoji)}
                     className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ${mine ? "bg-primary/25 text-indigo-100 ring-primary/60" : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"}`}
                   >
-                    <span aria-hidden>{r.asset ? <CommunityAssetImage asset={r.asset} /> : assetText(r.emoji)}</span>
+                    <span aria-hidden>{r.asset ? <CommunityAssetImage asset={r.asset} /> : <EmojiText text={assetText(r.emoji)} />}</span>
                     <span aria-hidden>{r.userIds.length}</span>
                   </button>
                 </li>
@@ -293,7 +257,6 @@ export function MessageItem(props: MessageItemProps) {
             <span className="font-normal text-zinc-400" suppressHydrationWarning>· last {timeFormat.format(new Date(message.thread.lastAt))}</span>
           </button>
         )}
-        {picking && <ReactionPicker channelId={message.channelId} onPick={react} onClose={closePicker} />}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {!editing && (
         <div className="absolute top-0 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
@@ -308,9 +271,8 @@ export function MessageItem(props: MessageItemProps) {
             </Button>
           )}
           {canReact && (
-            <Button ref={reactButton} variant="ghost" size="icon-sm" aria-label="Add reaction" aria-expanded={picking} onClick={() => setPicking((p) => !p)}>
-              <SmilePlusIcon />
-            </Button>
+            <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react}
+              trigger={<Button variant="ghost" size="icon-sm" aria-label="Add reaction" disabled={pending}><SmilePlusIcon /></Button>} />
           )}
           {canPin && (
             <Button

@@ -100,7 +100,7 @@ test("global administration works without 2FA and applies reports and suspension
     await chatter.getByLabel("Email", { exact: true }).fill(chatterEmail);
     await chatter.getByLabel("Password", { exact: true }).fill(password);
     await chatter.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(chatter).toHaveURL(/\/app\/c\//);
+    await expect(chatter).toHaveURL(/\/app$/);
 
     await page.goto("/app/admin?tab=communities");
     await page.getByLabel("Search communities by name").fill(`QA moderation ${suffix}`);

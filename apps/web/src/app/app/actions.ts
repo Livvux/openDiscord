@@ -7,6 +7,7 @@ import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
 import * as trust from "@/server/community-trust";
 import * as communities from "@/server/communities";
+import * as friends from "@/server/friends";
 import * as integrations from "@/server/integrations";
 import { toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
@@ -14,6 +15,7 @@ import * as publicChannels from "@/server/public-channels";
 import * as messages from "@/server/messages";
 import * as moderation from "@/server/moderation";
 import * as presence from "@/server/presence";
+import * as profile from "@/server/profile";
 import { requireUser } from "@/server/session";
 import * as unread from "@/server/unread";
 
@@ -90,6 +92,14 @@ export const updateAutomod = async (communityId: string, rules: { words: string[
   run((u) => automod.updateAutomod(u, communityId, rules));
 
 export const setPresenceVisible = async (visible: boolean) => run((u) => presence.setPresenceVisible(u, visible));
+export const setPresenceStatus = async (choice: string) => run((u) => presence.setPresenceStatus(u, choice));
+export const updateProfile = async (input: { bio: string; customStatus: string }) => run((u) => profile.updateProfile(u, input));
+export const setCustomStatus = async (text: string) => run((u) => profile.setCustomStatus(u, text));
+
+export const sendFriendRequest = async (target: string) => run((u) => friends.sendFriendRequest(u, target));
+export const respondToFriendRequest = async (otherId: string, accept: boolean) => run((u) => friends.respondToFriendRequest(u, otherId, accept));
+export const removeFriend = async (otherId: string) => run((u) => friends.removeFriend(u, otherId));
+export const searchPeople = async (query: string) => run((u) => friends.searchPeople(u, query), false);
 export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
   run((u) => presence.setNotificationLevel(u, communityId, level));
 

@@ -14,7 +14,8 @@
     "auth:schema": "auth generate --config src/lib/auth.ts --output src/db/auth-schema.ts --yes",
     "test:e2e": "playwright test",
     "admin:bootstrap": "tsx --env-file=.env scripts/bootstrap-instance-admin.ts",
-    "maintenance": "tsx scripts/maintenance.ts"
+    "maintenance": "tsx scripts/maintenance.ts",
+    "maintenance:voice": "tsx scripts/voice-maintenance.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -25,6 +26,8 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "drizzle-orm": "0.45.4",
+    "emoji-picker-react": "^5.0.0",
+    "emoji-regex": "^10.6.0",
     "livekit-client": "2.22.4",
     "livekit-server-sdk": "2.19.1",
     "lucide-react": "^1.57.0",
@@ -43,7 +46,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
@@ -51,7 +54,7 @@
     "@types/web-push": "^3.6.4",
     "auth": "1.7.7",
     "drizzle-kit": "0.31.11",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "16.4.0",
     "shadcn": "^4.21.4",
     "tailwindcss": "^4",
