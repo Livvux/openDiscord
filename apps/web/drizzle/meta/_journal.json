@@ -218,6 +218,13 @@
       "when": 1792144989626,
       "tag": "0030_home_friends_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792144989627,
+      "tag": "0031_voice_call_control",
+      "breakpoints": true
     }
   ]
 }
