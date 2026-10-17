@@ -1,0 +1,152 @@
+import type { Messages } from "./en";
+
+export const fr: Messages = {
+  meta: {
+    title: "openDiscord — Les communautés appartiennent à tous",
+    description:
+      "openDiscord est une plateforme communautaire open source. Utilisez opendiscord.app ou faites tourner la même version sur votre propre serveur.",
+  },
+  nav: {
+    primary: "Principal",
+    features: "Fonctionnalités",
+    selfHost: "Auto-héberger",
+    roadmap: "Feuille de route",
+    signIn: "Se connecter",
+    join: "Rejoindre la bêta",
+    language: "Langue",
+  },
+  hero: {
+    badge: "Open source, chaque ligne est lisible",
+    titleStart: "Les communautés appartiennent à",
+    titleAccent: "tous.",
+    lead: "openDiscord est une plateforme communautaire open source. Discutez sur opendiscord.app ou faites tourner exactement la même version sur votre propre serveur. Aucun verrouillage, et le chat de base ne sera jamais payant.",
+    primary: "Créer une communauté",
+    secondary: "L’auto-héberger",
+    trust: ["Sans publicité", "Sans traceurs", "Chat jamais payant"],
+  },
+  mockup: {
+    label: "Aperçu du client openDiscord avec communautés, salons et messages",
+    community: "Salle d’étude",
+    textChannels: "Salons textuels",
+    composer: "Envoyer un message dans #general",
+    typing: "Ife est en train d’écrire…",
+    messages: [
+      "Notre groupe d’étude était prêt en une soirée. Les liens d’invitation ont fait le reste.",
+      "La même version sur ma propre machine. docker compose up et c’était lancé 🚀",
+      "Les motifs d’exclusion et de bannissement arrivent dans le journal d’audit. Nos modos adorent.",
+      "Et exporter mes données, c’est un clic. Comme il se doit.",
+    ],
+  },
+  marquee: {
+    label: "Inclus dans la première version",
+    items: [
+      "Salons textuels", "Voix et vidéo", "Fils", "Rôles", "Exclure et bannir", "Journal d’audit", "Recherche",
+      "Réactions", "Double authentification", "Passkeys", "MP chiffrés", "Export des données", "Webhooks", "API publique",
+    ],
+  },
+  features: {
+    eyebrow: "Open source · De vraies personnes · De meilleures communautés",
+    titleStart: "Tout ce dont une communauté a besoin.",
+    titleAccent: "Rien à louer.",
+    realtime: {
+      title: "En temps réel, mais d’abord enregistré",
+      body: "Chaque message est écrit dans PostgreSQL avant que quiconque ne le voie. Après une coupure, le client rattrape son retard depuis la base de données.",
+      stages: ["Message", "PostgreSQL", "Tout le monde"],
+    },
+    invite: {
+      title: "Sur invitation par défaut",
+      body: "Les personnes extérieures ne peuvent ni lire, ni s’abonner, ni même découvrir une communauté. Le serveur applique cette règle et des tests la couvrent.",
+    },
+    moderation: {
+      title: "Modération intégrée",
+      body: "Des rôles avec une hiérarchie claire, exclusions et bannissements motivés, un journal d’audit et des limites de débit dès le premier jour.",
+      log: ["a banni spam-bot", "a modifié le rôle d’Ife", "a supprimé un message"],
+    },
+    data: {
+      title: "Vos données, votre choix",
+      body: "Exportez tout ce que vous avez écrit ou supprimez votre compte en un clic. Pas de dark patterns, pas de pistage publicitaire.",
+      export: "Exporter mes données",
+    },
+    encryption: {
+      title: "Honnêtes sur le chiffrement",
+      body: "Les messages privés sont chiffrés de bout en bout entre appareils vérifiés. Le texte et la voix des communautés ne le sont pas. L’intégration n’a pas encore fait l’objet d’un audit de sécurité indépendant.",
+      dms: "Messages privés",
+      community: "Salons de communauté",
+      yes: "De bout en bout",
+      no: "Côté serveur",
+    },
+  },
+  stats: [
+    { value: "AGPL-3.0", label: "Chaque ligne est publique" },
+    { value: "0", label: "Traceur publicitaire" },
+    { value: "1", label: "Fichier compose pour s’auto-héberger" },
+    { value: "0 €", label: "Pour le chat de base, pour toujours" },
+  ],
+  selfHost: {
+    eyebrow: "Auto-héberger",
+    titleStart: "Un seul fichier compose.",
+    titleAccent: "Votre serveur. Vos règles.",
+    lead: "L’instance officielle et la vôtre utilisent la même image. Pointez un domaine vers un petit VPS, définissez deux secrets et vous avez un serveur communautaire avec des sauvegardes que vous maîtrisez.",
+    principles: [
+      { title: "Aucune dépendance envers nous", body: "Une instance auto-hébergée ne contacte jamais la maison mère : pas de connexion partagée, pas de compte de paiement, pas besoin de Cloudflare." },
+      { title: "Le même cœur partout", body: "opendiscord.app fait tourner la version publique. L’hébergement est un confort, pas un verrou de fonctionnalités." },
+      { title: "L’argent n’achète pas de pouvoirs de modération", body: "Le parrainage finance le développement et les serveurs. Il n’accorde jamais de droits au sein d’une communauté." },
+    ],
+    services: [
+      { name: "postgres", desc: "La source de vérité de chaque message" },
+      { name: "migrate", desc: "Applique les changements de schéma, puis s’arrête" },
+      { name: "web", desc: "App Next.js, API et authentification" },
+      { name: "caddy", desc: "HTTPS automatique pour votre domaine" },
+    ],
+    panelLabel: "Façons de faire tourner openDiscord",
+    tabSelfHost: "Auto-hébergé",
+    tabHosted: "Hébergé",
+    envNote: "# définir DOMAIN + secrets",
+    running: "en marche",
+    hosted: {
+      account: "Créez un compte sur opendiscord.app",
+      community: "Fondez une communauté",
+      communityNote: "# salons, rôles, invitations",
+      invite: "Partagez un lien d’invitation",
+      same: "La même version open source",
+      sameNote: "aucun verrouillage",
+      move: "Passez sur votre propre serveur à tout moment",
+    },
+  },
+  roadmap: {
+    eyebrow: "Construit au grand jour",
+    titleStart: "Une première version modeste.",
+    titleAccent: "Une feuille de route publique.",
+    stages: [
+      {
+        label: "Maintenant",
+        title: "Alpha fermée",
+        items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP chiffrés avec vérification des appareils", "Recours, règles et durées de conservation"],
+      },
+      {
+        label: "Ensuite",
+        title: "Plus proches",
+        items: ["Chiffrement de la voix et TURN", "Audit de sécurité indépendant", "Validation sur appareils physiques", "Peaufiner l’auto-hébergement"],
+      },
+      {
+        label: "Plus tard",
+        title: "La voix et au-delà",
+        items: ["Emojis et stickers personnalisés", "Applications natives", "Salons publics optionnels", "Découverte de communautés"],
+      },
+    ],
+  },
+  footer: {
+    titleStart: "Ramenez votre communauté",
+    titleAccent: "à la maison.",
+    lead: "Rejoignez la bêta sur invitation, ou découvrez ce que coûte le fonctionnement de l’instance hébergée.",
+    join: "Rejoindre la bêta",
+    funding: "Financement et coûts de fonctionnement",
+    tagline: "Esprits ouverts. Plus brillants ensemble.",
+    nav: "Pied de page",
+    discover: "Découvrir les salons publics",
+    privacy: "Confidentialité",
+    terms: "Conditions",
+    imprint: "Mentions légales",
+    signIn: "Se connecter",
+  },
+};
