@@ -81,14 +81,16 @@ test("configured KLIPY and GIPHY providers can send a GIF through the channel co
   await expect(trigger).toBeVisible();
 
   await trigger.click();
-  await expect(page.getByRole("button", { name: "Select GIF" })).toBeVisible();
-  await page.getByRole("button", { name: "Select GIF" }).click();
+  // The picker opens on categories; trending results need one click.
+  await page.getByRole("button", { name: "Trending GIFs" }).click();
+  await page.getByRole("button", { name: "Select GIF" }).first().click();
   await expect(page.getByRole("button", { name: "Load GIF from KLIPY" })).toBeVisible();
 
   await trigger.click();
   await page.getByRole("button", { name: "GIPHY", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Select GIF" })).toBeVisible();
-  await page.getByRole("button", { name: "Select GIF" }).click();
+  // The picker opens on categories; trending results need one click.
+  await page.getByRole("button", { name: "Trending GIFs" }).click();
+  await page.getByRole("button", { name: "Select GIF" }).first().click();
   await expect(page.getByRole("button", { name: "Load GIF from GIPHY" })).toBeVisible();
   await page.context().close();
 });
