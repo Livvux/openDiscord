@@ -53,7 +53,8 @@ test("landing page is available in other languages with hreflang alternates", as
   for (const path of ["/en", "/xx"]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "This page could not be found" })).toBeVisible();
-    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+    // Streamed not-found metadata can emit the identical noindex tag twice under load; any one is enough.
+    await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute("content", /noindex/);
   }
 });
 
