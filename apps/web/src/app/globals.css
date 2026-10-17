@@ -22,6 +22,16 @@ html {
   --color-brand-mist: #e2e8f0;
   --color-brand-surface: #f8fafc;
   --color-brand-online: #31cb88;
+
+  /* Marketing surface: near-white canvas, near-black ink, one dark panel tone. No gradients. */
+  --color-canvas: oklch(0.985 0.003 95);
+  --color-ink: oklch(0.18 0.012 265);
+  --color-ink-muted: oklch(0.46 0.012 265);
+  --color-line: oklch(0.9 0.005 265);
+  --color-dark: oklch(0.2 0.008 265);
+  --color-dark-raised: oklch(0.27 0.008 265);
+  --color-dark-line: oklch(1 0 0 / 0.14);
+  --color-dark-muted: oklch(0.78 0.01 265);
 }
 
 @theme inline {
@@ -71,10 +81,7 @@ html {
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(16px); filter: blur(6px); }
-}
-@keyframes marquee {
-  to { transform: translateX(-50%); }
+  from { opacity: 0; transform: translateY(12px); }
 }
 
 /* Inline text links: indigo-300 on charcoal (≥ 9:1), underlined so they don't rely on colour. */
@@ -87,68 +94,9 @@ html {
   }
 }
 
+/* One staggered load-in for the hero; later sections are static. */
 @utility animate-rise {
-  animation: rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-}
-@utility animate-marquee {
-  animation: marquee 40s linear infinite;
-}
-/* Scroll-driven reveal; browsers without support simply show the content. */
-@utility reveal {
-  @supports (animation-timeline: view()) {
-    animation: rise linear both;
-    animation-timeline: view();
-    animation-range: entry 0% cover 25%;
-  }
-}
-
-/* Landing page: italic serif accent words with a mint→cyan sheen. */
-@utility accent {
-  font-family: var(--font-serif), Georgia, serif;
-  font-style: italic;
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  padding-right: 0.08em;
-  color: var(--color-brand-mint);
-  @supports (background-clip: text) {
-    background: linear-gradient(100deg, #49ddc0 10%, #06b6d4 55%, #a5b4fc 95%);
-    background-clip: text;
-    color: transparent;
-  }
-}
-@keyframes drift {
-  50% { transform: translate3d(2%, -3%, 0) rotate(8deg) scale(1.04); }
-}
-@keyframes flow-x {
-  50% { left: calc(100% - 3.5rem); }
-}
-@keyframes ping-soft {
-  75%, 100% { transform: scale(2.4); opacity: 0; }
-}
-/* The product shot leans back and straightens as it scrolls into view. */
-@keyframes stand-up {
-  from { transform: perspective(1600px) rotateX(18deg) scale(0.94); }
-  to { transform: perspective(1600px) rotateX(0deg) scale(1); }
-}
-@utility animate-drift {
-  animation: drift 18s ease-in-out infinite;
-}
-@utility animate-ping-soft {
-  animation: ping-soft 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-@utility stand-up {
-  @supports (animation-timeline: view()) {
-    animation: stand-up linear both;
-    animation-timeline: view();
-    animation-range: entry 0% cover 45%;
-  }
-}
-/* Film grain over the dark canvas, so large gradients never band. */
-@utility grain {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
-  opacity: 0.06;
-  mix-blend-mode: overlay;
-  pointer-events: none;
+  animation: rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -191,9 +139,8 @@ html {
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* App theme, matching the client preview on the landing page (app-mockup.tsx):
-   charcoal canvas, darker community rail, faint channel panel, white/5 hairlines, indigo active state.
-   Secondary text uses zinc-400 instead of the preview's zinc-500/600 to meet WCAG AA contrast. */
+/* App theme: charcoal canvas, darker community rail, faint channel panel, white/5 hairlines, indigo active state.
+   Secondary text uses zinc-400 to meet WCAG AA contrast. */
 .dark {
   color-scheme: dark;
   --background: var(--color-brand-charcoal);
