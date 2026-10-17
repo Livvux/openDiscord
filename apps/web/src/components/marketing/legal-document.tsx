@@ -2,6 +2,8 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Logo } from "@/components/logo";
 import { Footer } from "@/components/marketing/footer";
+import { MarketingShell } from "@/components/marketing/shell";
+import { container } from "@/components/marketing/ui";
 import { REGISTRATION_POLICY_VERSION } from "@/lib/registration-policy";
 import { GITHUB_URL } from "@/lib/site";
 import { getMinimumAge, getOperatorDetails, isOfficialInstance } from "@/server/operator-policy";
@@ -14,11 +16,11 @@ export async function LegalDocument({ kind }: { kind: LegalDocumentKind }) {
   const operator = getOperatorDetails();
   const minimumAge = getMinimumAge();
   const official = isOfficialInstance();
-  return <>
-    <header className="border-b border-white/10"><div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-5"><Logo /><Link href="/" className="link text-sm">Back to home</Link></div></header>
+  return <MarketingShell>
+    <header className="border-b border-line"><div className={`${container} flex h-16 items-center justify-between gap-6`}><Logo tone="light" /><Link href="/" className="text-sm text-ink-muted underline underline-offset-4 hover:text-ink">Back to home</Link></div></header>
     <main className="mx-auto w-full max-w-3xl px-6 py-16">
       <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{titles[kind]}</h1>
-      <p className="mt-4 text-sm text-muted-foreground">Updated 15 October 2026 · Policy version {REGISTRATION_POLICY_VERSION}</p>
+      <p className="mt-4 text-sm text-ink-muted">Updated 15 October 2026 · Policy version {REGISTRATION_POLICY_VERSION}</p>
       <div className="mt-10 space-y-8 text-base leading-relaxed [&_h2]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold [&_p+p]:mt-3 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6 [&_a]:underline [&_a]:underline-offset-4">
         {kind === "imprint" && <>
           <section><h2>Service provider</h2>{operator ? <address className="whitespace-pre-line not-italic">{operator.name}{"\n"}{operator.address}{"\n"}{operator.country}{"\n"}<a href={`mailto:${operator.email}`}>{operator.email}</a></address> : <p>This instance has not configured public operator details. Contact your instance administrator.</p>}</section>
@@ -55,5 +57,5 @@ export async function LegalDocument({ kind }: { kind: LegalDocumentKind }) {
       </div>
     </main>
     <Footer />
-  </>;
+  </MarketingShell>;
 }

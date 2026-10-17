@@ -7,7 +7,13 @@ test("landing page renders without errors and links to sign-up", async ({ page }
 
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Communities belong to everyone.");
-  await expect(page.getByRole("img", { name: /Preview of the opendiscord chat client/ })).toBeVisible();
+  await expect(page.getByLabel(/Preview of the opendiscord chat client/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Play|Pause) video$/ }).first()).toBeVisible();
+
+  // The feature tour: picking an item switches to its recording.
+  await page.getByRole("button", { name: "Invite-only by default" }).click();
+  await expect(page.getByRole("button", { name: "Invite-only by default" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Threads that keep channels readable" })).toHaveAttribute("aria-pressed", "false");
 
   // Tabs in the install panel swap content.
   await page.getByRole("tab", { name: "Hosted" }).click();
@@ -47,7 +53,8 @@ test("landing page is available in other languages with hreflang alternates", as
   for (const path of ["/en", "/xx"]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "This page could not be found" })).toBeVisible();
-    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+    // Streamed not-found metadata can emit the identical noindex tag twice under load; any one is enough.
+    await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute("content", /noindex/);
   }
 });
 
