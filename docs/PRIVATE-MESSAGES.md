@@ -12,10 +12,15 @@ Megolm protects conversation events. Public account cross-signing and device key
 application server. Device credentials authenticate uploads and mailbox access but are **not** the
 E2EE keys; knowing a server API credential cannot decrypt message ciphertext.
 
-Compare all three SAS numbers over a separate authenticated channel. Clicking the confirmation
-means the numbers matched on both devices. Unknown devices prevent sending; no automatic local trust
-or plaintext fallback is available. A new peer device needs either a trusted cross-signing identity or
-fresh SAS verification. Revocation removes public device availability, prekeys and pending mailbox data.
+Friends open a conversation directly; other people get a message request first. Each browser sets up
+its encryption device on the first visit to Home, so it can receive messages before opening them.
+Contacts are **trusted on first use**: the SDK pins a peer's cross-signing identity when it first sees
+it, and a peer device is accepted when that identity signed it (identity-based key sharing, lax shield).
+If the pinned identity changes, sending and reading stop until the contact is verified again. This
+protects against a later swap of keys, not against a server that substitutes keys before first contact.
+To rule that out, compare all three SAS numbers over a separate authenticated channel in **Devices and
+recovery**; clicking the confirmation means the numbers matched on both devices. There is no plaintext
+fallback. Unsigned devices, and unverified devices on your own account, never receive keys. Revocation removes public device availability, prekeys and pending mailbox data.
 The sender queries the roster before sending and rotates the outbound group session when it changes.
 Revocation cannot revoke secrets or plaintext already delivered to a device, and does not cancel a
 message already encrypted in an in-flight browser operation.
