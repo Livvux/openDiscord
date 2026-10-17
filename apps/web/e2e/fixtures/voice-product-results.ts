@@ -13,7 +13,7 @@ export function classifyVoiceProductConsole(text: string, location: string, page
   } catch { /* Missing console locations remain unclassified. */ }
   const code = /^DataChannel error on (?:lossy|reliable):/.test(text) ? "data-channel-error"
     : /^Unknown DataChannel error on (?:lossy|reliable)/.test(text) ? "data-channel-unknown"
-    : /^publisher data channel '(?:LOSSY|RELIABLE)' closed unexpectedly/.test(text) ? "data-channel-closed"
+    : /^publisher data channel '(?:LOSSY|RELIABLE|DATA_TRACK_LOSSY)' closed unexpectedly/.test(text) ? "data-channel-closed"
     : /^error sending signal message/.test(text) ? "signal-send"
     : /^cannot send signal request before connected, type:/.test(text) ? "signal-unconnected"
     : /^error reading from signal stream/.test(text) ? "signal-read"
@@ -28,16 +28,6 @@ export function classifyVoiceProductConsole(text: string, location: string, page
     : /^(?:NotFoundError: )?Failed to execute 'removeChild'/.test(text) ? "dom-removal"
     : /Minified React error #\d+/.test(text) ? "react"
     : /^(?:AbortError: )?The play\(\) request was interrupted/.test(text) ? "playback-interrupted"
-    // Remaining livekit-client 2.22 error-log prefixes and E2EE worker forwards ("<CryptorErrorReason>: …"): only the fixed code leaves, never the text.
-    : /^could not get (?:audio|video) sender stats$/.test(text) ? "sender-stats"
-    : /^MissingKey: /.test(text) ? "cryptor-missing-key"
-    : /^InvalidKey: /.test(text) ? "cryptor-invalid-key"
-    : /^(?:InternalError|undefined): /.test(text) ? "cryptor-internal"
-    : /^could not update mute status for unpublished track$/.test(text) ? "unpublished-mute"
-    : /^failed to negotiate after removing track due to failed add track request$/.test(text) ? "renegotiation"
-    : /^(?:Response|Ack) received for unexpected RPC request/.test(text) ? "rpc-unexpected"
-    : /^failed to play processor element$|^Failed to set sink id on remote audio track$|^could not determine track dimensions, using defaults$/.test(text) ? "track-playback"
-    : /^error sending preconnect buffer$|^error trying to re-publish tracks after reconnection$|^failed to set performance optimised encodings$/.test(text) ? "track-publication"
     : /^Encryption downgrade refused|^Unadmitted media identity|^Native encryption worker failed|^e2ee worker encountered an error:|^failed to set up transform|^error while encrypting|^DataCryptor decryption failed|^could not re-establish transform/.test(text) ? "worker"
     : "other";
   return { kind: status ? "http-resource" as const : "other" as const, status: status ? Number(status[1]) : null, endpoint, code };
