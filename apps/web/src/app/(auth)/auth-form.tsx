@@ -33,7 +33,7 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [needsSecondFactor, setNeedsSecondFactor] = useState(false);
-  const [awaitingApproval, setAwaitingApproval] = useState(false);
+  const [awaitingApproval, setAwaitingApproval] = useState(() => params.get("error") === "pending");
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [captchaKey, setCaptchaKey] = useState(0);
   const isSignUp = mode === "sign-up";
@@ -71,7 +71,7 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
       setCaptchaToken(null);
       setCaptchaKey((k) => k + 1);
     }
-    if (isSignUp && error?.code === "ACCOUNT_PENDING") {
+    if (error?.code === "ACCOUNT_PENDING") {
       setAwaitingApproval(true);
       return;
     }
@@ -107,7 +107,8 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
   async function signInWithPasskey() {
     setError(null);
     const result = await authClient.signIn.passkey();
-    if (result?.error) setError(result.error.message ?? "Passkey sign-in failed.");
+    if (result?.error?.code === "ACCOUNT_PENDING") setAwaitingApproval(true);
+    else if (result?.error) setError(result.error.message ?? "Passkey sign-in failed.");
     else done();
   }
 
@@ -118,9 +119,9 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
       <AuthCard title="You're on the list" description={<span role="status">Your account is waiting for approval.</span>}>
         <p className="text-zinc-300">
           This instance is in Closed Alpha. An administrator reviews new accounts; once yours is approved, sign in
-          with the email and password you just used.
+          with your email and password.
         </p>
-        <Link href="/sign-in" className="link mt-4 inline-block">Back to sign in</Link>
+        <Link href={`/sign-in${nextQuery}`} onClick={() => { setAwaitingApproval(false); setError(null); }} className="link mt-4 inline-block">Back to sign in</Link>
       </AuthCard>
     );
   }
