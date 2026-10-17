@@ -284,7 +284,7 @@ test.describe("context menus", () => {
       await ownerMenu.getByRole("menuitem", { name: "Block", exact: true }).click();
       await expect(friend).toHaveCount(0);
       await owner.goto(channelUrl);
-      await expect(owner.getByText("Message from a blocked person.")).toBeVisible();
+      await expect(owner.getByRole("log").getByText("Message from a blocked person.")).toBeVisible();
       await expect(owner.getByRole("log").getByText("A friend's message to hide after blocking")).toHaveCount(0);
       await member.goto(channelUrl);
       await expect(messageRow(member, "A friend's message to hide after blocking")).toBeVisible();
