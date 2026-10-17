@@ -7,7 +7,13 @@ test("landing page renders without errors and links to sign-up", async ({ page }
 
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Communities belong to everyone.");
-  await expect(page.getByRole("img", { name: /Preview of the opendiscord chat client/ })).toBeVisible();
+  await expect(page.getByLabel(/Preview of the opendiscord chat client/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Play|Pause) video$/ }).first()).toBeVisible();
+
+  // The feature tour: picking an item switches to its recording.
+  await page.getByRole("button", { name: "Invite-only by default" }).click();
+  await expect(page.getByRole("button", { name: "Invite-only by default" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Threads that keep channels readable" })).toHaveAttribute("aria-pressed", "false");
 
   // Tabs in the install panel swap content.
   await page.getByRole("tab", { name: "Hosted" }).click();
