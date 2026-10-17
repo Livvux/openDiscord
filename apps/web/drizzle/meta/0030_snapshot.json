@@ -1,5 +1,5 @@
 {
-  "id": "4d5812a2-d2c9-4ef0-a30f-ac0da58eed28",
+  "id": "d5e02d97-e942-4a1f-b5f4-8f932b65d662",
   "prevId": "b36c1827-b7b5-4ccc-8edb-96cf953a5ddf",
   "version": "7",
   "dialect": "postgresql",
@@ -1785,6 +1785,120 @@
       },
       "isRLSEnabled": false
     },
+    "public.friendship": {
+      "name": "friendship",
+      "schema": "",
+      "columns": {
+        "first_id": {
+          "name": "first_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "second_id": {
+          "name": "second_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by": {
+          "name": "requested_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "friendship_second_idx": {
+          "name": "friendship_second_idx",
+          "columns": [
+            {
+              "expression": "second_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "friendship_first_id_user_id_fk": {
+          "name": "friendship_first_id_user_id_fk",
+          "tableFrom": "friendship",
+          "tableTo": "user",
+          "columnsFrom": [
+            "first_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "friendship_second_id_user_id_fk": {
+          "name": "friendship_second_id_user_id_fk",
+          "tableFrom": "friendship",
+          "tableTo": "user",
+          "columnsFrom": [
+            "second_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "friendship_requested_by_user_id_fk": {
+          "name": "friendship_requested_by_user_id_fk",
+          "tableFrom": "friendship",
+          "tableTo": "user",
+          "columnsFrom": [
+            "requested_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "friendship_first_id_second_id_pk": {
+          "name": "friendship_first_id_second_id_pk",
+          "columns": [
+            "first_id",
+            "second_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "friendship_ordered": {
+          "name": "friendship_ordered",
+          "value": "\"friendship\".\"first_id\" collate \"C\" < \"friendship\".\"second_id\" collate \"C\""
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.integration": {
       "name": "integration",
       "schema": "",
@@ -3145,6 +3259,13 @@
           "notNull": true,
           "default": false
         },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'online'"
+        },
         "last_seen_at": {
           "name": "last_seen_at",
           "type": "timestamp with time zone",
@@ -3172,6 +3293,58 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.user_profile": {
+      "name": "user_profile",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "bio": {
+          "name": "bio",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "custom_status": {
+          "name": "custom_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "user_profile_user_id_user_id_fk": {
+          "name": "user_profile_user_id_user_id_fk",
+          "tableFrom": "user_profile",
+          "tableTo": "user",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "user_profile_length": {
+          "name": "user_profile_length",
+          "value": "char_length(\"user_profile\".\"bio\") <= 190 and char_length(\"user_profile\".\"custom_status\") <= 80"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.abuse_report": {
@@ -4614,897 +4787,6 @@
           "columns": [
             "signer_id",
             "target_id",
-            "key_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.voice_call": {
-      "name": "voice_call",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "channel_id": {
-          "name": "channel_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "closed_at": {
-          "name": "closed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "voice_call_active_channel_idx": {
-          "name": "voice_call_active_channel_idx",
-          "columns": [
-            {
-              "expression": "channel_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"voice_call\".\"status\" = 'active'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_call_channel_idx": {
-          "name": "voice_call_channel_idx",
-          "columns": [
-            {
-              "expression": "channel_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "voice_call_channel_id_channel_id_fk": {
-          "name": "voice_call_channel_id_channel_id_fk",
-          "tableFrom": "voice_call",
-          "tableTo": "channel",
-          "columnsFrom": [
-            "channel_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "voice_call_generation_positive": {
-          "name": "voice_call_generation_positive",
-          "value": "\"voice_call\".\"generation\" > 0"
-        },
-        "voice_call_status": {
-          "name": "voice_call_status",
-          "value": "(\"voice_call\".\"status\" = 'active' and \"voice_call\".\"closed_at\" is null) or (\"voice_call\".\"status\" = 'closed' and \"voice_call\".\"closed_at\" is not null)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.voice_call_member": {
-      "name": "voice_call_member",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "call_id": {
-          "name": "call_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "anchor_device_id": {
-          "name": "anchor_device_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "join_nonce": {
-          "name": "join_nonce",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "voice_user_id": {
-          "name": "voice_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "voice_device_id": {
-          "name": "voice_device_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enrollment_secret_hash": {
-          "name": "enrollment_secret_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'waiting'"
-        },
-        "lease_expires_at": {
-          "name": "lease_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivered_cursor": {
-          "name": "delivered_cursor",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "left_at": {
-          "name": "left_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "voice_member_live_anchor_idx": {
-          "name": "voice_member_live_anchor_idx",
-          "columns": [
-            {
-              "expression": "call_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "anchor_device_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"voice_call_member\".\"state\" <> 'left'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_nonce_idx": {
-          "name": "voice_member_nonce_idx",
-          "columns": [
-            {
-              "expression": "call_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "join_nonce",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_device_idx": {
-          "name": "voice_member_device_idx",
-          "columns": [
-            {
-              "expression": "call_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "voice_device_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_user_idx": {
-          "name": "voice_member_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_session_idx": {
-          "name": "voice_member_session_idx",
-          "columns": [
-            {
-              "expression": "session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_anchor_idx": {
-          "name": "voice_member_anchor_idx",
-          "columns": [
-            {
-              "expression": "anchor_device_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_member_lease_idx": {
-          "name": "voice_member_lease_idx",
-          "columns": [
-            {
-              "expression": "call_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "state",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "lease_expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "voice_call_member_call_id_voice_call_id_fk": {
-          "name": "voice_call_member_call_id_voice_call_id_fk",
-          "tableFrom": "voice_call_member",
-          "tableTo": "voice_call",
-          "columnsFrom": [
-            "call_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_call_member_user_id_user_id_fk": {
-          "name": "voice_call_member_user_id_user_id_fk",
-          "tableFrom": "voice_call_member",
-          "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_call_member_anchor_device_id_dm_device_id_fk": {
-          "name": "voice_call_member_anchor_device_id_dm_device_id_fk",
-          "tableFrom": "voice_call_member",
-          "tableTo": "dm_device",
-          "columnsFrom": [
-            "anchor_device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_call_member_session_id_session_id_fk": {
-          "name": "voice_call_member_session_id_session_id_fk",
-          "tableFrom": "voice_call_member",
-          "tableTo": "session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "voice_call_member_voice_user_id_unique": {
-          "name": "voice_call_member_voice_user_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "voice_user_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "voice_member_state": {
-          "name": "voice_member_state",
-          "value": "(\"voice_call_member\".\"state\" in ('waiting', 'active') and \"voice_call_member\".\"left_at\" is null) or (\"voice_call_member\".\"state\" = 'left' and \"voice_call_member\".\"left_at\" is not null)"
-        },
-        "voice_member_cursor": {
-          "name": "voice_member_cursor",
-          "value": "\"voice_call_member\".\"delivered_cursor\" >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.voice_control_mailbox": {
-      "name": "voice_control_mailbox",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigint",
-          "primaryKey": true,
-          "notNull": true,
-          "identity": {
-            "type": "always",
-            "name": "voice_control_mailbox_id_seq",
-            "schema": "public",
-            "increment": "1",
-            "startWith": "1",
-            "minValue": "1",
-            "maxValue": "9223372036854775807",
-            "cache": "1",
-            "cycle": false
-          }
-        },
-        "call_id": {
-          "name": "call_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sender_member_id": {
-          "name": "sender_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "recipient_member_id": {
-          "name": "recipient_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "event": {
-          "name": "event",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "voice_mailbox_recipient_idx": {
-          "name": "voice_mailbox_recipient_idx",
-          "columns": [
-            {
-              "expression": "recipient_member_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_mailbox_call_idx": {
-          "name": "voice_mailbox_call_idx",
-          "columns": [
-            {
-              "expression": "call_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_mailbox_sender_idx": {
-          "name": "voice_mailbox_sender_idx",
-          "columns": [
-            {
-              "expression": "sender_member_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "voice_mailbox_expiry_idx": {
-          "name": "voice_mailbox_expiry_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "voice_control_mailbox_call_id_voice_call_id_fk": {
-          "name": "voice_control_mailbox_call_id_voice_call_id_fk",
-          "tableFrom": "voice_control_mailbox",
-          "tableTo": "voice_call",
-          "columnsFrom": [
-            "call_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_control_mailbox_sender_member_id_voice_call_member_id_fk": {
-          "name": "voice_control_mailbox_sender_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_control_mailbox",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "sender_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_control_mailbox_recipient_member_id_voice_call_member_id_fk": {
-          "name": "voice_control_mailbox_recipient_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_control_mailbox",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "recipient_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "voice_mailbox_generation_positive": {
-          "name": "voice_mailbox_generation_positive",
-          "value": "\"voice_control_mailbox\".\"generation\" > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.voice_control_receipt": {
-      "name": "voice_control_receipt",
-      "schema": "",
-      "columns": {
-        "sender_member_id": {
-          "name": "sender_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "request_id": {
-          "name": "request_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "digest": {
-          "name": "digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "response": {
-          "name": "response",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "voice_receipt_expiry_idx": {
-          "name": "voice_receipt_expiry_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "voice_control_receipt_sender_member_id_voice_call_member_id_fk": {
-          "name": "voice_control_receipt_sender_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_control_receipt",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "sender_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "voice_control_receipt_sender_member_id_request_id_pk": {
-          "name": "voice_control_receipt_sender_member_id_request_id_pk",
-          "columns": [
-            "sender_member_id",
-            "request_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.voice_identity": {
-      "name": "voice_identity",
-      "schema": "",
-      "columns": {
-        "member_id": {
-          "name": "member_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "device_keys": {
-          "name": "device_keys",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cross_signing_keys": {
-          "name": "cross_signing_keys",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "voice_identity_member_id_voice_call_member_id_fk": {
-          "name": "voice_identity_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_identity",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.voice_prekey": {
-      "name": "voice_prekey",
-      "schema": "",
-      "columns": {
-        "member_id": {
-          "name": "member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_id": {
-          "name": "key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "fallback": {
-          "name": "fallback",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "used": {
-          "name": "used",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "retired": {
-          "name": "retired",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "content": {
-          "name": "content",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "voice_prekey_member_id_voice_call_member_id_fk": {
-          "name": "voice_prekey_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_prekey",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "voice_prekey_member_id_key_id_fallback_pk": {
-          "name": "voice_prekey_member_id_key_id_fallback_pk",
-          "columns": [
-            "member_id",
-            "key_id",
-            "fallback"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.voice_signature": {
-      "name": "voice_signature",
-      "schema": "",
-      "columns": {
-        "signer_member_id": {
-          "name": "signer_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_member_id": {
-          "name": "target_member_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_id": {
-          "name": "key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "signatures": {
-          "name": "signatures",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "voice_signature_target_idx": {
-          "name": "voice_signature_target_idx",
-          "columns": [
-            {
-              "expression": "target_member_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "voice_signature_signer_member_id_voice_call_member_id_fk": {
-          "name": "voice_signature_signer_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_signature",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "signer_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "voice_signature_target_member_id_voice_call_member_id_fk": {
-          "name": "voice_signature_target_member_id_voice_call_member_id_fk",
-          "tableFrom": "voice_signature",
-          "tableTo": "voice_call_member",
-          "columnsFrom": [
-            "target_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "voice_signature_signer_member_id_target_member_id_key_id_pk": {
-          "name": "voice_signature_signer_member_id_target_member_id_key_id_pk",
-          "columns": [
-            "signer_member_id",
-            "target_member_id",
             "key_id"
           ]
         }

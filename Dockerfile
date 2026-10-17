@@ -1,5 +1,8 @@
-FROM node:22-alpine AS base
-RUN corepack enable
+FROM node:25-alpine AS base
+# The image bundles Yarn launchers that conflict with Corepack's shims.
+RUN rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && npm install --global corepack@0.34.5 \
+    && corepack enable
 WORKDIR /repo
 
 FROM base AS build
@@ -13,7 +16,7 @@ RUN pnpm --filter web build
 FROM build AS migrate
 CMD ["pnpm", "--filter", "web", "db:migrate"]
 
-FROM node:22-alpine AS web
+FROM node:25-alpine AS web
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app

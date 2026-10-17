@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoA11yViolations } from "./helpers";
+import { expectNoA11yViolations, openAccountSettings } from "./helpers";
 
 test("protected app redirects anonymous visitors to sign-in", async ({ page }) => {
   await page.goto("/app");
@@ -23,7 +23,7 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: "Welcome, E2E Tester" })).toBeVisible();
 
-  await page.getByRole("link", { name: /Account settings/ }).click();
+  await openAccountSettings(page);
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/sign-in$/);
 
