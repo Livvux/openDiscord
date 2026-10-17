@@ -107,7 +107,7 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
   async function signInWithPasskey() {
     setError(null);
     const result = await authClient.signIn.passkey();
-    if (result?.error?.code === "ACCOUNT_PENDING") setAwaitingApproval(true);
+    if (result?.error && "code" in result.error && result.error.code === "ACCOUNT_PENDING") setAwaitingApproval(true);
     else if (result?.error) setError(result.error.message ?? "Passkey sign-in failed.");
     else done();
   }
