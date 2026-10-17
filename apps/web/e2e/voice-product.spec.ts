@@ -98,7 +98,7 @@ test.describe("genuine Next product encrypted Voice", () => {
     const memberIds = new Map<Page, string>();
     let observationFailed = false, observing = true, commitsClosed = false, primaryFailure = false;
     const stopResponseObservers: (() => void)[] = [];
-    const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed" }[] = [];
+    const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed"; status?: number; bodyError?: string }[] = [];
     const pairCandidates: RequestSelection[] = [];
     const phaseCheckpoints: Partial<Record<VoiceProductCheckpoint, VoiceProductObservation<Awaited<ReturnType<typeof presentation>>>[]>> = {};
     let leaderRetryDispatched = false;
@@ -148,16 +148,17 @@ test.describe("genuine Next product encrypted Voice", () => {
           observation.push(work); return;
         }
         if (body.action !== "token") return;
+        let bodyError = "";
         const work = observeVoiceProductResult(async checkpoint => {
           if (response.status() !== 200) throw new Error("Product token grant failed.");
-          const raw: unknown = await response.json(); checkpoint("verify");
+          const raw: unknown = await response.json().catch((error: Error) => { bodyError = error.message.slice(0, 200); throw error; }); checkpoint("verify");
           if (!raw || typeof raw !== "object" || !("token" in raw) || typeof raw.token !== "string" || !("sources" in raw) || !strings(raw.sources) || !("participantIdentity" in raw) || !("roomName" in raw)) throw new Error("Invalid product token response.");
           const claims = await verifier.verify(raw.token, 0); checkpoint("result");
           const sources: unknown = claims.video?.canPublishSources ?? [];
           if (claims.sub !== raw.participantIdentity || claims.video?.room !== raw.roomName || !strings(sources) || JSON.stringify(sources) !== JSON.stringify(raw.sources) || typeof claims.exp !== "number") throw new Error("Actual product grant binding mismatch.");
           return Object.freeze({ page: index, sources: [...sources], publish: claims.video?.canPublish === true, subscribe: claims.video?.canSubscribe === true, expiry: claims.exp * 1000 });
         }).then(result => {
-          if (!result.ok) { observationFailed = true; observationFailures.push({ page: index, action: "token", stage: result.stage, reason: result.reason }); }
+          if (!result.ok) { observationFailed = true; observationFailures.push({ page: index, action: "token", stage: result.stage, reason: result.reason, status: response.status(), bodyError }); }
           else if (!commitsClosed) grants.push(result.value);
         });
         observation.push(work);
@@ -310,7 +311,9 @@ test.describe("genuine Next product encrypted Voice", () => {
         await expect.poll(async () => (await evidence(page)).allTerminated).toBe(true);
       }
       await Promise.all(consoleObservations);
-      expect(runtimeErrors).toEqual([]); expect(consoleErrors).toEqual([]);
+      // The SFU removes revoked peers itself; SCTP cause 12 (user-initiated abort) is that removal, not a product fault.
+      const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && part.cause === 12)));
+      expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
     } catch (error) {
