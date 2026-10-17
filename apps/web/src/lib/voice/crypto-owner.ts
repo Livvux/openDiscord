@@ -3,6 +3,7 @@ import { z } from "zod";
 import { VOICE_DOMAIN, VOICE_LIMITS, voiceBindingSchema, voiceCryptoSchema, voiceEventSchema, type VoiceBinding, type VoiceCryptoRequest, type VoiceMember, type VoiceSnapshot } from "./contracts";
 import { consumeVoiceOwnerGuard, type VoiceOwnerGuard } from "./owner-guard";
 import { sameVoiceParty, validateVoiceOwnerControl, voiceControlParty, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
+import { decodeVoiceControlWire, encodeVoiceControlWire } from "./control-wire";
 
 type NativeRequest = Awaited<ReturnType<C.OlmMachine["outgoingRequests"]>>[number];
 type Attempt = { readonly input: VoiceCryptoRequest; readonly binding: VoiceBinding; readonly revision: number; readonly key: string; promise?: Promise<void> };
@@ -343,7 +344,7 @@ export class VoiceCryptoOwner {
       const value = validateVoiceOwnerControl(output.value, this.snapshot, this.epochId, this.audience);
       const peer = await this.device(value.recipient);
       if (!peer.isVerified() || !this.admitted.has(value.recipient.memberId)) throw new Error("Unverified native voice recipient.");
-      const encrypted = await peer.encryptToDeviceEvent(VOICE_CONTROL_EVENT, value, C.CollectStrategy.onlyTrustedDevices());
+      const encrypted = await peer.encryptToDeviceEvent(VOICE_CONTROL_EVENT, encodeVoiceControlWire(value), C.CollectStrategy.onlyTrustedDevices());
       const id = crypto.randomUUID();
       const request = new C.ToDeviceRequest(id, "m.room.encrypted", id, JSON.stringify({ messages: { [value.recipient.voiceUserId]: { [value.recipient.voiceDeviceId]: JSON.parse(encrypted) } } }));
       await this.observe(request); return request;
@@ -395,7 +396,7 @@ export class VoiceCryptoOwner {
         } else if (item instanceof C.DecryptedToDeviceEvent) {
           const event = decryptedSchema.parse(JSON.parse(item.rawEvent));
           if (event.type !== VOICE_CONTROL_EVENT || !item.encryptionInfo.isSenderVerified() || !this.epochId) throw new Error("Unauthenticated voice control.");
-          const value = validateVoiceOwnerControl(event.content, this.snapshot, this.epochId, this.audience);
+          const value = validateVoiceOwnerControl(decodeVoiceControlWire(event.content), this.snapshot, this.epochId, this.audience);
           const peer = value.sender;
           if (!this.admitted.has(peer.memberId) || value.recipient.memberId !== this.snapshot.memberId || !sameVoiceParty(value.recipient, voiceControlParty(this.peer(this.snapshot.memberId))) || event.sender !== peer.voiceUserId || item.encryptionInfo.sender.toString() !== peer.voiceUserId || item.encryptionInfo.senderDevice?.toString() !== peer.voiceDeviceId || !(await this.device(peer)).isVerified()) throw new Error("Voice control sender/admission mismatch.");
           if (event.recipient !== this.snapshot.voiceUserId || event.recipient_keys.ed25519 !== this.machine.identityKeys.ed25519.toBase64() || event.sender_device_keys.user_id !== peer.voiceUserId || event.sender_device_keys.device_id !== peer.voiceDeviceId || event.keys.ed25519 !== event.sender_device_keys.keys[`ed25519:${peer.voiceDeviceId}`]) throw new Error("Voice Olm envelope mismatch.");

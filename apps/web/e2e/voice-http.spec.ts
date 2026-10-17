@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import { RoomServiceClient, TokenVerifier } from "livekit-server-sdk";
+import { createVoiceHttpClient, voiceHttpSnapshotSchema } from "../src/lib/voice/http-client";
+import { PublicServicePeer } from "../tests/fixtures/voice-service-peer";
 import { createCommunity, newUserPage, signUp } from "./helpers";
 
 test("Voice HTTP uses the real browser session and registered enrollment without activating media", async ({ browser }) => {
@@ -34,10 +37,38 @@ test("Voice HTTP uses the real browser session and registered enrollment without
     const heartbeat = await post("/api/voice/control", { action: "heartbeat", input: binding }, headers);
     const sync = await post("/api/voice/control", { action: "crypto", input: { ...binding, request: { kind: "sync" } } }, headers);
     const denied = await post("/api/voice/control", { action: "heartbeat", input: binding }, { ...headers, "x-voice-secret": "c".repeat(64) });
-    const left = await post("/api/voice/control", { action: "leave", input: binding }, headers);
-    return { registered: registered.status, joined: joined.status, heartbeat: heartbeat.status, sync: sync.status, empty: sync.body.events.length === 0, denied: denied.status, deniedCode: denied.body.code, left: left.status, caches: [joined.cache, heartbeat.cache, sync.cache, denied.cache, left.cache] };
+    return { registered: registered.status, joined: joined.status, heartbeat: heartbeat.status, sync: sync.status, empty: sync.body.events.length === 0, denied: denied.status, deniedCode: denied.body.code, snapshot: heartbeat.body, caches: [joined.cache, heartbeat.cache, sync.cache, denied.cache] };
   }, { anchor, input });
-  expect(result).toMatchObject({ registered: 200, joined: 200, heartbeat: 200, sync: 200, empty: true, denied: 403, deniedCode: "forbidden", left: 200, caches: Array(5).fill("private, no-store") });
+  expect(result).toMatchObject({ registered: 200, joined: 200, heartbeat: 200, sync: 200, empty: true, denied: 403, deniedCode: "forbidden", caches: Array(4).fill("private, no-store") });
+  const snapshot = voiceHttpSnapshotSchema.parse(result.snapshot);
+  const binding = { callId: snapshot.callId, memberId: snapshot.memberId, joinNonce: snapshot.joinNonce, expectedGeneration: snapshot.generation };
+  const client = createVoiceHttpClient({ fetch: async (path, init) => {
+    if (typeof init?.body !== "string") throw new Error("Expected exact HTTP client JSON body.");
+    // This test account's APIRequestContext shares its real browser cookie jar; never read cookies.
+    const response = await page.context().request.fetch(String(path), { method: init.method, headers: { ...Object.fromEntries(new Headers(init.headers)), origin: new URL(page.url()).origin }, data: init.body, timeout: 10_000 });
+    return new Response(await response.text(), { status: response.status(), headers: response.headers() });
+  } });
+  const lifetime = new AbortController();
+  const peer = await PublicServicePeer.open({ snapshot, transport: ({ binding, request, signal }) => client.crypto(binding, request, input.enrollmentSecret, signal) });
+  try {
+    await peer.query(); await peer.sync();
+    const grant = await client.token(binding, input.enrollmentSecret, lifetime.signal);
+    const roomName = `voice:${snapshot.channelId}:${snapshot.callId}:${snapshot.generation}`;
+    expect(grant.roomName).toBe(roomName);
+    const key = process.env.LIVEKIT_API_KEY ?? "devkey", secret = process.env.LIVEKIT_API_SECRET ?? "secret";
+    const claims = await new TokenVerifier(key, secret).verify(grant.token, 0);
+    expect(claims.sub).toBe(snapshot.participantIdentity);
+    expect(claims.video).toMatchObject({ room: roomName, roomJoin: true, canPublishData: false, canPublishSources: ["microphone", "camera", "screen_share", "screen_share_audio"] });
+    expect(claims.exp! * 1000).toBeLessThanOrEqual(Date.parse(grant.expiresAt));
+    expect(claims.exp! * 1000).toBeGreaterThan(Date.now());
+    // Real CI LiveKit, exact canonical room filter. No SDK mocks or broad room inventory.
+    const service = new RoomServiceClient(process.env.LIVEKIT_API_URL ?? (process.env.LIVEKIT_URL ?? "ws://localhost:7880").replace(/^ws/, "http"), key, secret);
+    const rooms = await service.listRooms([roomName]);
+    expect(rooms.map(room => room.name)).toEqual([roomName]);
+  } finally {
+    peer.close();
+    await client.leave(binding, input.enrollmentSecret, lifetime.signal);
+  }
   for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND"]) {
     const response = await page.context().request.fetch("/api/voice/control", { method });
     // Next16.4 resolveHandler rejects unrecognized methods with400 before userland.
