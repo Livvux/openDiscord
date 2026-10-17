@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   pull_request:
     paths: ['desktop/**', 'apps/web/**', 'pnpm-lock.yaml', 'package.json', '.github/workflows/native-app-flows.yml']
+  # Main runs seed the Rust and Next.js caches; PR branches cannot read each other's caches.
+  push:
+    branches: [main]
+    paths: ['desktop/**', 'apps/web/**', 'pnpm-lock.yaml', 'package.json', '.github/workflows/native-app-flows.yml']
 permissions:
   contents: read
 concurrency:
@@ -42,9 +46,10 @@ jobs:
           # Default environment/toolchain/Cargo hashes remain active; isolate native origin/inputs.
           env-vars: CARGO CC CFLAGS CXX CMAKE RUST OPENDISCORD_INSTANCE_URL
           key: ubuntu2404-native-https-localhost-9443
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: pnpm install --frozen-lockfile
       - name: Restore Next.js compiler cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -60,6 +65,12 @@ jobs:
           python3 -m unittest discover -s desktop/tests -p 'test_native_app_support.py'
       - run: pnpm db:migrate
       - run: pnpm build
+      - name: Save Next.js compiler cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
       - name: Build unchanged native client and driver
         working-directory: desktop
         run: |

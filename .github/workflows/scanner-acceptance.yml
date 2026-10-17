@@ -2,7 +2,10 @@ name: Real scanner acceptance
 
 on:
   pull_request:
-  push: { branches: [main] }
+    paths-ignore: ['docs/**', '*.md']
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '*.md']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,7 +43,7 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Restore Next.js compiler cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -49,6 +52,12 @@ jobs:
       - run: pnpm db:migrate
       # Build before loading ClamAV signatures to avoid concurrent memory peaks.
       - run: pnpm build
+      - name: Save Next.js compiler cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
       - run: pnpm --filter web exec playwright install --with-deps chromium
       - name: Prepare private disposable storage
         run: |

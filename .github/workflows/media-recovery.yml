@@ -32,7 +32,8 @@ jobs:
           tags: opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }}
           load: true
           cache-from: type=gha,scope=media-recovery-image
-          cache-to: type=gha,mode=max,scope=media-recovery-image
+          # PR runs only read the layer cache; per-PR blobs evicted main's caches.
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=media-recovery-image' || '' }}
       - name: Rehearse exact operational archive with private media
         run: pnpm --filter web exec node scripts/verify-media-recovery.mjs
       - uses: actions/upload-artifact@v7
