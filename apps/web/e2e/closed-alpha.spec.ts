@@ -37,11 +37,18 @@ test("closed alpha: requests wait for approval, approved accounts get in", async
     await applicant.getByRole("button", { name: "Request access" }).click();
     await expect(applicant.getByRole("heading", { name: "You're on the list" })).toBeVisible();
 
-    await applicant.goto("/sign-in");
+    // The verification-link redirect must show the same screen on a fresh page load.
+    await applicant.goto("/sign-in?error=pending");
+    await expect(applicant.getByRole("heading", { name: "You're on the list" })).toBeVisible();
+    await applicant.getByRole("link", { name: "Back to sign in" }).click();
+    await expect(applicant.getByRole("heading", { name: "Welcome back" })).toBeVisible();
     await applicant.getByLabel("Email").fill(applicantEmail);
     await applicant.getByLabel("Password").fill(PASSWORD);
     await applicant.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(applicant.getByRole("alert").filter({ hasText: "waiting for approval" })).toBeVisible();
+    await expect(applicant.getByRole("heading", { name: "You're on the list" })).toBeVisible();
+    await expect(applicant.getByRole("status")).toHaveText("Your account is waiting for approval.");
+    await expect(applicant.getByLabel("Password")).toHaveCount(0);
+    await expectNoA11yViolations(applicant);
     expect(await (await applicant.request.get("/api/auth/get-session")).json()).toBeNull();
 
     await admin.goto("/app/admin?tab=approvals");
@@ -50,6 +57,9 @@ test("closed alpha: requests wait for approval, approved accounts get in", async
     await row.getByRole("button", { name: "Approve" }).click();
     await expect(row).toHaveCount(0);
 
+    await applicant.getByRole("link", { name: "Back to sign in" }).click();
+    await applicant.getByLabel("Email").fill(applicantEmail);
+    await applicant.getByLabel("Password").fill(PASSWORD);
     await applicant.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(applicant).toHaveURL(/\/app/);
     await expect(applicant.getByRole("heading", { name: "Welcome, Alpha Applicant" })).toBeVisible();

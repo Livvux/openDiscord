@@ -15,7 +15,7 @@ import { has, Permission } from "./permissions";
 import { parse } from "./validation";
 import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
 
-import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction, type VoiceRoomBudget } from "./voice-sfu";
+import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction, type VoiceRoomBudget, type VoiceRoomCleanup } from "./voice-sfu";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Call = typeof voiceCall.$inferSelect;
@@ -355,7 +355,8 @@ const voiceRepairEligible = (now: Date) => sql`(
 export const VOICE_MAINTENANCE_BATCH_SIZE = 8;
 /** Separate DB-only Voice batches; eligibility and keyset prevent healthy-prefix starvation. */
 export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }: { apply: boolean; now: Date; batchSize: number; maxBatches: number }) {
-  if (!apply) return { scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
+  const rooms: VoiceRoomCleanup = { claimed: 0, requests: 0, retired: 0, deleted: 0, failed: 0, unavailable: 0, limited: false };
+  if (!apply) return { rooms, scanned: await db.$count(voiceCall, and(eq(voiceCall.status, "active"), voiceRepairEligible(now))), closed: 0, removed: 0, closedCallIds: Array<string>(), limited: false };
   const voiceBatchSize = Math.min(batchSize, VOICE_MAINTENANCE_BATCH_SIZE);
   const cleanupDeadline = performance.now() + 20_000;
   let cleanupRooms = 16, cleanupRequests = 32;
@@ -380,13 +381,17 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
     if (cleanupRooms > 0 && cleanupRequests > 0) {
       const cleanup = await consumeVoiceRooms({ maxRooms: cleanupRooms, maxRequests: cleanupRequests, maxMilliseconds: Math.max(0, cleanupDeadline - performance.now()) });
       cleanupRooms -= cleanup.claimed; cleanupRequests -= cleanup.requests;
+      rooms.claimed += cleanup.claimed; rooms.requests += cleanup.requests;
+      rooms.retired += cleanup.retired; rooms.deleted += cleanup.deleted;
+      rooms.failed += cleanup.failed; rooms.unavailable += cleanup.unavailable;
+      rooms.limited ||= cleanup.limited;
     }
     scanned += result.calls.length; closed += result.closed; removed += result.removed;
     closedCallIds.push(...result.closedCallIds);
     cursor = result.calls.at(-1)?.call.id;
-    if (result.calls.length < voiceBatchSize) return { scanned, closed, removed, closedCallIds, limited: false };
+    if (result.calls.length < voiceBatchSize) return { rooms, scanned, closed, removed, closedCallIds, limited: false };
   }
-  return { scanned, closed, removed, closedCallIds, limited: true };
+  return { rooms, scanned, closed, removed, closedCallIds, limited: true };
 }
 
 const keyRecord = z.record(z.string().regex(/^signed_curve25519:[A-Za-z0-9+/_=-]{1,100}$/), voicePrekeySchema);
@@ -407,8 +412,12 @@ async function targetFor(tx: Tx, callId: string, userId: string): Promise<Member
   if (!target) throw notFound("Current voice device not found.");
   return target;
 }
+// Initial own signatures may precede stored cross-signing IDs. Query can later merge
+// these four entries with four known stored signing IDs; prekeys are returned unchanged.
+const MAX_INITIAL_SIGNATURE_KEYS = 4;
 function selfSignatures(value: { signatures?: Record<string, Record<string, string>> }, ownUser: string) {
   if (value.signatures && Object.keys(value.signatures).some((id) => id !== ownUser)) throw invalid("Only this voice identity may sign its uploaded keys.");
+  if (Object.keys(value.signatures?.[ownUser] ?? {}).length > MAX_INITIAL_SIGNATURE_KEYS) throw invalid("Too many initial voice signatures.");
 }
 async function identityFor(tx: Tx, memberId: string) {
   const [identity] = await tx.select().from(voiceIdentity).where(eq(voiceIdentity.memberId, memberId));
