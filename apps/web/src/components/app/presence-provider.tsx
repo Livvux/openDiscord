@@ -1,12 +1,14 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
+import type { PresenceStatus } from "@/lib/presence";
 
 const POLL_MS = 60_000;
-const PresenceContext = createContext<ReadonlySet<string>>(new Set());
+const PresenceContext = createContext<ReadonlyMap<string, PresenceStatus>>(new Map());
 
-export function useOnline(userId: string): boolean {
-  return useContext(PresenceContext).has(userId);
+/** The member's shown status, or null when offline or hidden. */
+export function usePresence(userId: string): PresenceStatus | null {
+  return useContext(PresenceContext).get(userId) ?? null;
 }
 
 /**
@@ -14,15 +16,15 @@ export function useOnline(userId: string): boolean {
  * low-value, so a minute of delay beats a write and a broadcast per tab heartbeat.
  */
 export function PresenceProvider({ communityId, children }: { communityId: string; children: React.ReactNode }) {
-  const [online, setOnline] = useState<ReadonlySet<string>>(new Set());
+  const [online, setOnline] = useState<ReadonlyMap<string, PresenceStatus>>(new Map());
 
   useEffect(() => {
     let active = true;
     const load = () => {
       if (document.visibilityState !== "visible") return;
       fetch(`/api/communities/${communityId}/presence`, { cache: "no-store" })
-        .then((r) => (r.ok ? (r.json() as Promise<string[]>) : null))
-        .then((ids) => active && ids && setOnline(new Set(ids)), () => {});
+        .then((r) => (r.ok ? (r.json() as Promise<{ id: string; status: PresenceStatus }[]>) : null))
+        .then((rows) => active && rows && setOnline(new Map(rows.map((r) => [r.id, r.status]))), () => {});
     };
     load();
     const timer = setInterval(load, POLL_MS);

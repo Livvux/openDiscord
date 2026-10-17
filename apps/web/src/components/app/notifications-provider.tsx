@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { MentionNotice } from "@/app/api/me/events/route";
 
 export interface UnreadSummary {
@@ -17,6 +17,8 @@ interface NotificationsValue {
   live: ReadonlyMap<string, UnreadSummary>;
   /** The open community reports its own aggregate, which it keeps current from its stream. */
   report: (communityId: string, summary: UnreadSummary) => void;
+  /** Do not disturb: badges stay, desktop notifications stop. */
+  setQuiet: (quiet: boolean) => void;
 }
 
 const NotificationsContext = createContext<NotificationsValue | null>(null);
@@ -27,6 +29,10 @@ export function useCommunityUnread(communityId: string, initial: UnreadSummary):
 
 export function useReportCommunityUnread() {
   return useContext(NotificationsContext)?.report;
+}
+
+export function useSetQuiet() {
+  return useContext(NotificationsContext)?.setQuiet;
 }
 
 function desktopNotify(notice: MentionNotice, onClick: () => void) {
@@ -47,6 +53,8 @@ function desktopNotify(notice: MentionNotice, onClick: () => void) {
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [live, setLive] = useState<ReadonlyMap<string, UnreadSummary>>(new Map());
+  const quiet = useRef(false);
+  const setQuiet = useCallback((value: boolean) => { quiet.current = value; }, []);
 
   const report = useCallback((communityId: string, summary: UnreadSummary) => {
     setLive((m) => {
@@ -70,7 +78,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       // Read at event time; usePathname would force this app-wide provider into a Suspense boundary.
       const path = window.location.pathname;
       const watching = path === channelPath && document.visibilityState === "visible";
-      if (!watching && !notice.muted) desktopNotify(notice, () => router.push(channelPath));
+      if (!watching && !notice.muted && !quiet.current) desktopNotify(notice, () => router.push(channelPath));
       // The open community counts its own mentions from its stream; others are bumped here.
       if (!path.startsWith(`/app/c/${notice.communityId}`)) {
         setLive((m) => {
@@ -84,6 +92,6 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return () => es.close();
   }, [router]);
 
-  const value = useMemo(() => ({ live, report }), [live, report]);
+  const value = useMemo(() => ({ live, report, setQuiet }), [live, report, setQuiet]);
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
 }
