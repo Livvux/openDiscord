@@ -12,7 +12,7 @@ export const de: Messages = {
     selfHost: "Selbst hosten",
     roadmap: "Roadmap",
     signIn: "Anmelden",
-    join: "Zur Beta",
+    join: "Zur Alpha",
     language: "Sprache",
   },
   hero: {
@@ -103,7 +103,7 @@ export const de: Messages = {
       {
         label: "Jetzt",
         title: "Geschlossene Alpha",
-        items: ["Private Kanäle, Rollen, Moderation", "Erwähnungen, Threads, Suche, Reaktionen", "Sprache, Video und Bildschirmfreigabe", "Bots, Webhooks, öffentliche API", "Verschlüsselte DMs mit Geräteverifizierung", "Einsprüche, Regeln und Aufbewahrungsfristen"],
+        items: ["Private Kanäle, Rollen, Moderation", "Erwähnungen, Threads, Suche, Reaktionen", "Sprache, Video und Bildschirmfreigabe", "Bots, Webhooks, öffentliche API", "Verschlüsselte DMs mit Geräteverifizierung", "Einsprüche, Regeln und Aufbewahrungsfristen", "Eigene Emojis und Sticker", "Öffentliche Kanäle und Verzeichnis"],
       },
       {
         label: "Als Nächstes",
@@ -112,16 +112,16 @@ export const de: Messages = {
       },
       {
         label: "Später",
-        title: "Sprache und mehr",
-        items: ["Eigene Emojis und Sticker", "Native Apps", "Optionale öffentliche Kanäle", "Community-Verzeichnis"],
+        title: "Apps und Gruppen",
+        items: ["Native Apps", "Gruppen-DMs und DM-Anrufe"],
       },
     ],
   },
   footer: {
     titleStart: "Hol deine Community",
     titleAccent: "nach Hause.",
-    lead: "Mach mit bei der Beta mit Einladung – oder sieh dir an, was der Betrieb der gehosteten Instanz kostet.",
-    join: "Zur Beta",
+    lead: "Mach mit bei der Alpha mit Einladung – oder sieh dir an, was der Betrieb der gehosteten Instanz kostet.",
+    join: "Zur Alpha",
     funding: "Finanzierung und Betriebskosten",
     tagline: "Offen denken. Gemeinsam heller.",
     nav: "Fußzeile",
