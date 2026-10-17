@@ -139,3 +139,16 @@ export async function joinAsNewUser(browser: Browser, name: string, invitePath: 
 export async function waitForLive(page: Page) {
   await expect(page.locator('[data-realtime="open"]')).toBeAttached({ timeout: 10_000 });
 }
+
+/** The account popover at the bottom of the community rail (an off-canvas panel on mobile). */
+export async function openAccountMenu(page: Page) {
+  const nav = page.getByRole("navigation", { name: "Communities" });
+  if (!(await nav.isVisible())) await page.getByRole("button", { name: "Open navigation" }).first().click();
+  await nav.getByRole("button", { name: /^Account menu for / }).click();
+}
+
+export async function openAccountSettings(page: Page) {
+  await openAccountMenu(page);
+  await page.getByRole("link", { name: "Account settings" }).click();
+  await expect(page).toHaveURL(/\/app\/settings$/);
+}

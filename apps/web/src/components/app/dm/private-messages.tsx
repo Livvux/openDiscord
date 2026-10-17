@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { SmilePlusIcon } from "lucide-react";
+import { EmojiSelector } from "../emoji-selector";
+import { EmojiText } from "../emoji-text";
+import { insertEmoji } from "@/lib/emoji";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blockUser, unblockUser } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { IdentityReset } from "./identity-reset";
@@ -24,6 +28,13 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
   const [envelopes, setEnvelopes] = useState<DirectEnvelope[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [text, setText] = useState("");
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const pendingCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingCaret.current === null) return;
+    textarea.current?.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    pendingCaret.current = null;
+  }, [text]);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("Opening encrypted messages…");
   const [busy, setBusy] = useState(false);
@@ -140,13 +151,18 @@ export function PrivateMessages({ userId, target }: { userId: string; target?: s
         {active && <><header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"><h2 className="font-semibold">{active.peerName}</h2><Button variant="outline" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button></header>
           {active.status === "pending" && <div className="grid gap-3 p-4"><p>{active.requestedBy === userId ? "Your message request is waiting for acceptance." : "Accept this request to begin an encrypted conversation."}</p>{active.requestedBy !== userId && <div className="flex gap-2">{(["accepted", "rejected"] as const).map((s) => <Button key={s} disabled={busy || active.blocked} variant={s === "accepted" ? "default" : "outline"} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "respond", id: active.id, status: s }); setSecurity(true); })}>{s === "accepted" ? "Accept message request" : "Decline request"}</Button>)}</div>}</div>}
           {hasMore && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void run(loadEarlier)}>Load earlier encrypted messages</Button>}
-          <ol role="log" aria-label={`Private conversation with ${active.peerName}`} className="grid gap-3 p-4">{messages.map((m) => <li key={m.id} className={`max-w-2xl rounded-lg border p-3 ${m.own ? "ml-auto bg-muted/40" : "mr-auto"}`}><p className="mb-1 text-xs text-muted-foreground">{m.own ? "You" : active.peerName} · <time dateTime={m.createdAt}>{new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></p><p className="whitespace-pre-wrap break-words">{m.body ?? m.error}</p>{!m.own && m.body && <Button className="mt-2" variant="ghost" size="sm" onClick={() => { setReport(m); setReportReason(""); setReportDisclose(false); }}>Report private message</Button>}</li>)}</ol>
+          <ol role="log" aria-label={`Private conversation with ${active.peerName}`} className="grid gap-3 p-4">{messages.map((m) => <li key={m.id} className={`max-w-2xl rounded-lg border p-3 ${m.own ? "ml-auto bg-muted/40" : "mr-auto"}`}><p className="mb-1 text-xs text-muted-foreground">{m.own ? "You" : active.peerName} · <time dateTime={m.createdAt}>{new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></p><p className="whitespace-pre-wrap break-words" data-dm-failure-stage={m.diagnostic?.stage} data-dm-failure-code={m.diagnostic?.code} data-dm-shield-color={m.diagnostic?.shieldColor} data-dm-shield-code={m.diagnostic?.shieldCode}>{m.body ? <EmojiText text={m.body} /> : m.error}</p>{!m.own && m.body && <Button className="mt-2" variant="ghost" size="sm" onClick={() => { setReport(m); setReportReason(""); setReportDisclose(false); }}>Report private message</Button>}</li>)}</ol>
         </>}
         {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label><label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
       </div>
       {active?.status === "accepted" && !active.blocked && <form className="grid gap-2 border-t p-4" onSubmit={(e) => { e.preventDefault(); if (client && text.trim()) void run(async () => { await client.send(active.id, active.peerId, text); setText(""); }); }}>
         {!peersReady && <p className="text-xs text-muted-foreground">Verify all active devices in <button type="button" className="underline" onClick={() => setSecurity(true)}>Devices and recovery</button> before sending.</p>}
-        <label className="sr-only" htmlFor="private-message">Encrypted message</label><textarea id="private-message" className={`${field} min-h-20 resize-y`} maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)} disabled={!client || busy} placeholder="Write an encrypted message" /><Button className="justify-self-end" type="submit" disabled={!client || busy || !peersReady || !text.trim()}>Send encrypted message</Button>
+        <label className="sr-only" htmlFor="private-message">Encrypted message</label><textarea ref={textarea} id="private-message" className={`${field} min-h-20 resize-y`} maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)} disabled={!client || busy} placeholder="Write an encrypted message" /><div className="flex items-center justify-between"><EmojiSelector returnFocusTo={textarea}
+          trigger={<Button type="button" variant="ghost" size="icon" aria-label="Choose emoji" disabled={!client || busy}><SmilePlusIcon /></Button>}
+          onPick={(emoji) => {
+            const result = insertEmoji(text, emoji, textarea.current?.selectionStart ?? text.length, textarea.current?.selectionEnd ?? text.length, DM_MAX_TEXT);
+            if (result) { pendingCaret.current = result.caret; setText(result.value); }
+          }} /><Button type="submit" disabled={!client || busy || !peersReady || !text.trim()}>Send encrypted message</Button></div>
       </form>}
     </section>
   </div>;

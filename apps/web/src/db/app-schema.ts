@@ -384,8 +384,39 @@ export const userPresence = pgTable("user_presence", {
     .primaryKey()
     .references(() => user.id, { onDelete: "cascade" }),
   visible: boolean("visible").notNull().default(false),
+  /** Shown while visible; "invisible" is `visible = false`. */
+  status: text("status", { enum: ["online", "idle", "dnd"] }).notNull().default("online"),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
 });
+
+/** A friend request (pending) or friendship (accepted). One row per pair, ordered ids; decline/cancel/remove delete it. */
+export const friendship = pgTable(
+  "friendship",
+  {
+    firstId: text("first_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    secondId: text("second_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    requestedBy: text("requested_by").notNull().references(() => user.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["pending", "accepted"] }).notNull().default("pending"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.firstId, t.secondId] }),
+    index("friendship_second_idx").on(t.secondId),
+    // Byte order, matching the JavaScript comparison that builds the pair (the database collation may differ).
+    check("friendship_ordered", sql`${t.firstId} collate "C" < ${t.secondId} collate "C"`),
+  ],
+);
+
+/** Optional profile text, visible to people who can already see the account (shared community, friend, DM). */
+export const userProfile = pgTable(
+  "user_profile",
+  {
+    userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+    bio: text("bio").notNull().default(""),
+    customStatus: text("custom_status").notNull().default(""),
+  },
+  (t) => [check("user_profile_length", sql`char_length(${t.bio}) <= 190 and char_length(${t.customStatus}) <= 80`)],
+);
 
 /**
  * A bot (a member with roles, using the public API with its token) or an incoming webhook (posts
