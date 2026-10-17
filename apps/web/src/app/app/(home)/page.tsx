@@ -6,7 +6,9 @@ import { Avatar } from "@/components/app/avatar";
 import { CreateCommunityDialog } from "@/components/app/create-community-dialog";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { PresenceAvatar } from "@/components/app/presence-avatar";
-import { listCommunities } from "@/server/communities";
+import { UserContextMenu } from "@/components/app/user-context-menu";
+import { ServerContextMenu } from "@/components/app/server-context-menu";
+import { listCommunityNavigation } from "@/server/communities";
 import { homeConversations, homeFriends } from "@/server/home";
 import { mutedCommunities } from "@/server/presence";
 import { requirePageUser } from "@/server/session";
@@ -53,7 +55,7 @@ function Card({ title, action, children }: { title: string; action?: React.React
 
 async function Home() {
   const user = await requirePageUser();
-  const [communities, friends, dms] = await Promise.all([listCommunities(user.id), homeFriends(user.id), homeConversations(user.id)]);
+  const [communities, friends, dms] = await Promise.all([listCommunityNavigation(user.id), homeFriends(user.id), homeConversations(user.id)]);
   const [unread, muted] = await Promise.all([communityUnread(user.id, communities), mutedCommunities(user.id, communities.map((c) => c.id))]);
   const incomingFriends = friends.filter((f) => f.state === "incoming");
   const accepted = friends.filter((f) => f.state === "friend");
@@ -109,13 +111,15 @@ async function Home() {
               <ul className="grid gap-0.5">
                 {dms.recent.map((c) => (
                   <li key={c.id}>
-                    <Link href={`/app/messages?to=${encodeURIComponent(c.peerId)}`} className={rowLink}>
-                      <Avatar name={c.peerName} size="sm" />
-                      <span className="min-w-0 flex-1 truncate">{c.peerName}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {c.status === "pending" ? (c.requestedBy === user.id ? "Request sent" : "Wants to message you") : c.lastActivity ? ago(c.lastActivity) : "No messages yet"}
-                      </span>
-                    </Link>
+                    <UserContextMenu userId={c.peerId} name={c.peerName} currentUserId={user.id} blocked={c.ownBlocked} relation={friends.find((f) => f.id === c.peerId)?.state ?? null}>
+                      <Link href={`/app/messages?to=${encodeURIComponent(c.peerId)}`} className={rowLink}>
+                        <Avatar name={c.peerName} size="sm" />
+                        <span className="min-w-0 flex-1 truncate">{c.peerName}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {c.status === "pending" ? (c.requestedBy === user.id ? "Request sent" : "Wants to message you") : c.lastActivity ? ago(c.lastActivity) : "No messages yet"}
+                        </span>
+                      </Link>
+                    </UserContextMenu>
                   </li>
                 ))}
               </ul>
@@ -131,13 +135,15 @@ async function Home() {
               <ul className="grid gap-0.5">
                 {online.slice(0, 8).map((f) => (
                   <li key={f.id}>
-                    <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} className={rowLink}>
-                      <PresenceAvatar userId={f.id} name={f.name} size="sm" status={f.presence} announce />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{f.name}</span>
-                        {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
-                      </span>
-                    </Link>
+                    <UserContextMenu userId={f.id} name={f.name} currentUserId={user.id} relation={f.state}>
+                      <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} className={rowLink}>
+                        <PresenceAvatar userId={f.id} name={f.name} size="sm" status={f.presence} announce />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{f.name}</span>
+                          {f.customStatus && <span className="block truncate text-xs text-muted-foreground">{f.customStatus}</span>}
+                        </span>
+                      </Link>
+                    </UserContextMenu>
                   </li>
                 ))}
               </ul>
@@ -155,17 +161,19 @@ async function Home() {
                 const isMuted = muted.has(c.id);
                 return (
                   <li key={c.id}>
-                    <Link href={`/app/c/${c.id}`} className={`${rowLink} border border-white/5`}>
-                      <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/5 text-xs font-semibold text-zinc-200">
-                        {c.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => [...w][0]?.toUpperCase()).join("")}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className={`block truncate ${state?.unread && !isMuted ? "font-semibold text-zinc-50" : "text-zinc-300"}`}>{c.name}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {state?.mentions ? `${state.mentions} ${state.mentions === 1 ? "mention" : "mentions"}` : state?.unread && !isMuted ? "New messages" : isMuted ? "Muted" : "Up to date"}
+                    <ServerContextMenu community={c}>
+                      <Link href={`/app/c/${c.id}`} className={`${rowLink} border border-white/5`}>
+                        <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/5 text-xs font-semibold text-zinc-200">
+                          {c.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => [...w][0]?.toUpperCase()).join("")}
                         </span>
-                      </span>
-                    </Link>
+                        <span className="min-w-0 flex-1">
+                          <span className={`block truncate ${state?.unread && !isMuted ? "font-semibold text-zinc-50" : "text-zinc-300"}`}>{c.name}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {state?.mentions ? `${state.mentions} ${state.mentions === 1 ? "mention" : "mentions"}` : state?.unread && !isMuted ? "New messages" : isMuted ? "Muted" : "Up to date"}
+                          </span>
+                        </span>
+                      </Link>
+                    </ServerContextMenu>
                   </li>
                 );
               })}

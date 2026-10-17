@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, count, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLog, ban, channel, channelOverride, community, integration, invite, member, role, user } from "@/db/schema";
+import { auditLog, ban, channel, channelOverride, community, integration, invite, member, memberRole, role, user } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
-import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Permission, type MemberAuthority } from "./permissions";
+import { canManageRole, CHANNEL_PERMISSIONS, DEFAULT_MEMBER_PERMISSIONS, has, Permission, resolveAuthority, type MemberAuthority } from "./permissions";
 import { publish } from "./realtime";
 import { listCategories, type CategorySummary } from "./categories";
 import { afterAccessChange, closeVoiceRoom, voiceEnabled } from "./voice";
@@ -19,6 +19,11 @@ import { channelName, channelTopic, communityName, inviteCode, inviteOptions, pa
 export interface CommunitySummary {
   id: string;
   name: string;
+}
+
+export interface CommunityNavigationSummary extends CommunitySummary {
+  authority: MemberAuthority;
+  notifications: "mentions" | "muted";
 }
 
 export interface ChannelSummary {
@@ -71,6 +76,29 @@ export async function listCommunities(userId: string): Promise<CommunitySummary[
     .innerJoin(community, eq(community.id, member.communityId))
     .where(and(eq(member.userId, userId), isNull(community.suspendedAt)))
     .orderBy(asc(member.joinedAt));
+}
+
+/** Navigation actions need community permissions, without loading every channel or member. */
+export async function listCommunityNavigation(userId: string): Promise<CommunityNavigationSummary[]> {
+  await assertActiveUser(userId);
+  const rows = await db
+    .select({ id: community.id, name: community.name, ownerId: community.ownerId, notifications: member.notifications })
+    .from(member)
+    .innerJoin(community, eq(community.id, member.communityId))
+    .where(and(eq(member.userId, userId), isNull(community.suspendedAt)))
+    .orderBy(asc(member.joinedAt));
+  if (rows.length === 0) return [];
+  const roles = await db
+    .select({ communityId: role.communityId, permissions: role.permissions, position: role.position })
+    .from(role)
+    .where(and(
+      inArray(role.communityId, rows.map((c) => c.id)),
+      or(role.isDefault, inArray(role.id, db.select({ id: memberRole.roleId }).from(memberRole).where(eq(memberRole.userId, userId)))),
+    ));
+  return rows.map(({ ownerId, ...c }) => ({
+    ...c,
+    authority: resolveAuthority(ownerId === userId, roles.filter((r) => r.communityId === c.id)),
+  }));
 }
 
 export async function getCommunityView(userId: string, rawId: unknown): Promise<CommunityView> {
