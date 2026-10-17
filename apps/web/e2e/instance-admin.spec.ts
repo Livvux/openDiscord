@@ -35,7 +35,11 @@ test("global administration works without 2FA and applies reports and suspension
     expect(signup.ok()).toBe(true);
     chatterId = (await signup.json()).user.id;
     await chatter.goto("/app");
-    await chatter.getByRole("button", { name: "Create a community", exact: true }).last().click();
+    const create = chatter.getByRole("button", { name: "Create a community", exact: true }).first();
+    const navigation = chatter.getByRole("button", { name: "Open navigation", exact: true }).first();
+    await expect.poll(async () => (await create.isVisible()) || (await navigation.isVisible())).toBe(true);
+    if (!(await create.isVisible())) await navigation.click();
+    await create.click();
     await chatter.getByLabel("Name", { exact: true }).fill(`QA moderation ${suffix}`);
     await chatter.getByRole("button", { name: "Create", exact: true }).click();
     await expect(chatter).toHaveURL(/\/app\/c\/[\w-]+\/[\w-]+/);
@@ -106,7 +110,7 @@ test("global administration works without 2FA and applies reports and suspension
     await page.getByLabel("Reason", { exact: true }).fill("QA community suspension");
     await page.getByRole("button", { name: "Confirm suspend community", exact: true }).click();
     await expect(communityRow).toContainText("Suspended: QA community suspension");
-    await expect(chatter.getByRole("heading", { name: "Welcome, QA Chatter" })).toBeVisible();
+    await expect(chatter.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
     expect((await chatter.request.get(`/api/channels/${channelId}/messages`)).status()).toBe(404);
     expect((await chatter.request.head(`/api/communities/${communityId}/events`)).status()).toBe(404);
     await expectNoA11yViolations(page);

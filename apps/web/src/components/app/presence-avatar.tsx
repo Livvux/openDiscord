@@ -7,7 +7,7 @@ import { usePresence } from "./presence-provider";
 interface PresenceAvatarProps {
   userId: string;
   name: string;
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "lg";
   /** Also say the status to screen readers (member lists; not every chat message). */
   announce?: boolean;
   /** Known status outside a community (friends list); otherwise read from the community's presence. */
@@ -23,7 +23,7 @@ export function PresenceAvatar({ userId, name, size, announce = false, status }:
       <Avatar name={name} size={size} />
       {shown && (
         <>
-          <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-background ${PRESENCE_DOT[shown]}`} />
+          <span aria-hidden className={`absolute rounded-full ring-background ${size === "lg" ? "right-0.5 bottom-0.5 size-5 ring-4" : "-right-0.5 -bottom-0.5 size-3 ring-2"} ${PRESENCE_DOT[shown]}`} />
           {announce && <span className="sr-only">({PRESENCE_LABEL[shown].toLowerCase()})</span>}
         </>
       )}

@@ -17,7 +17,7 @@ test.describe("communities", () => {
   test("onboarding, invites, realtime messaging and moderation", async ({ browser }) => {
     const owner = await newUserPage(browser);
     await signUp(owner, "Olivia Owner");
-    await expect(owner.getByRole("heading", { name: "Welcome, Olivia Owner" })).toBeVisible();
+    await expect(owner.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
     await createCommunity(owner, "Garden Club");
     await sendMessage(owner, "Welcome to the garden!");
     const invitePath = await createInviteLink(owner);

@@ -10,7 +10,7 @@ import { listFriends } from "./friends";
 export type RecentConversation = DirectConversation & { lastActivity: string | null };
 
 /** Conversations by latest message (metadata only: content stays encrypted), newest first. */
-async function recentConversations(userId: string, limit = 6): Promise<{ recent: RecentConversation[]; incomingRequests: number }> {
+async function recentConversations(userId: string, limit = 50): Promise<{ recent: RecentConversation[]; incomingRequests: number }> {
   const all = await listDirectConversations(userId);
   const visible = all.filter((c) => c.status !== "rejected" && !c.ownBlocked);
   const incomingRequests = visible.filter((c) => c.status === "pending" && c.requestedBy !== userId).length;

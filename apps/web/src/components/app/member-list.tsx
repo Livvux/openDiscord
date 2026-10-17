@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { PresenceAvatar } from "./presence-avatar";
 import { useOnlineMembers } from "./presence-provider";
 import { UserContextMenu } from "./user-context-menu";
+import { UserProfilePopover } from "./user-profile";
 
 export interface ListedMember {
   userId: string;
@@ -106,12 +107,16 @@ function MemberGroups({ members, currentUserId, blockedIds }: MemberListProps) {
           <ul>
             {group.members.map((m) => (
               <UserContextMenu key={m.userId} userId={m.userId} name={m.name} currentUserId={currentUserId} blocked={blocked.has(m.userId)}>
-                <li className="flex items-center gap-2 rounded-md px-2 py-1.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
-                  <span className={group.label === "Offline" ? "opacity-50" : undefined}>
-                    <PresenceAvatar userId={m.userId} name={m.name} size="sm" announce />
-                  </span>
-                  <span className={`truncate text-sm ${group.label === "Offline" ? "text-zinc-400" : "text-zinc-200"}`}>{m.name}</span>
-                  {m.isOwner && <CrownIcon aria-label="Owner" className="size-3.5 shrink-0 text-amber-400" />}
+                <li className="rounded-md focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
+                  <UserProfilePopover userId={m.userId} currentUserId={currentUserId} render={
+                    <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring">
+                      <span className={group.label === "Offline" ? "opacity-50" : undefined}>
+                        <PresenceAvatar userId={m.userId} name={m.name} size="sm" announce />
+                      </span>
+                      <span className={`truncate text-sm ${group.label === "Offline" ? "text-zinc-400" : "text-zinc-200"}`}>{m.name}</span>
+                      {m.isOwner && <CrownIcon aria-label="Owner" className="size-3.5 shrink-0 text-amber-400" />}
+                    </button>
+                  } />
                 </li>
               </UserContextMenu>
             ))}

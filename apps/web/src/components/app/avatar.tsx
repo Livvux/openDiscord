@@ -1,7 +1,7 @@
 /** Initial on a translucent disc, as in the landing-page preview. No uploaded images, so no third-party requests. */
-export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" | "lg" }) {
   const initial = [...name.trim()][0]?.toUpperCase() ?? "?";
-  const sizes = { sm: "size-7 text-[11px]", md: "size-8 text-xs" };
+  const sizes = { sm: "size-7 text-[11px]", md: "size-8 text-xs", lg: "size-20 text-3xl" };
   return (
     <span
       aria-hidden

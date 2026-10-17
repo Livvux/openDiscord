@@ -9,7 +9,17 @@ async function showNavigationFor(page: Page, name: string) {
   await expect(button).toBeVisible();
 }
 async function openConversation(page: Page, name: string) {
-  await page.getByRole("complementary", { name: "Direct conversations" }).getByRole("button").filter({ hasText: name }).click();
+  const link = page.getByRole("navigation", { name: "Home" }).getByRole("link").filter({ has: page.locator("[data-dm-peer-name]", { hasText: name }) });
+  const navigation = page.getByRole("button", { name: "Open navigation" });
+  // New conversations reach the sidebar with its next poll.
+  await expect.poll(async () => await link.isVisible() || await navigation.isVisible(), { timeout: 20_000 }).toBe(true);
+  if (!await link.isVisible()) await navigation.click();
+  await link.click();
+  await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
+}
+async function openSecurity(page: Page) {
+  const button = page.getByRole("button", { name: "Devices and recovery", exact: true });
+  if (await button.getAttribute("aria-expanded") !== "true") await button.click();
 }
 async function verify(a: Page, b: Page) {
   await a.getByRole("button", { name: /^Verify device / }).first().click();
@@ -61,7 +71,9 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await bob.goto("/app/messages");
   await openConversation(bob, "Private Alice");
   await bob.getByRole("button", { name: "Accept message request", exact: true }).click();
-  await expect(alice.getByRole("button", { name: "Send encrypted message", exact: true })).toBeDisabled();
+  // Sending no longer waits for SAS (trust on first use); verification is the optional upgrade.
+  await expect(alice.getByLabel("Encrypted message", { exact: true })).toBeEnabled({ timeout: 30_000 });
+  await openSecurity(alice);
   await expect(alice.getByRole("button", { name: /^Verify device / })).toHaveCount(1, { timeout: 30_000 });
   await verify(alice, bob);
   const first = "Private payload only in the two browsers 9182";
@@ -110,7 +122,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await restored.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await restored.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(restored).toHaveURL(/\/app\/messages$/);
-  await restored.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await openSecurity(restored);
   await expect(restored.getByLabel("Open encrypted recovery archive", { exact: true })).toBeEnabled({ timeout: 30_000 });
   await restored.getByLabel("Open encrypted recovery archive", { exact: true }).setInputFiles(recoveryFile!);
   const archive = restored.getByRole("region", { name: "Recovered history archives" });
@@ -118,7 +130,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expect(archive.getByText(first, { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(archive.getByText(offline, { exact: true })).toBeVisible();
   await restored.reload();
-  await restored.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await openSecurity(restored);
   restored.once("dialog", (dialog) => dialog.accept());
   await restored.getByRole("button", { name: "Restore current encryption identity", exact: true }).click();
   await expect(restored.getByRole("button", { name: "Restore current encryption identity", exact: true })).toHaveCount(0);
@@ -145,13 +157,13 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expect(alice.getByText("1 encrypted transfer(s) awaiting storage confirmation.", { exact: true })).toBeVisible();
   await alice.reload();
   await openConversation(alice, "Private Bob");
-  await alice.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await openSecurity(alice);
   await expect(alice.getByText("1 encrypted transfer(s) awaiting storage confirmation.", { exact: true })).toBeVisible();
   await expect(restored.getByRole("region", { name: "Recovered history archives" }).locator("summary")).toHaveCount(2, { timeout: 45_000 });
   await expect(alice.getByText("No pending encrypted transfers.", { exact: true })).toBeVisible({ timeout: 30_000 });
   await restored.reload();
   await expect(restored.getByRole("region", { name: "Recovered history archives" }).locator("summary")).toHaveCount(2);
-  await restored.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+  await openSecurity(restored);
   await expect(restored.getByRole("button", { name: "Restore current encryption identity", exact: true })).toBeVisible();
   await expectNoA11yViolations(restored);
   await restored.screenshot({ path: info.outputPath("verified-private-messages.png"), fullPage: true });
@@ -219,7 +231,7 @@ test("explicit identity reset revokes devices and backups after password confirm
     const email = await signUp(page, "Reset identity");
     await page.goto("/app/messages");
     await expect(page.getByText("Encrypted messaging ready.", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("complementary", { name: "Direct conversations" }).getByRole("button", { name: "Devices and recovery", exact: true }).click();
+    await openSecurity(page);
     await page.getByRole("button", { name: "Create encrypted recovery backup", exact: true }).click();
     await expect(page.getByRole("link", { name: "Download your private recovery file", exact: true })).toBeVisible();
     const before = await page.request.get("/api/dm").then((response) => response.json());

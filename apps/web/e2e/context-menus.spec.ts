@@ -234,7 +234,7 @@ test.describe("context menus", () => {
       await member.keyboard.press("Escape");
       await expect(memberListMenu).toBeHidden();
 
-      const author = messageRow(member, "Right-click this author's name").getByRole("button", { name: "Actions for Alex Author", exact: true }).last();
+      const author = messageRow(member, "Right-click this author's name").getByRole("button", { name: "View profile of Alex Author", exact: true }).last();
       await author.click({ button: "right" });
       const memberMenu = member.getByRole("menu", { name: "User actions", exact: true });
       await expect(memberMenu).toBeVisible();
@@ -249,7 +249,7 @@ test.describe("context menus", () => {
       // A name menu opens the existing friend-code flow for the selected author.
       await author.click({ button: "right" });
       await memberMenu.getByRole("menuitem", { name: "Add Friend", exact: true }).click();
-      await expect(member).toHaveURL(/\/app\/friends\?add=/);
+      await expect(member).toHaveURL(/\/app\?add=/);
       const friendCode = new URL(member.url()).searchParams.get("add");
       expect(friendCode).toBeTruthy();
       await expect(member.getByLabel("Friend code")).toHaveValue(friendCode!);
@@ -290,7 +290,7 @@ test.describe("context menus", () => {
       await expect(messageRow(member, "A friend's message to hide after blocking")).toBeVisible();
 
       await owner.getByRole("button", { name: "Show blocked message", exact: true }).click();
-      const blockedAuthor = messageRow(owner, "A friend's message to hide after blocking").getByRole("button", { name: "Actions for Blair Friend", exact: true }).last();
+      const blockedAuthor = messageRow(owner, "A friend's message to hide after blocking").getByRole("button", { name: "View profile of Blair Friend", exact: true }).last();
       await blockedAuthor.click({ button: "right" });
       await ownerMenu.getByRole("menuitem", { name: "Unblock", exact: true }).click();
       // Wait for the persisted relationship to reach the menu before reloading.

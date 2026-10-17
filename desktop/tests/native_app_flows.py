@@ -323,6 +323,11 @@ class Native:
         wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/click', {})
 
+    def open_conversation(self, peer):
+        # The Home sidebar lists conversations as links; the peer name has its own marked span.
+        identifier = self.element(f'//nav[@aria-label="Home"]//a[.//*[@data-dm-peer-name and normalize-space(.)={json.dumps(peer)}]]')
+        self.command('POST', '/element/' + identifier + '/click', {})
+
     def wait_sent_community_message(self):
         def committed():
             values = self.command('POST', '/elements', {'using': 'xpath', 'value': DM_MESSAGE_XPATH})
@@ -424,9 +429,8 @@ class Native:
             # URL and protected content must belong to the same document observation.
             snapshot = self.command('POST', '/execute/sync', {'args': [path], 'script': """
               const visible = node => !!(node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
-              const protectedContent = arguments[0] === '/app'
-                ? Array.from(document.querySelectorAll('main section button')).some(node => visible(node) && node.textContent.trim() === 'Create a community')
-                : Array.from(document.querySelectorAll('aside[aria-label="Direct conversations"]')).some(visible);
+              const heading = arguments[0] === '/app' ? 'Friends' : 'Private messages';
+              const protectedContent = Array.from(document.querySelectorAll('main h1')).some(node => visible(node) && node.textContent.trim() === heading);
               return {url: location.href, protected_content: protectedContent};
             """}, timeout=min(2, remaining))
             if auth_destination_reached(snapshot, path):
@@ -682,7 +686,7 @@ def dm_delivery_state(client, message, timeout=2):
     peer = {0: 'Native Bob', 1: 'Native Alice'}[client.profile]
     snapshot = client.command('POST', '/execute/sync', {'args': [ORIGIN, peer, message], 'script': """
       const [origin, peer, expected] = arguments;
-      const selected = Array.from(document.querySelectorAll('aside[aria-label="Direct conversations"] button[aria-current="page"]'));
+      const selected = Array.from(document.querySelectorAll('nav[aria-label="Home"] a[aria-current="page"]'));
       const logs = Array.from(document.querySelectorAll('ol[role="log"]')).filter(node => node.getAttribute('aria-label') === 'Private conversation with ' + peer);
       const rows = logs.length === 1 ? Array.from(logs[0].children).filter(node => node.tagName === 'LI') : [];
       const paragraphs = row => Array.from(row.children).filter(node => node.tagName === 'P');
@@ -701,7 +705,7 @@ def dm_delivery_state(client, message, timeout=2):
         at_messages: location.origin === origin && location.pathname === '/app/messages',
         visibility: document.visibilityState,
         selection_count: selected.length,
-        target_selection_count: selected.filter(node => node.querySelector('span')?.textContent === peer).length,
+        target_selection_count: selected.filter(node => node.querySelector('[data-dm-peer-name]')?.textContent === peer).length,
         private_log_count: logs.length, message_row_count: rows.length,
         log_visible: logs.length === 1 && !!logs[0].getClientRects().length && getComputedStyle(logs[0]).visibility !== 'hidden',
         expected_plaintext_present: rows.some(matches),
@@ -1497,15 +1501,15 @@ def main():
                 dm_progress(bob.profile, 'open_member_inbox')
                 bob.goto('/app/messages')
                 dm_progress(bob.profile, 'select_message_request')
-                bob.prefix_click('Native Alice')
+                bob.open_conversation('Native Alice')
                 dm_progress(bob.profile, 'accept_message_request')
                 bob.click('Accept message request')
-                dm_progress(alice.profile, 'await_verify_device')
-                wait(lambda: alice.text('Verify device'))
+                # Trust on first use: sending works without SAS; verification is the optional upgrade.
                 dm_progress(alice.profile, 'locate_encrypted_send')
-                send = alice.element('//button[normalize-space(.)="Send encrypted message"]')
-                dm_progress(alice.profile, 'assert_unverified_send_disabled')
-                assert not alice.command('GET', '/element/' + send + '/enabled')
+                alice.element('//textarea[@id="private-message"]')
+                dm_progress(alice.profile, 'await_verify_device')
+                alice.click('Devices and recovery')
+                wait(lambda: alice.text('Verify device'))
             with stage('dm_sas_delivery'):
                 secret_message = 'Disposable native encrypted delivery 73192'
                 delivery_message = secret_message
@@ -1539,7 +1543,7 @@ def main():
                 dm_progress(bob.profile, 'reload_conversation')
                 bob.command('POST', '/refresh', {})
                 dm_progress(bob.profile, 'select_conversation')
-                bob.prefix_click('Native Alice')
+                bob.open_conversation('Native Alice')
                 dm_progress(bob.profile, 'await_persisted_message')
                 wait(lambda: bob.text(secret_message), 60)
             with stage('dm_gateway_recovery'):

@@ -86,7 +86,12 @@ export async function signUp(page: Page, name: string, path = "/sign-up") {
 
 export async function createCommunity(page: Page, name: string) {
   await page.goto("/app");
-  await page.getByRole("button", { name: "Create a community" }).first().click();
+  // Home is the friends list; on phones the rail's create button sits in the off-canvas navigation.
+  const create = page.getByRole("button", { name: "Create a community" }).first();
+  const navigation = page.getByRole("button", { name: "Open navigation" }).first();
+  await expect.poll(async () => (await create.isVisible()) || (await navigation.isVisible())).toBe(true);
+  if (!(await create.isVisible())) await navigation.click();
+  await create.click();
   await page.getByLabel("Name").fill(name);
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
