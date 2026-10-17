@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FriendView, PersonResult } from "@/server/friends";
 import { PresenceAvatar } from "../presence-avatar";
+import { UserContextMenu } from "../user-context-menu";
 
 type Filter = "online" | "all" | "pending";
 type Notice = { ok: boolean; text: string } | null;
@@ -76,47 +77,49 @@ export function FriendsView({ userId, friends, initialCode }: FriendsViewProps) 
             ) : (
               <ul className="divide-y divide-white/5 rounded-xl border border-white/5">
                 {shown.map((f) => (
-                  <li key={f.id} className="flex items-center gap-3 px-3 py-2.5">
-                    <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-zinc-100">{f.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {f.state === "incoming" ? "Incoming friend request" : f.state === "outgoing" ? "Outgoing friend request" : f.customStatus || f.bio || (f.presence ? "Online" : "Offline")}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      {f.state === "friend" && (
-                        <>
-                          <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} title="Message" className="grid size-8 place-items-center rounded-lg text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring">
-                            <MessageSquareIcon className="size-4" />
-                          </Link>
-                          <Button variant="ghost" size="icon" disabled={busy} aria-label={`Remove ${f.name} as a friend`} title="Remove friend"
-                            onClick={() => window.confirm(`Remove ${f.name} as a friend? They won't be notified.`) && act(() => removeFriend(f.id))}>
-                            <UserMinusIcon />
+                  <UserContextMenu key={f.id} userId={f.id} name={f.name} currentUserId={userId} relation={f.state} disabled={busy} onChanged={() => setNotice(null)} onError={(error) => setNotice({ ok: false, text: error })}>
+                    <li className="flex items-center gap-3 px-3 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
+                      <PresenceAvatar userId={f.id} name={f.name} status={f.presence} announce />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-zinc-100">{f.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {f.state === "incoming" ? "Incoming friend request" : f.state === "outgoing" ? "Outgoing friend request" : f.customStatus || f.bio || (f.presence ? "Online" : "Offline")}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        {f.state === "friend" && (
+                          <>
+                            <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} title="Message" className="grid size-8 place-items-center rounded-lg text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring">
+                              <MessageSquareIcon className="size-4" />
+                            </Link>
+                            <Button variant="ghost" size="icon" disabled={busy} aria-label={`Remove ${f.name} as a friend`} title="Remove friend"
+                              onClick={() => window.confirm(`Remove ${f.name} as a friend? They won't be notified.`) && act(() => removeFriend(f.id))}>
+                              <UserMinusIcon />
+                            </Button>
+                          </>
+                        )}
+                        {f.state === "incoming" && (
+                          <>
+                            <Button size="sm" disabled={busy} aria-label={`Accept friend request from ${f.name}`} onClick={() => act(() => respondToFriendRequest(f.id, true), `You and ${f.name} are now friends.`)}>
+                              <CheckIcon /> Accept
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={busy} aria-label={`Decline friend request from ${f.name}`} onClick={() => act(() => respondToFriendRequest(f.id, false))}>
+                              Decline
+                            </Button>
+                            <Button variant="ghost" size="sm" disabled={busy} aria-label={`Block ${f.name}`}
+                              onClick={() => window.confirm(`Block ${f.name}? Their request is removed and they can't send another.`) && act(() => blockUser(f.id))}>
+                              Block
+                            </Button>
+                          </>
+                        )}
+                        {f.state === "outgoing" && (
+                          <Button variant="outline" size="sm" disabled={busy} aria-label={`Cancel friend request to ${f.name}`} onClick={() => act(() => removeFriend(f.id))}>
+                            <XIcon /> Cancel
                           </Button>
-                        </>
-                      )}
-                      {f.state === "incoming" && (
-                        <>
-                          <Button size="sm" disabled={busy} aria-label={`Accept friend request from ${f.name}`} onClick={() => act(() => respondToFriendRequest(f.id, true), `You and ${f.name} are now friends.`)}>
-                            <CheckIcon /> Accept
-                          </Button>
-                          <Button variant="outline" size="sm" disabled={busy} aria-label={`Decline friend request from ${f.name}`} onClick={() => act(() => respondToFriendRequest(f.id, false))}>
-                            Decline
-                          </Button>
-                          <Button variant="ghost" size="sm" disabled={busy} aria-label={`Block ${f.name}`}
-                            onClick={() => window.confirm(`Block ${f.name}? Their request is removed and they can't send another.`) && act(() => blockUser(f.id))}>
-                            Block
-                          </Button>
-                        </>
-                      )}
-                      {f.state === "outgoing" && (
-                        <Button variant="outline" size="sm" disabled={busy} aria-label={`Cancel friend request to ${f.name}`} onClick={() => act(() => removeFriend(f.id))}>
-                          <XIcon /> Cancel
-                        </Button>
-                      )}
-                    </div>
-                  </li>
+                        )}
+                      </div>
+                    </li>
+                  </UserContextMenu>
                 ))}
               </ul>
             )}
@@ -154,6 +157,18 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
     }
   }
 
+  function refreshResults() {
+    if (query.trim().length < 2) {
+      setResults(null);
+      return;
+    }
+    startTransition(async () => {
+      const result = await searchPeople(query);
+      setResults(result.ok ? result.data : null);
+      setNotice(result.ok ? null : { ok: false, text: result.error });
+    });
+  }
+
   return (
     <section aria-labelledby={`${id}-heading`} className="grid gap-4 rounded-xl border border-white/5 bg-panel/60 p-4">
       <div>
@@ -179,11 +194,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
         className="grid gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          startTransition(async () => {
-            const result = await searchPeople(query);
-            setResults(result.ok ? result.data : null);
-            setNotice(result.ok ? null : { ok: false, text: result.error });
-          });
+          refreshResults();
         }}
       >
         <Label htmlFor={`${id}-search`}>Search your communities</Label>
@@ -201,18 +212,20 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
         ) : (
           <ul aria-label="Search results" className="divide-y divide-white/5 rounded-lg border border-white/5">
             {results.map((p) => (
-              <li key={p.id} className="flex items-center gap-3 px-3 py-2">
-                <PresenceAvatar userId={p.id} name={p.name} size="sm" status={null} />
-                <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                {p.relation === null || p.relation === "incoming" ? (
-                  <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add"} ${p.name} as a friend`}
-                    onClick={() => send(p.id, (outcome) => setResults((rs) => rs?.map((r) => (r.id === p.id ? { ...r, relation: outcome === "sent" ? "outgoing" : outcome === "accepted" ? "friend" : r.relation } : r)) ?? null))}>
-                    {p.relation === "incoming" ? "Accept" : "Add friend"}
-                  </Button>
-                ) : (
-                  <span className="text-xs text-muted-foreground">{p.relation === "friend" ? "Friends" : "Request sent"}</span>
-                )}
-              </li>
+              <UserContextMenu key={p.id} userId={p.id} name={p.name} currentUserId={userId} relation={p.relation} disabled={busy} onChanged={refreshResults} onError={(error) => setNotice({ ok: false, text: error })}>
+                <li className="flex items-center gap-3 px-3 py-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
+                  <PresenceAvatar userId={p.id} name={p.name} size="sm" status={null} />
+                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                  {p.relation === null || p.relation === "incoming" ? (
+                    <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add"} ${p.name} as a friend`}
+                      onClick={() => send(p.id, (outcome) => setResults((rs) => rs?.map((r) => (r.id === p.id ? { ...r, relation: outcome === "sent" ? "outgoing" : outcome === "accepted" ? "friend" : r.relation } : r)) ?? null))}>
+                      {p.relation === "incoming" ? "Accept" : "Add friend"}
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{p.relation === "friend" ? "Friends" : "Request sent"}</span>
+                  )}
+                </li>
+              </UserContextMenu>
             ))}
           </ul>
         )

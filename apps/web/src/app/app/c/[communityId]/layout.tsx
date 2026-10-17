@@ -35,7 +35,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
         blockedIds={blocked}
         initial={Object.fromEntries(view.channels.map((c) => [c.id, { unread: c.unread, mentions: c.mentions }]))}
       >
-      <MemberListProvider members={members.map(({ userId, name, isOwner }) => ({ userId, name, isOwner }))}>
+      <MemberListProvider currentUserId={user.id} blockedIds={blocked} members={members.map(({ userId, name, isOwner }) => ({ userId, name, isOwner }))}>
       <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">
         <ChannelSidebar view={view} />
       </MobilePanel>

@@ -10,6 +10,7 @@ import { SearchDialog } from "./search-dialog";
 import { VoiceBar } from "./voice/voice-bar";
 import { voiceEnabled } from "@/server/voice";
 import { InviteDialog } from "./invite-dialog";
+import { ServerContextMenu } from "./server-context-menu";
 
 const SETTINGS_PERMISSIONS =
   Permission.ManageCommunity | Permission.ManageRoles | Permission.KickMembers | Permission.BanMembers | Permission.ViewAuditLog;
@@ -26,17 +27,23 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
   const canModerate = (view.authority.permissions & SETTINGS_PERMISSIONS) !== 0;
   return (
     <>
-      <header className="flex h-12 items-center gap-1 border-b border-white/5 px-3">
-        <h2 className="min-w-0 flex-1 truncate px-2 font-semibold text-zinc-100">{view.name}</h2>
-        <SearchDialog communityId={view.id} communityName={view.name} />
-        <Link
-          href={`/app/c/${view.id}/settings`}
-          aria-label={canModerate ? "Community settings" : "Community info"}
-          className="rounded-md p-1.5 text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          <SettingsIcon className="size-4" />
-        </Link>
-      </header>
+      <ServerContextMenu
+        community={{ id: view.id, name: view.name, authority: view.authority, notifications: view.notifications }}
+        tabIndex={0}
+        className="rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <header className="flex h-12 items-center gap-1 border-b border-white/5 px-3">
+          <h2 className="min-w-0 flex-1 truncate px-2 font-semibold text-zinc-100">{view.name}</h2>
+          <SearchDialog communityId={view.id} communityName={view.name} />
+          <Link
+            href={`/app/c/${view.id}/settings`}
+            aria-label={canModerate ? "Community settings" : "Community info"}
+            className="rounded-md p-1.5 text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <SettingsIcon className="size-4" />
+          </Link>
+        </header>
+      </ServerContextMenu>
       <div className="flex items-center justify-between px-3 pt-3 pb-1">
         <h3 className="px-2 text-[11px] tracking-widest text-zinc-400 uppercase">Text channels</h3>
         {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} isOwner={view.isOwner} />}
