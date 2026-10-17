@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { AccessToken } from "livekit-server-sdk";
@@ -146,8 +146,9 @@ describe("bound grant serialized against actual lifecycle mutations", () => {
       delayed.mockRestore();
     }
   });
-  it("keeps the product unreachable and all external SDK work outside control transactions", () => {
-    expect(existsSync(new URL("../src/app/api/voice/control/route.ts", import.meta.url))).toBe(false);
+  it("keeps media activation separate and all external SDK work outside control transactions", () => {
+    const provider = readFileSync(new URL("../src/components/app/voice/voice-provider.tsx", import.meta.url), "utf8");
+    expect(provider).not.toMatch(/crypto-owner|http-client|VoiceCryptoOwner/);
     const control = readFileSync(new URL("../src/server/voice-control.ts", import.meta.url), "utf8");
     expect(control).not.toMatch(/livekit-server-sdk|new AccessToken|RoomServiceClient|fetch\(/);
     const signer = readFileSync(new URL("../src/server/voice.ts", import.meta.url), "utf8").split("export async function createBoundVoiceToken")[1].split("export interface VoiceParticipant")[0];

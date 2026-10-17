@@ -387,8 +387,12 @@ async function targetFor(tx: Tx, callId: string, userId: string): Promise<Member
   if (!target) throw notFound("Current voice device not found.");
   return target;
 }
+// Initial own signatures may precede stored cross-signing IDs. Query can later merge
+// these four entries with four known stored signing IDs; prekeys are returned unchanged.
+const MAX_INITIAL_SIGNATURE_KEYS = 4;
 function selfSignatures(value: { signatures?: Record<string, Record<string, string>> }, ownUser: string) {
   if (value.signatures && Object.keys(value.signatures).some((id) => id !== ownUser)) throw invalid("Only this voice identity may sign its uploaded keys.");
+  if (Object.keys(value.signatures?.[ownUser] ?? {}).length > MAX_INITIAL_SIGNATURE_KEYS) throw invalid("Too many initial voice signatures.");
 }
 async function identityFor(tx: Tx, memberId: string) {
   const [identity] = await tx.select().from(voiceIdentity).where(eq(voiceIdentity.memberId, memberId));
