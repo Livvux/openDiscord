@@ -110,6 +110,10 @@ are not reused by the new identity; reset does not claim secure erasure of brows
 ## Server visibility and reporting
 
 The server sees participants, device public keys, conversation state, envelope sizes and timestamps.
+It also stores, per person and conversation, the newest message ID they have seen (read marker) to
+count unread messages; the peer never receives it. New-message events and Web Push notifications
+carry only the sender and conversation, never text: the server has no key to read it, and a push
+says "New encrypted message" with the sender's display name.
 It can refuse delivery or hide devices. This is not metadata-hiding messaging, key transparency or
 an externally audited application. The web application is delivered by the operator: an operator or
 attacker able to replace that code can obtain plaintext in the browser. E2EE protects content from
@@ -123,7 +127,7 @@ selected excerpt; excerpts are recipient statements and cannot be independently 
 server. Review is restricted to active instance administrators and is audited.
 
 Account export version 6 includes conversation metadata, device metadata, public identity, ciphertext
-messages, ciphertext backups and the caller's reports. It never includes device bearer secrets or
+messages, ciphertext backups and the caller's reports; version 11 adds the caller's read markers. It never includes device bearer secrets or
 browser private keys. Account deletion cascades device keys, mailbox contents, backups, conversation
 ciphertext and related reports. Previously downloaded plaintext, private recovery files and other
 participants' local browser copies cannot be remotely erased.

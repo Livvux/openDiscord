@@ -2,24 +2,33 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { unreadTotal } from "@/lib/dm/contracts";
+import { useDirectConversations } from "../notifications-provider";
 
 const HOME_PATHS = ["/app", "/app/friends", "/app/messages"];
 
-/** The rail's Home button: active anywhere in the personal area. */
-export function RailHomeLink() {
+/** The rail's Home button: active anywhere in the personal area; badge = unread private messages. */
+export function RailHomeLink({ initialUnread = 0 }: { initialUnread?: number }) {
   const active = HOME_PATHS.includes(usePathname());
+  const { direct } = useDirectConversations();
+  const unread = direct ? unreadTotal(direct) : initialUnread;
   return (
     <Link
       href="/app"
-      aria-label="Home"
+      aria-label={unread > 0 ? `Home, ${unread} unread private ${unread === 1 ? "message" : "messages"}` : "Home"}
       aria-current={active ? "page" : undefined}
       title="Home"
-      className={`mt-3 grid size-10 place-items-center transition-[border-radius,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+      className={`relative mt-3 grid size-10 place-items-center transition-[border-radius,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
         active ? "rounded-xl bg-primary" : "rounded-2xl bg-white/5 hover:rounded-xl hover:bg-white/10"
       }`}
     >
       {/* eslint-disable-next-line @next/next/no-img-element -- static SVG, no optimisation needed */}
       <img src="/brand/symbol-flat.svg" alt="" width={22} height={22} />
+      {unread > 0 && (
+        <span data-home-unread aria-hidden className="absolute -right-1.5 -bottom-1 min-w-5 rounded-full border-2 border-sidebar bg-red-600 px-1 text-center text-[11px] leading-4 font-bold text-white">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
     </Link>
   );
 }

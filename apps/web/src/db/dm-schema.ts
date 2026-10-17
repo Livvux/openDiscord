@@ -71,6 +71,13 @@ export const dmMessage = pgTable("dm_message", {
   createdAt: created(),
 }, (t) => [index("dm_message_page_idx").on(t.conversationId, t.id), uniqueIndex("dm_message_transaction_idx").on(t.deviceId, t.transactionId)]);
 
+/** Per person and conversation: the newest message they have seen. Unread counts are derived from it. */
+export const dmReadState = pgTable("dm_read_state", {
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversation.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  lastReadId: uuid("last_read_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.conversationId, t.userId] })]);
+
 export const dmBackup = pgTable("dm_backup", {
   id: uuid("id").primaryKey(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),

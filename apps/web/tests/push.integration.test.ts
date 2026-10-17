@@ -6,8 +6,8 @@ import { message, pushSubscription } from "@/db/schema";
 import { acceptInvite, createChannel, createCommunity, createInvite, setChannelOverride } from "@/server/communities";
 import { listRoles } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
-import { setNotificationLevel } from "@/server/presence";
-import { isAllowedEndpoint, pushEnabled, pushMention, savePushSubscription, type PushSender } from "@/server/push";
+import { setNotificationLevel, setPresenceStatus } from "@/server/presence";
+import { isAllowedEndpoint, pushDirectMessage, pushEnabled, pushMention, savePushSubscription, type PushSender } from "@/server/push";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
@@ -58,6 +58,15 @@ describe.runIf(pushEnabled)("mention pushes", () => {
     const payload = JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "));
     // Not stored as a mention row (inserted directly), so the token renders as "@member".
     expect(payload).toMatchObject({ title: "Owner in #general", body: "hey @member look", url: `/app/c/${communityId}/${generalId}` });
+  });
+
+  it("announces a private message by sender only, never its content, and respects Do not disturb", async () => {
+    expect(await pushDirectMessage(member, owner, ok)).toBe(1);
+    const payload = JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "));
+    expect(payload).toEqual({ title: "Owner", body: "New encrypted message", url: `/app/messages?to=${encodeURIComponent(owner)}`, tag: `dm:${owner}` });
+    await setPresenceStatus(member, "dnd");
+    expect(await pushDirectMessage(member, owner, ok)).toBe(0);
+    await setPresenceStatus(member, "online");
   });
 
   it("skips muted communities and channels the person can't read", async () => {

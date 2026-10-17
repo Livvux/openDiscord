@@ -1,4 +1,4 @@
-import { appendDirectMessage, createDirectConversation, listDirectConversations, listDirectMessages, listDmDevices, registerDmDevice, reportDirectMessage, respondToDirectRequest, revokeDmDevice } from "@/server/direct-messages";
+import { appendDirectMessage, createDirectConversation, markDirectConversationRead, listDirectConversations, listDirectMessages, listDmDevices, registerDmDevice, reportDirectMessage, respondToDirectRequest, revokeDmDevice } from "@/server/direct-messages";
 import { assertDmOrigin, dmActionSchema, requireDmDevice } from "@/server/dm-http";
 import { invalid } from "@/server/errors";
 import { errorResponse, PRIVATE_NO_STORE, readJsonBody } from "@/server/http";
@@ -30,6 +30,7 @@ export async function POST(request: Request) {
       case "request": result = { id: await createDirectConversation(user.id, body.target) }; break;
       case "respond": await respondToDirectRequest(user.id, parse(uuid, body.id), body.status); break;
       case "send": result = await appendDirectMessage(await requireDmDevice(request), parse(uuid, body.id), body.input); break;
+      case "read": await markDirectConversationRead(user.id, parse(uuid, body.id), body.message); break;
       case "report": await reportDirectMessage(user.id, { id: body.id, reason: body.reason, excerpt: body.excerpt }); break;
       case "revoke": await revokeDmDevice(user.id, parse(uuid, body.id)); break;
       default: throw invalid("Unknown private messaging operation.");

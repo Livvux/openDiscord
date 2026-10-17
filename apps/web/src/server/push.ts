@@ -1,11 +1,11 @@
-// Web Push for mentions when no tab is open (or the tab is in the background). Optional: needs VAPID
+// Web Push for mentions and new private messages when no tab is open (or the tab is in the background). Optional: needs VAPID
 // keys. Browsers deliver pushes through their vendor's push service (Google, Mozilla, Apple, Microsoft);
 // the payload is end-to-end encrypted for the browser, so that service only sees that a push happened.
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, inArray, or } from "drizzle-orm";
 import webpush from "web-push";
 import { z } from "zod";
 import { db } from "@/db";
-import { channel, community, pushSubscription } from "@/db/schema";
+import { channel, community, pushSubscription, user, userBlock } from "@/db/schema";
 import { loadChannelAuthority } from "./access";
 import { AppError } from "./errors";
 import { enforceCap } from "./limits";
@@ -106,11 +106,38 @@ export async function pushMention(userId: string, channelId: string, messageId: 
     url: `/app/c/${access.channel.communityId}/${channelId}`,
     tag: messageId,
   };
+  return deliver(subs, JSON.stringify({ ...payload, community: c?.name ?? "" }), send);
+}
+
+/**
+ * New encrypted DM. The server cannot read it and never tries: the payload names the sender only.
+ * Skipped for Do not disturb and blocks. One notification per conversation (same tag) instead of a stack.
+ */
+export async function pushDirectMessage(userId: string, senderId: string, send: PushSender = sendWithWebPush): Promise<number> {
+  if (!pushEnabled && send === sendWithWebPush) return 0;
+  const subs = await db.select().from(pushSubscription).where(eq(pushSubscription.userId, userId));
+  if (subs.length === 0) return 0;
+  if ((await presenceChoice(userId)) === "dnd") return 0;
+  const [block] = await db.select({ id: userBlock.blockerId }).from(userBlock)
+    .where(or(and(eq(userBlock.blockerId, userId), eq(userBlock.blockedId, senderId)), and(eq(userBlock.blockerId, senderId), eq(userBlock.blockedId, userId)))).limit(1);
+  if (block) return 0;
+  const [sender] = await db.select({ name: user.name }).from(user).where(eq(user.id, senderId));
+  if (!sender) return 0;
+  const payload: PushPayload = {
+    title: sender.name,
+    body: "New encrypted message",
+    url: `/app/messages?to=${encodeURIComponent(senderId)}`,
+    tag: `dm:${senderId}`,
+  };
+  return deliver(subs, JSON.stringify(payload), send);
+}
+
+async function deliver(subs: (typeof pushSubscription.$inferSelect)[], body: string, send: PushSender): Promise<number> {
   const gone: string[] = [];
   let delivered = 0;
   await Promise.all(subs.map(async (s) => {
     try {
-      const status = await send({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify({ ...payload, community: c?.name ?? "" }));
+      const status = await send({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body);
       if (status === 404 || status === 410) gone.push(s.id);
       else if (status < 300) delivered += 1;
     } catch (error) {

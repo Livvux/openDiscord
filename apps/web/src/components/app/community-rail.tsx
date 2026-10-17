@@ -7,6 +7,8 @@ import { presenceChoice } from "@/server/presence";
 import { getProfile } from "@/server/profile";
 import { ownAvatar } from "@/server/avatars";
 import { communityUnread } from "@/server/unread";
+import { listDirectConversations } from "@/server/direct-messages";
+import { unreadTotal } from "@/lib/dm/contracts";
 
 const NOTHING_UNREAD_SUMMARY = { unread: false, mentions: 0 };
 import { AccountMenu } from "./account-menu";
@@ -18,10 +20,10 @@ import { ServerContextMenu } from "./server-context-menu";
 export async function CommunityRail() {
   const user = await requirePageUser();
   const [communities, admin, presence, profile, avatar] = await Promise.all([listCommunityNavigation(user.id), isInstanceAdmin(user.id), presenceChoice(user.id), getProfile(user.id), ownAvatar(user.id)]);
-  const unread = await communityUnread(user.id, communities);
+  const [unread, direct] = await Promise.all([communityUnread(user.id, communities), listDirectConversations(user.id)]);
   return (
     <>
-      <RailHomeLink />
+      <RailHomeLink initialUnread={unreadTotal(direct)} />
       <span aria-hidden className="mt-3 h-0.5 w-8 rounded-full bg-white/10" />
       <ul className="flex flex-1 flex-col items-center gap-3 overflow-y-auto py-4">
         {communities.map((c) => (

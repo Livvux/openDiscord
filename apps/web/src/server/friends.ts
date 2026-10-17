@@ -12,6 +12,7 @@ import { consume, enforceCap } from "./limits";
 import { AccountBlocked, assertActiveUser } from "./instance-policy";
 import type { PresenceStatus } from "@/lib/presence";
 import { ONLINE_WINDOW_MS } from "./presence";
+import { publish } from "./realtime";
 import { parse } from "./validation";
 
 export const MAX_FRIENDS = 1000;
@@ -69,7 +70,7 @@ export async function sendFriendRequest(actorId: string, rawTarget: unknown): Pr
   const targetId = parse(accountId, rawTarget);
   if (targetId === actorId) throw invalid("That's your own friend code.");
   await consume(`friend-request:${actorId}`, 20, 3_600_000);
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx): Promise<"sent" | "accepted" | "already"> => {
     // Actor first (caps), then the pair (crossing requests); the pair lock is always taken last, so no cycles.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actorId}, 33))`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${pair(actorId, targetId).join(":")}, 32))`);
@@ -101,6 +102,17 @@ export async function sendFriendRequest(actorId: string, rawTarget: unknown): Pr
     await tx.insert(friendship).values({ firstId: first, secondId: second, requestedBy: actorId });
     return "sent";
   });
+  if (result !== "already") await announceFriends([targetId, actorId]);
+  return result;
+}
+
+/** Live refresh of Home and the friends list for both sides; ids only, best effort. */
+async function announceFriends(userIds: string[]): Promise<void> {
+  try {
+    for (const userId of userIds) await publish({ type: "friends.changed", userId });
+  } catch (error) {
+    console.error("[realtime] friends event failed", error);
+  }
 }
 
 export async function respondToFriendRequest(actorId: string, rawOther: unknown, rawAccept: unknown): Promise<void> {
@@ -114,6 +126,8 @@ export async function respondToFriendRequest(actorId: string, rawOther: unknown,
     if (!changed.length) throw new AppError("conflict", "This request is no longer pending.");
     if (accept) await acceptPendingConversation(tx, actorId, otherId);
   });
+  // A decline stays quiet for the sender, like removeFriend.
+  await announceFriends(accept ? [otherId, actorId] : [actorId]);
 }
 
 /** A message request (even a declined one) between two people who just became friends needs no separate answer. */
@@ -129,6 +143,7 @@ async function acceptPendingConversation(tx: Tx, a: string, b: string): Promise<
 export async function removeFriend(actorId: string, rawOther: unknown): Promise<void> {
   const otherId = parse(accountId, rawOther);
   await db.delete(friendship).where(pairWhere(actorId, otherId));
+  await announceFriends([actorId]);
 }
 
 export async function listFriends(actorId: string): Promise<FriendView[]> {
