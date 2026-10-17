@@ -39,7 +39,7 @@ test("profile card, friends Home and a live encrypted DM between two friends", a
   await expect(bob.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
   await bob.getByRole("button", { name: "Accept friend request from Social Alice" }).click();
   await bob.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: /^All/ }).click();
-  await expect(bob.getByRole("region", { name: "Your friends" }).getByRole("button", { name: /Social Alice/ })).toBeVisible();
+  await expect(bob.getByRole("region", { name: "Your friends" }).getByRole("button", { name: /^Social Alice/ })).toBeVisible();
 
   // Alice opens the DM from Home; friends need no message request and no prior device verification.
   await alice.goto("/app");

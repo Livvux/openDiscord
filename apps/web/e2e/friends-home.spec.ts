@@ -49,7 +49,7 @@ test.describe("home, friends and account menu", () => {
 
     await expect(async () => {
       await owner.goto("/app");
-      await expect(owner.getByRole("main").getByText("Shipping features")).toBeVisible({ timeout: 2_000 });
+      await expect(owner.getByRole("region", { name: "Your friends" }).getByText("Shipping features")).toBeVisible({ timeout: 2_000 });
     }).toPass({ timeout: 20_000 });
 
     // Friends open encrypted DMs directly, without a message request.

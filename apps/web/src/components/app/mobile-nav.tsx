@@ -1,7 +1,8 @@
 "use client";
 
 import { MenuIcon } from "lucide-react";
-import { createContext, useContext, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 // Below the md breakpoint the community rail and channel list become an off-canvas panel.
@@ -11,13 +12,17 @@ const MobileNavContext = createContext<{ open: boolean; setOpen: (open: boolean)
 });
 
 export function MobileNavProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+  // Open only on the page where it was opened: any navigation (e.g. creating a community) closes it.
+  const pathname = usePathname();
+  const [openedAt, setOpenedAt] = useState<string | null>(null);
+  const open = openedAt === pathname;
+  const setOpen = useCallback((value: boolean) => setOpenedAt(value ? pathname : null), [pathname]);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, setOpen]);
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>

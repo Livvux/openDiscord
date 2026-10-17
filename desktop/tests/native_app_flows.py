@@ -687,8 +687,9 @@ def dm_delivery_state(client, message, timeout=2):
     snapshot = client.command('POST', '/execute/sync', {'args': [ORIGIN, peer, message], 'script': """
       const [origin, peer, expected] = arguments;
       const selected = Array.from(document.querySelectorAll('nav[aria-label="Home"] a[aria-current="page"]'));
-      const logs = Array.from(document.querySelectorAll('ol[role="log"]')).filter(node => node.getAttribute('aria-label') === 'Private conversation with ' + peer);
-      const rows = logs.length === 1 ? Array.from(logs[0].children).filter(node => node.tagName === 'LI') : [];
+      const logs = Array.from(document.querySelectorAll('[role="log"]')).filter(node => node.getAttribute('aria-label') === 'Private conversation with ' + peer);
+      const list = logs.length === 1 ? logs[0].querySelector(':scope > ol') : null;
+      const rows = list ? Array.from(list.children).filter(node => node.tagName === 'LI') : [];
       const paragraphs = row => Array.from(row.children).filter(node => node.tagName === 'P');
       const matches = row => paragraphs(row)[1]?.textContent === expected;
       const controls = Array.from(document.querySelectorAll('textarea#private-message'));
