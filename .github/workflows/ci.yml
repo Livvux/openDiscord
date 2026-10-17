@@ -151,6 +151,9 @@ jobs:
       - name: Start LiveKit (dev mode)
         id: livekit
         run: docker run -d --name opendiscord-ci-livekit --network host livekit/livekit-server:v1.13 --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+      - name: Voice maintenance real DB and SDK acceptance
+        timeout-minutes: 3
+        run: pnpm --filter web exec tsx scripts/verify-voice-maintenance.ts
       - run: pnpm --filter web exec playwright install --with-deps chromium
       - run: pnpm --filter web test:e2e
       - name: LiveKit advertised address and listeners
