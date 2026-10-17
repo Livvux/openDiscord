@@ -143,7 +143,10 @@ export async function waitForLive(page: Page) {
 /** The account popover at the bottom of the community rail (an off-canvas panel on mobile). */
 export async function openAccountMenu(page: Page) {
   const nav = page.getByRole("navigation", { name: "Communities" });
-  if (!(await nav.isVisible())) await page.getByRole("button", { name: "Open navigation" }).first().click();
+  const openNavigation = page.getByRole("button", { name: "Open navigation" }).first();
+  // Redirect URLs can settle before the streamed app shell mounts. Absence is not a mobile layout.
+  await expect.poll(async () => (await nav.isVisible()) || (await openNavigation.isVisible())).toBe(true);
+  if (!(await nav.isVisible())) await openNavigation.click();
   await nav.getByRole("button", { name: /^Account menu for / }).click();
 }
 
