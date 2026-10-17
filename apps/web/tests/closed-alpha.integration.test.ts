@@ -1,3 +1,5 @@
+import { createEmailVerificationToken } from "better-auth/api";
+import { GET } from "@/app/api/auth/[...all]/route";
 import { REGISTRATION_HEADERS } from "./helpers";
 // Requires a migrated database at DATABASE_URL.
 import { randomUUID } from "node:crypto";
@@ -64,6 +66,22 @@ describe("closed alpha", () => {
     expect(await db.select().from(session).where(eq(session.userId, row.id))).toHaveLength(0);
     await expect(auth.api.signInEmail({ body: { email, password } })).rejects.toMatchObject({ body: { code: "ACCOUNT_PENDING" } });
     await expect(assertActiveUser(row.id)).rejects.toBeInstanceOf(AccountBlocked);
+  });
+
+  it("redirects a verified pending account to the approval screen without creating a session", async () => {
+    const { email } = await signUp("Verified applicant");
+    const row = await statusOf(email);
+    await db.update(user).set({ emailVerified: false }).where(eq(user.id, row.id));
+    const token = await createEmailVerificationToken((await auth.$context).secret, email);
+    const url = new URL("/api/auth/verify-email", (await auth.$context).baseURL);
+    url.searchParams.set("token", token);
+    url.searchParams.set("callbackURL", "/app");
+    const response = await GET(new Request(url));
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/sign-in?error=pending");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect((await db.select().from(user).where(eq(user.id, row.id)))[0].emailVerified).toBe(true);
+    expect(await db.select().from(session).where(eq(session.userId, row.id))).toHaveLength(0);
   });
 
   it("doesn't let clients pick their own approval status", async () => {

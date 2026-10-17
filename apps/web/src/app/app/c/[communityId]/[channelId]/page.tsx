@@ -8,6 +8,7 @@ import { PinnedDialog } from "@/components/app/chat/pinned-dialog";
 import { VoiceRoom } from "@/components/app/voice/voice-room";
 import { voiceEnabled } from "@/server/voice";
 import { Volume2Icon } from "lucide-react";
+import { MemberListToggle } from "@/components/app/member-list";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
 import { blockedIds } from "@/server/blocks";
@@ -54,6 +55,7 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
               categories={view.categories}
             />
           )}
+          <MemberListToggle />
         </div>
       </header>
       {publication && <PublicChannelControls channelId={channel.id} unpublished={publication.unpublished} isOwner={view.isOwner} />}
