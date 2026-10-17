@@ -54,6 +54,7 @@ export function ChannelChat(props: ChannelChatProps) {
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<MessageView | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const heightBeforeOlder = useRef<number | null>(null);
   const [dividerAfter] = useState(lastReadId);
@@ -92,6 +93,24 @@ export function ChannelChat(props: ChannelChatProps) {
 
   useEffect(() => {
     if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, []);
+
+  useEffect(() => {
+    const el = scroller.current;
+    const contents = content.current;
+    if (!el || !contents) return;
+    let active = true;
+    // Content can grow after the message layout effect has already pinned the view.
+    const observer = new ResizeObserver(() => {
+      if (!active || scroller.current !== el || content.current !== contents
+        || !nearBottom.current || heightBeforeOlder.current !== null) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(contents);
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
   }, []);
 
   async function onLoadOlder() {
@@ -138,7 +157,7 @@ export function ChannelChat(props: ChannelChatProps) {
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        <div className="flex min-h-full flex-col justify-end py-4">
+        <div ref={content} className="flex min-h-full flex-col justify-end py-4">
           {hasMore ? (
             <div className="flex flex-col items-center gap-1 py-2">
               <Button variant="ghost" size="sm" onClick={onLoadOlder} disabled={loadingOlder}>
