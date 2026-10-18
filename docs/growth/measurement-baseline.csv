@@ -1,0 +1,11 @@
+observed_date,metric,value,unit,status,evidence
+2026-10-18,organic_clicks_28d,,,unavailable,GSC property absent from accessible list
+2026-10-18,organic_impressions_28d,,,unavailable,GSC property absent from accessible list
+2026-10-18,approved_signups,,,unmeasured,No aggregate reporting interface inspected
+2026-10-18,activated_communities,,,unmeasured,Definition proposed; instrumentation absent
+2026-10-18,AI_referral_signups,,,unmeasured,No attribution integration found
+2026-10-18,self_host_deployments,,,unmeasured,Guide visits cannot establish deployments
+2026-10-18,sponsorship_revenue,,,unmeasured,No financial measurement source queried
+2026-10-18,ChatGPT_owned_page_citations,,,not_tested,No actual ChatGPT Search answer measured
+2026-10-18,Perplexity_owned_page_citations,,,blocked,Public browser challenge
+2026-10-18,Google_AIO_brand_presence_voice_query,absent,snapshot,observed,Single rendered Germany desktop query; see audit

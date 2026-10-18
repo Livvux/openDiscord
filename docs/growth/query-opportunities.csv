@@ -1,0 +1,41 @@
+query,cluster,intent_1_5,relevance_1_5,conversion_fit_1_5,competition_estimate_1_5,effort_1_5,priority_score,evidence_status
+openDiscord hosting cost,hosting,5,5,5,1,1,38,hypothesis
+openDiscord self hosting requirements,hosting,5,5,5,1,1,38,hypothesis
+openDiscord pricing,hosting,5,5,5,1,1,38,hypothesis
+openDiscord alpha access,hosting,5,5,5,1,1,38,hypothesis
+openDiscord vs Discord,comparison,5,5,5,2,1,37,Google tested
+openDiscord vs Stoat,competitor-comparison,5,5,5,2,3,35,hypothesis
+open source Discord alternative for small communities,comparison,5,5,5,4,2,34,hypothesis
+Discord alternative Docker Compose,hosting,5,5,5,4,2,34,hypothesis
+hosted vs self hosted community chat,hosting,5,5,5,4,2,34,hypothesis
+Discord alternative own server,hosting,5,5,5,4,2,34,hypothesis
+Discord alternative for private community,comparison,5,5,5,4,2,34,hypothesis
+self hosted community chat with roles permissions,comparison,5,5,5,4,2,34,hypothesis
+self hosted chat with LiveKit,voice,5,5,5,3,3,34,hypothesis
+self hosted chat server bandwidth cost,hosting,5,5,5,3,3,34,hypothesis
+self hosted Discord alternative,comparison,5,5,5,5,2,33,hypothesis
+self hosted discord alternative voice chat,comparison,5,5,5,5,2,33,Google tested
+Discord alternative voice video Docker,voice,5,5,5,4,3,33,hypothesis
+openDiscord vs Element,competitor-comparison,5,5,4,2,3,33,hypothesis
+Discord alternative community export import,comparison,5,5,4,3,2,33,hypothesis
+Discord alternative no per user fees,hosting,5,5,4,4,2,32,hypothesis
+Discord alternative with threads and search,comparison,5,5,4,4,2,32,hypothesis
+Discord alternative with screen sharing,comparison,5,5,4,5,2,31,hypothesis
+Discord alternative for open source project community,use-cases,5,5,4,4,3,31,hypothesis
+self hosted chat for gaming clan,use-cases,5,5,4,4,3,31,hypothesis
+Stoat alternatives self hosted,competitor-comparison,5,5,4,4,3,31,hypothesis
+Revolt alternatives self hosted voice,competitor-comparison,5,5,4,4,3,31,hypothesis
+Discord alternative for gaming community screen sharing,comparison,5,5,4,5,3,30,Google tested
+community chat self hosting backup restore,hosting,4,5,4,3,3,29,hypothesis
+best self hosted Discord alternatives,comparison,5,5,4,5,4,29,hypothesis
+self hosted community chat webhook notifications,integrations,4,5,4,3,3,29,hypothesis
+free self hosted community platform,comparison,4,5,4,5,2,28,hypothesis
+Matrix alternative for small community,competitor-comparison,5,4,4,4,3,28,hypothesis
+TeamSpeak alternative with persistent text chat,voice,5,4,4,4,3,28,hypothesis
+Mumble alternative text video screen sharing,voice,5,4,4,4,3,28,hypothesis
+open source community chat REST API,integrations,4,5,4,4,3,28,hypothesis
+Discord alternative GitHub notifications,integrations,5,4,4,4,4,27,hypothesis
+self hosted community chat pricing,hosting,4,4,4,4,2,26,Google tested
+Discord alternative with webhooks API,integrations,3,4,3,4,3,20,Google tested
+Discord migration self hosted community,migration,5,3,2,4,4,20,hypothesis; no Discord history importer
+enterprise Discord alternative self hosted SLA,enterprise,5,1,1,5,5,10,defer; no verified SLA offering
