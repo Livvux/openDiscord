@@ -9,7 +9,7 @@ import { GITHUB_URL } from "@/lib/site";
 
 const description = "Compare openDiscord with Discord, Element and Stoat for community chat. See hosting costs, voice requirements, migration limits and closed-alpha tradeoffs.";
 export const metadata: Metadata = {
-  title: "A self-hosted Discord alternative: openDiscord",
+  title: "Self-hosted Discord alternative",
   description,
   alternates: { canonical: "/discord-alternative" },
   openGraph: { title: "A self-hosted Discord alternative: openDiscord", description, url: "/discord-alternative" },

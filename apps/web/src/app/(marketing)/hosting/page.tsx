@@ -8,7 +8,7 @@ import { GITHUB_URL } from "@/lib/site";
 
 const description = "Choose hosted openDiscord or self-host community chat. Understand free software, alpha access, server costs, LiveKit voice, backups and operator responsibilities.";
 export const metadata: Metadata = {
-  title: "openDiscord hosting and costs",
+  title: "Hosting and costs",
   description,
   alternates: { canonical: "/hosting" },
   openGraph: { title: "openDiscord hosting and costs", description, url: "/hosting" },
