@@ -22,7 +22,12 @@ describe("request-time public sitemap", () => {
     expect(listPublicChannels).not.toHaveBeenCalled();
     acceptRequest();
     const published = await pending;
-    expect(await published.text()).toContain("/public/019b49df-cb21-7000-8000-000000000001");
+    const xml = await published.text();
+    expect(xml).toContain("/public/019b49df-cb21-7000-8000-000000000001");
+    for (const path of ["/discord-alternative", "/hosting", "/funding"]) {
+      expect(xml).toContain(`${path}</loc>`);
+    }
+    expect(xml).not.toContain("/sign-up");
     expect(published.headers.get("cache-control")).toBe("private, no-store");
     expect(published.headers.get("cdn-cache-control")).toBe("no-store");
     connection.mockResolvedValueOnce(undefined);

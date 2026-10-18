@@ -36,6 +36,10 @@ export function Footer({ t = messages.en.footer, locale = "en" }: { t?: Messages
           <ul className="space-y-3">
             <li><a href={`${home}#features`} className={linkClass}>{nav.features}</a></li>
             <li><a href={`${home}#self-host`} className={linkClass}>{nav.selfHost}</a></li>
+            {locale === "en" && <>
+              <li><Link href="/discord-alternative" className={linkClass}>Discord alternative</Link></li>
+              <li><Link href="/hosting" className={linkClass}>Hosting and costs</Link></li>
+            </>}
             <li><a href={`${home}#roadmap`} className={linkClass}>{nav.roadmap}</a></li>
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- /discover is a route handler, not a page; the rule mistakes it for /[lang] */}
             <li><a href="/discover" className={linkClass}>{t.discover}</a></li>

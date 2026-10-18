@@ -8,6 +8,7 @@ import { GITHUB_URL, SPONSOR_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Funding and running costs",
+  alternates: { canonical: "/funding" },
   description: "The operating costs and funding goal for the hosted openDiscord instance.",
 };
 
