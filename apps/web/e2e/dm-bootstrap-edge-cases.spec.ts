@@ -101,6 +101,9 @@ test.describe("first DM setup and history paging edge cases", () => {
     const loserLog = loser.getByRole("log", { name: "Private conversation with Race Bob" });
     await expect(loserLog.getByText(/Cannot decrypt or authenticate/)).toHaveCount(2, { timeout: 30_000 });
     await expect(loserLog.getByText(/Winner to Bob 5521|Bob to Alice 7734/)).toHaveCount(0);
+    // Each failure says why and what to do, and the browser explains that it still needs verification.
+    await expect(loserLog.locator("[data-dm-failure-hint]").filter({ hasText: "before this browser was set up or verified" })).toHaveCount(2);
+    await expect(loser.locator("[data-unverified-browser]")).toBeVisible();
     await send(loser, "Loser before verification");
     await expect(loser.getByRole("alert").filter({ hasText: /Verify this browser with your other device/ })).toBeVisible();
     await expect(bob.getByRole("log").getByText("Loser before verification", { exact: true })).toHaveCount(0);
@@ -116,6 +119,7 @@ test.describe("first DM setup and history paging edge cases", () => {
     await winner.getByRole("button", { name: "The numbers match", exact: true }).click();
     await loser.getByRole("button", { name: "The numbers match", exact: true }).click();
     await expect(winner.getByRole("button", { name: `Verify device ${loserDevice.slice(0, 8)}`, exact: true })).toHaveCount(0, { timeout: 30_000 });
+    await expect(loser.locator("[data-unverified-browser]")).toHaveCount(0, { timeout: 30_000 });
 
     // After verification, new messages reach the former loser in both directions.
     await send(bob, "Bob after verification 9043");
@@ -123,6 +127,62 @@ test.describe("first DM setup and history paging edge cases", () => {
     await send(loser, "Second browser after verification 3310");
     await expect(bob.getByRole("log").getByText("Second browser after verification 3310", { exact: true })).toBeVisible({ timeout: 30_000 });
     await Promise.all([winner, loser, bob].map((page) => page.context().close()));
+  });
+
+  test("an unverified second browser does not clear unread messages for the trusted one", async ({ browser }) => {
+    const alice = watch(await newUserPage(browser));
+    const email = await signUp(alice, "Twin Alice");
+    const aliceId = await userIdOf(alice);
+    await setupCompleted(alice, aliceId);
+    const bob = watch(await connect(alice, "Twin Bob"));
+    const twin = watch(await newUserPage(browser));
+    await signIn(twin, email, "/app");
+    await setupCompleted(twin, aliceId);
+
+    await openConversation(bob, "Twin Alice");
+    await send(bob, "Unread on both 4410");
+    await expect(bob.getByRole("log").getByText("Unread on both 4410", { exact: true })).toBeVisible({ timeout: 30_000 });
+    const unread = (page: Page) => page.getByRole("navigation", { name: "Home" }).getByRole("link", { name: "Twin Bob, 1 unread message" });
+    await alice.goto("/app");
+    await expect(unread(alice)).toBeVisible({ timeout: 30_000 });
+
+    // The new browser has no key for the message; viewing the failure is not reading it.
+    await openConversation(twin, "Twin Bob");
+    const twinLog = twin.getByRole("log", { name: "Private conversation with Twin Bob" });
+    await expect(twinLog.locator("[data-dm-failure-hint]")).toHaveCount(1, { timeout: 30_000 });
+    await expect(twin.locator("[data-unverified-browser]")).toBeVisible();
+    // Several refresh cycles (3 s each) of the open conversation.
+    await twin.waitForTimeout(7_000);
+    await alice.reload();
+    await expect(unread(alice)).toBeVisible({ timeout: 30_000 });
+
+    // Reading on the trusted browser clears the marker live on the other one.
+    await twin.goto("/app");
+    await expect(unread(twin)).toBeVisible({ timeout: 30_000 });
+    await openConversation(alice, "Twin Bob");
+    await expect(alice.getByRole("log").getByText("Unread on both 4410", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(twin.locator("[data-dm-unread]")).toHaveCount(0, { timeout: 30_000 });
+    await Promise.all([alice, twin, bob].map((page) => page.context().close()));
+  });
+
+  test("storage persistence is requested once enrolled; a refusal explains how to keep the keys", async ({ browser }) => {
+    const page = watch(await newUserPage(browser));
+    // Count requests and answer like a browser that refuses (e.g. Safari for a rarely visited site).
+    await page.addInitScript(() => {
+      const calls = { persist: 0 };
+      Object.assign(window, { __persistCalls: calls });
+      Object.defineProperty(navigator.storage, "persisted", { value: async () => false });
+      Object.defineProperty(navigator.storage, "persist", { value: async () => { calls.persist += 1; return false; } });
+    });
+    await signUp(page, "Persist Pia", "/sign-up?next=/app/messages");
+    await expect(page.getByText("Encrypted messaging ready.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __persistCalls: { persist: number } }).__persistCalls.persist)).toBe(1);
+    await page.getByRole("button", { name: "Devices and recovery", exact: true }).click();
+    const hint = page.getByRole("region", { name: "Encryption settings" }).locator("[data-storage-hint]");
+    await expect(hint).toContainText("Create an encrypted recovery backup");
+    // Nothing is downloaded without an explicit click.
+    await expect(page.getByRole("link", { name: "Download your private recovery file" })).toHaveCount(0);
+    await page.context().close();
   });
 
   test("a network error after the server stored the identity is not treated as a second device", async ({ browser }) => {

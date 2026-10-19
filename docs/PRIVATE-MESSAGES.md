@@ -71,7 +71,10 @@ claimed, and consumed identifiers remain tombstoned so an upload retry cannot re
 
 The browser needs HTTPS (localhost is permitted), WebAssembly, IndexedDB and Web Locks. Only one tab
 may own an account's crypto store at a time. Reload retains state; clearing browser storage loses
-local keys. The IndexedDB store is encrypted, but its unlocking secret resides in the same browser
+local keys. Once the device is enrolled the app asks the browser to keep this storage
+(`navigator.storage.persist()`); if the browser refuses, **Devices and recovery** says so and suggests
+an encrypted recovery backup, and on iPhone/iPad Safari tabs (which can delete site data after seven
+days without a visit) installing the app to the Home Screen. Nothing is downloaded without a click. The IndexedDB store is encrypted, but its unlocking secret resides in the same browser
 origin. This protects neither against a compromised browser nor against code running in that origin.
 
 ## Encrypted attachments
@@ -131,7 +134,11 @@ server sees a random call ID, never the conversation. Missed calls are kept only
 ## Additional devices and recovery
 
 A new browser enrolls a distinct device. Verify it against an existing trusted device using SAS and
-choose **Share identity and history**, or open a previously downloaded private recovery file.
+choose **Share identity and history**, or open a previously downloaded private recovery file. Until it
+is verified, the browser says so above the conversation, cannot send, receives no keys, and does not
+move the read marker, so it cannot clear unread messages for the account's trusted devices. Messages
+it cannot open show the reason and next step (key never received, sender identity changed, or sender
+device not confirmed) below the unchanged generic error.
 Device sharing uses an authenticated, encrypted Olm event and is limited to verified devices on the
 same account. Each transfer is saved in an encrypted local outbox before sending. The receiver sends
 an authenticated receipt only after committing the archive to browser storage. Until that receipt
@@ -245,6 +252,6 @@ Dependency evidence and audit boundaries:
 
 Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-attachments.test.ts`,
 `tests/dm-attachments.integration.test.ts`, `e2e/dm-attachments.spec.ts`, `tests/dm-groups.integration.test.ts`, `e2e/dm-groups.spec.ts`, `tests/dm-matrix.integration.test.ts`,
-`tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts`,
+`tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts`, `tests/dm-storage-persistence.test.ts`, `e2e/dm-bootstrap-edge-cases.spec.ts`,
 `tests/voice-dm-calls.integration.test.ts`, `e2e/direct-messages.spec.ts` and `e2e/dm-calls.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.

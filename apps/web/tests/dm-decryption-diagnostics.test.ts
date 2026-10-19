@@ -3,7 +3,7 @@ import * as C from "@matrix-org/matrix-sdk-crypto-wasm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrivateMessaging } from "@/lib/dm/client";
 import { matrixUser, type DirectEnvelope } from "@/lib/dm/contracts";
-import { decryptionDiagnostic, publicDecryptionCode, publicShieldCode, publicShieldColor, type DecryptionStage } from "@/lib/dm/decryption-diagnostics";
+import { decryptionDiagnostic, decryptionHint, publicDecryptionCode, publicShieldCode, publicShieldColor, type DecryptionStage } from "@/lib/dm/decryption-diagnostics";
 
 const fixtures = vi.hoisted(() => ({ initialize: vi.fn(), openHistory: vi.fn() }));
 vi.mock("@matrix-org/matrix-sdk-crypto-wasm", async (importOriginal) => {
@@ -213,5 +213,19 @@ describe("per-message processing failure boundaries", () => {
     const [refreshed] = await client.decrypt([envelope], conversation, [peer]);
     expect(refreshed.body).toBe(plain.body);
     expect(refreshed).not.toHaveProperty("diagnostic");
+  });
+});
+
+describe("actionable explanation next to the generic failure", () => {
+  it("explains missing keys, changed identities and unconfirmed devices; stays silent otherwise", () => {
+    for (const code of ["MissingRoomKey", "UnknownMessageIndex"] as const) expect(decryptionHint({ stage: "sdk_decrypt", code })).toMatch(/before this browser was set up or verified/);
+    expect(decryptionHint({ stage: "sdk_decrypt", code: "SenderIdentityVerificationViolation" })).toMatch(/identity changed/);
+    expect(decryptionHint({ stage: "shield", code: "unknown", shieldColor: "Red", shieldCode: "VerificationViolation" })).toMatch(/identity changed/);
+    expect(decryptionHint({ stage: "device_trust", code: "unknown" })).toMatch(/identity changed/);
+    expect(decryptionHint({ stage: "sdk_decrypt", code: "UnsignedSenderDevice" })).toMatch(/hasn't confirmed/);
+    expect(decryptionHint({ stage: "shield", code: "unknown", shieldColor: "Red", shieldCode: "UnsignedDevice" })).toMatch(/hasn't confirmed/);
+    for (const stage of ["envelope", "sender_binding", "plaintext_schema", "message_binding", "history_schema", "replay_storage"] as const) expect(decryptionHint({ stage, code: "unknown" })).toBeNull();
+    expect(decryptionHint({ stage: "sdk_decrypt", code: "UnableToDecrypt" })).toBeNull();
+    expect(decryptionHint({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" })).toBeNull();
   });
 });

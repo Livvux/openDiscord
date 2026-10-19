@@ -224,6 +224,10 @@ export class PrivateMessaging {
       await this.deliverPending();
     });
   }
+  /** False for a second browser on this account until another device of it verified this one. */
+  ownIdentityVerified(): Promise<boolean> {
+    return this.serial(async () => !!(await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId))))?.isVerified());
+  }
   async devices(userId: string): Promise<TrustedDevice[]> {
     return this.serial(async () => {
       const devices = await this.machine.getUserDevices(new this.C.UserId(matrixUser(userId)));
