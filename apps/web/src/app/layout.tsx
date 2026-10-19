@@ -19,6 +19,9 @@ export const metadata: Metadata = {
   description:
     "openDiscord is an open-source community platform. Use opendiscord.app or run the same release on your own server.",
   openGraph: { title: "openDiscord", description: "Communities belong to everyone.", siteName: "openDiscord" },
+  // Next.js emits only the unprefixed mobile-web-app-capable; older iOS needs the apple- variant.
+  appleWebApp: { title: "openDiscord", statusBarStyle: "black" },
+  other: { "apple-mobile-web-app-capable": "yes" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
