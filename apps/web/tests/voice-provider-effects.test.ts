@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
-import { mountCurrentVoiceAudio, voiceStatus } from "@/components/app/voice/voice-provider";
+import { mountCurrentVoiceAudio, voiceErrorText, voiceStatus } from "@/components/app/voice/voice-provider";
+import { automaticVoiceVerificationSteps } from "@/components/app/voice/voice-verification";
 import { canPrepareVoiceAudience, prepareCurrentVoiceAudience } from "@/components/app/voice/voice-audience";
 
 // Executes the exact mount function delegated to by the provider's passive effect.
@@ -90,5 +91,59 @@ describe("Voice audience preparation presentation boundary", () => {
     expect(voiceStatus({ ...view, localConsentPending: true }, false)).toBe("Waiting for your full audience consent.");
     expect(voiceStatus({ ...view, state: "negotiating", localConsentPending: true }, false)).toBe("Agreeing the full audience…");
     expect(voiceStatus({ ...view, state: "retry-required", localConsentPending: true }, false)).toBe("Audience attempt expired. Review everyone and retry.");
+  });
+});
+
+type Sas = VoiceCallView["sas"][number];
+function sasFlow(peer: string, state: Partial<Sas> = {}): Sas {
+  return { handle: `h-${peer}`, peer: { memberId: peer } as Sas["peer"], flowId: "f", ready: false, done: false, cancelled: false, confirmed: false, emojiIndices: null, weStarted: false, hasSas: false, sasAccepted: false, ...state };
+}
+describe("automatic Voice verification protocol steps (no trust decision)", () => {
+  const view = (sas: Sas[] = [], patch: Partial<VoiceCallView> = {}): VoiceCallView => ({ ...audienceView("verifying"), admittedMemberIds: [], selfMemberId: "a", roster: [...audienceView().roster.slice(0, 1).map(member => ({ ...member, memberId: "a" })), ...audienceView().roster.slice(1).map(member => ({ ...member, memberId: "b" }))], sas, ...patch });
+  it("only the lower member requests, and only once keys are prepared", () => {
+    expect(automaticVoiceVerificationSteps(view())).toEqual([{ key: "1:b:request", memberId: "b", step: "request" }]);
+    expect(automaticVoiceVerificationSteps(view([], { keysPrepared: false }))).toEqual([]);
+    expect(automaticVoiceVerificationSteps(view([], { selfMemberId: "c" }))).toEqual([]);
+  });
+  it("accepts an incoming request, starts SAS as requester, accepts SAS as responder", () => {
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b")]))).toEqual([{ key: "1:h-b:accept", memberId: "b", handle: "h-b", step: "accept" }]);
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b", { ready: true, weStarted: true })]))[0]).toMatchObject({ step: "start" });
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b", { ready: true, hasSas: true })]))[0]).toMatchObject({ step: "accept-sas" });
+    // Native requests leave Ready once SAS starts; the responder must still accept SAS, not re-accept.
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b", { ready: false, hasSas: true })]))).toEqual([{ key: "1:h-b:accept-sas", memberId: "b", handle: "h-b", step: "accept-sas" }]);
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b", { ready: false, hasSas: true, weStarted: true })]))).toEqual([]);
+  });
+  it("never confirms symbols, admits, or cancels — those stay human decisions", () => {
+    const steps = [
+      sasFlow("b", { ready: true, hasSas: true, sasAccepted: true, emoji: [{ symbol: "x", description: "x" }] }),
+      sasFlow("b", { ready: true, hasSas: true, sasAccepted: true, confirmed: true }),
+      sasFlow("b", { done: true, confirmed: true }),
+    ].flatMap(flow => automaticVoiceVerificationSteps(view([flow])));
+    expect(steps).toEqual([]);
+    expect(automaticVoiceVerificationSteps(view([], { admittedMemberIds: ["b"] }))).toEqual([]);
+    expect(automaticVoiceVerificationSteps(view([], { state: "ended" }))).toEqual([]);
+  });
+  it("a cancelled flow does not trigger a fresh request under the same key", () => {
+    expect(automaticVoiceVerificationSteps(view([sasFlow("b", { cancelled: true })]))).toEqual([{ key: "1:b:request", memberId: "b", step: "request" }]);
+  });
+});
+
+describe("Voice status and failure presentation", () => {
+  it("names connecting, waiting for others, and ended-with-reason states", () => {
+    const view = audienceView("verifying");
+    expect(voiceStatus(null, true)).toBe("Connecting: creating a temporary Voice device…");
+    expect(voiceStatus({ ...view, roster: view.roster.slice(0, 1), admittedMemberIds: [] }, false)).toBe("Waiting for others to join…");
+    expect(voiceStatus({ ...view, admittedMemberIds: [] }, false)).toBe("Compare symbols with each participant, then admit them.");
+    expect(voiceStatus({ ...view, state: "ended" }, false)).toBe("Voice stopped. Join again to start a fresh call.");
+    expect(voiceStatus({ ...view, state: "ended", error: "media-reconnecting" }, false)).toMatch(/^Voice stopped: the connection to the voice server was interrupted/);
+    expect(voiceStatus({ ...view, state: "ended", error: "media-connect-failed" }, false)).toMatch(/^Voice stopped: .*network/);
+    expect(voiceStatus({ ...view, state: "ended", error: "something-new" }, false)).toBe("Voice stopped (something-new). Rejoin when ready.");
+  });
+  it("turns capture failures into actionable source-specific messages", () => {
+    expect(voiceErrorText(new DOMException("x", "NotAllowedError"), "microphone")).toMatch(/Microphone access was blocked/);
+    expect(voiceErrorText(new DOMException("x", "NotFoundError"), "camera")).toMatch(/No camera was found/);
+    expect(voiceErrorText(new DOMException("x", "NotReadableError"), "microphone")).toMatch(/in use by another app/);
+    expect(voiceErrorText(new DOMException("x", "AbortError"), "screen_share")).toMatch(/Screen sharing was cancelled/);
+    expect(voiceErrorText(new VoiceCallSessionError("unsupported-media"))).toMatch(/does not support encrypted Voice/);
   });
 });

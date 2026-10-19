@@ -1,7 +1,6 @@
 import { expect, test, type Locator, type Page, type Request, type Response } from "@playwright/test";
 import { TokenVerifier } from "livekit-server-sdk";
 import { classifyVoiceProductConsole, fingerprintVoiceProductConsole, readVoiceProductConsoleArgument, observeVoiceProductResult, readVoiceProductPresentation, withVoiceProductCleanup, writeVoiceProductEvidence, type VoiceProductCheckpoint, type VoiceProductObservation, type VoiceProductObservationStage, type VoiceProductPhase } from "./fixtures/voice-product-results";
-import { readVoiceRequestCandidates, voiceRequestCandidate } from "./fixtures/voice-product-candidates";
 import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { assertDisposableVoiceCi, strings } from "./fixtures/voice-media-observer";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
@@ -31,35 +30,23 @@ async function explicitJoin(page: Page) {
   await page.getByRole("button", { name: "Create temporary device and join" }).click();
   await expect(audience(page)).toBeVisible({ timeout: 20_000 });
 }
-type RequestSelection = Awaited<ReturnType<typeof readVoiceRequestCandidates>>;
-async function verifyPair(a: Page, aName: string, b: Page, bName: string, record: (selection: RequestSelection) => void) {
+async function verifyPair(a: Page, aName: string, b: Page, bName: string) {
   const aPeer = participant(a, bName), bPeer = participant(b, aName);
-  const aRequest = aPeer.getByRole("button", { name: "Request Voice verification", exact: true });
-  const bRequest = bPeer.getByRole("button", { name: "Request Voice verification", exact: true });
-  const observed: { current?: RequestSelection } = {};
-  await expect.poll(async () => {
-    const selection = await readVoiceRequestCandidates(() => aRequest.evaluateAll(voiceRequestCandidate), () => bRequest.evaluateAll(voiceRequestCandidate));
-    observed.current = selection; record(selection);
-    return selection.side !== null;
-  }).toBe(true);
-  const selected = observed.current;
-  if (!selected || selected.side === null) throw new Error("No unique eligible Voice verification action.");
-  const [first, second] = selected.side === 0 ? [aPeer, bPeer] : [bPeer, aPeer];
-  await first.getByRole("button", { name: "Request Voice verification" }).click();
-  await second.getByRole("button", { name: "Accept Voice verification" }).click();
-  await first.getByRole("button", { name: "Start SAS comparison" }).click();
-  await second.getByRole("button", { name: "Accept SAS comparison" }).click();
-  const compare = async (peer: Locator) => peer.getByRole("list", { name: "Voice SAS symbols" }).locator("li").allTextContents();
-  await expect(first.getByRole("list", { name: "Voice SAS symbols" }).locator("li")).toHaveCount(7);
+  const symbols = (peer: Locator) => peer.getByRole("list", { name: "Voice SAS symbols" }).locator("li");
+  // Request, accept and SAS start/accept carry no trust decision and run automatically.
+  // Only the human steps are clicked: comparing, confirming the match and admitting.
+  await expect(symbols(aPeer)).toHaveCount(7, { timeout: 30_000 });
+  await expect(symbols(bPeer)).toHaveCount(7, { timeout: 30_000 });
   // Do not log SAS values, even on mismatch; only genuine visible UI values are read.
-  const lhs = await compare(first);
-  await expect.poll(async () => JSON.stringify(await compare(second)) === JSON.stringify(lhs)).toBe(true);
-  await first.getByRole("button", { name: "I compared all seven symbols — they match" }).click();
-  await second.getByRole("button", { name: "I compared all seven symbols — they match" }).click();
-  await first.getByRole("button", { name: "Admit this verified participant" }).click();
-  await second.getByRole("button", { name: "Admit this verified participant" }).click();
-  await expect(first).toContainText("Admitted for this exact device.");
-  await expect(second).toContainText("Admitted for this exact device.");
+  const lhs = await symbols(aPeer).allTextContents();
+  await expect.poll(async () => JSON.stringify(await symbols(bPeer).allTextContents()) === JSON.stringify(lhs)).toBe(true);
+  await expect(aPeer.getByRole("button", { name: "Admit this verified participant" })).toHaveCount(0);
+  await aPeer.getByRole("button", { name: "I compared all seven symbols — they match" }).click();
+  await bPeer.getByRole("button", { name: "I compared all seven symbols — they match" }).click();
+  await aPeer.getByRole("button", { name: "Admit this verified participant" }).click();
+  await bPeer.getByRole("button", { name: "Admit this verified participant" }).click();
+  await expect(aPeer).toContainText("Admitted for this exact device.");
+  await expect(bPeer).toContainText("Admitted for this exact device.");
 }
 async function consentToAudience(pages: Page[]) {
   // Genuine UI clicks, each with its own complete canonical audience rendered.
@@ -99,7 +86,6 @@ test.describe("genuine Next product encrypted Voice", () => {
     let observationFailed = false, observing = true, commitsClosed = false, primaryFailure = false;
     const stopResponseObservers: (() => void)[] = [];
     const observationFailures: { page: number; action: "join" | "token"; stage: VoiceProductObservationStage; reason: "timeout" | "failed"; status?: number; bodyError?: string }[] = [];
-    const pairCandidates: RequestSelection[] = [];
     const phaseCheckpoints: Partial<Record<VoiceProductCheckpoint, VoiceProductObservation<Awaited<ReturnType<typeof presentation>>>[]>> = {};
     let leaderRetryDispatched = false;
     const checkpoint = async (name: VoiceProductCheckpoint) => {
@@ -111,7 +97,8 @@ test.describe("genuine Next product encrypted Voice", () => {
     let stage = "signup";
     const attach = async (page: Page, index: number) => {
       await page.addInitScript(installVoiceProductObserver);
-      await page.context().grantPermissions(["microphone", "camera"]);
+      // Firefox has no grantable media permissions; its config disables the prompt instead.
+      if (page.context().browser()?.browserType().name() !== "firefox") await page.context().grantPermissions(["microphone", "camera"]);
       page.on("pageerror", error => runtimeErrors.push(error.name));
       page.on("console", message => {
         if (message.type() !== "error") return;
@@ -214,9 +201,9 @@ test.describe("genuine Next product encrypted Voice", () => {
       for (const page of pages) await explicitJoin(page);
       for (const page of pages) await expect(audience(page).getByRole("listitem", { name: /^Voice participant / })).toHaveCount(3);
       stage = "native-sas-and-admission";
-      await verifyPair(pages[0], names[0], pages[1], names[1], selection => { pairCandidates[0] = selection; });
-      await verifyPair(pages[0], names[0], pages[2], names[2], selection => { pairCandidates[1] = selection; });
-      await verifyPair(pages[1], names[1], pages[2], names[2], selection => { pairCandidates[2] = selection; });
+      await verifyPair(pages[0], names[0], pages[1], names[1]);
+      await verifyPair(pages[0], names[0], pages[2], names[2]);
+      await verifyPair(pages[1], names[1], pages[2], names[2]);
       for (const page of pages) expect(await evidence(page)).toMatchObject({ captureCalls: 0, senders: 0, workers: 0 });
       stage = "initial-consent";
       // Canonical ordering is read from real authorized join responses, never supplied to product control.
@@ -347,7 +334,7 @@ test.describe("genuine Next product encrypted Voice", () => {
           const stats = await evidence(page);
           return { ...stats, workerUrl: undefined, ...await presentation(page), audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, pairCandidates, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;

@@ -4,7 +4,9 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { authClient } from "@/lib/auth-client";
 import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
 import type { VoiceSource } from "@/lib/voice/media-session";
+import { voiceFrameTransform } from "@/lib/voice/support";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
+import { automaticVoiceVerificationSteps } from "./voice-verification";
 
 type Channel = { id: string; name: string; href: string };
 type VerificationStep = Parameters<CallSession["verificationStep"]>[1];
@@ -34,27 +36,52 @@ export function useVoice(): VoiceValue {
 }
 const noopSubscribe = () => () => {};
 const emptySnapshot = () => null;
+const interrupted = "the connection to the voice server was interrupted. Calls never resume with old keys, so rejoin to start a fresh encrypted call.";
+const endReasons: Record<string, string> = {
+  "media-reconnecting": interrupted, "media-signal-reconnecting": interrupted, "media-disconnected": interrupted, network: interrupted, timeout: interrupted,
+  "media-connect-failed": "couldn't connect to the voice server. Check your network, VPN or firewall (Voice needs WebRTC/TURN access), then rejoin.",
+  "media-keying-expired": "setting up encrypted media took too long. Rejoin to try again.",
+  "media-encryption-failed": "media encryption failed, so the call was stopped. Rejoin to try again.",
+  "media-permission-reduced": "you no longer have permission to use this voice channel.", forbidden: "you no longer have permission to use this voice channel.",
+  unauthorized: "you were signed out. Sign in again, then rejoin.", "session-changed": "you were signed out or your session changed.",
+  "lease-expired": "the call connection expired. Rejoin to continue.",
+  rate_limited: "too many requests. Wait a moment, then rejoin.", "budget-exhausted": "too many requests. Wait a moment, then rejoin.",
+};
+function voiceEndedText(code: string): string {
+  // StrictVoiceWorker reports sentences, not codes; every one of them is an encryption stop.
+  const reason = endReasons[code] ?? (/^[a-z_-]+$/.test(code) ? undefined : endReasons["media-encryption-failed"]);
+  return reason ? `Voice stopped: ${reason}` : `Voice stopped (${code}). Rejoin when ready.`;
+}
 export function voiceStatus(view: VoiceCallView | null, joining: boolean): string {
-  if (joining) return "Creating temporary Voice device…";
+  if (joining) return "Connecting: creating a temporary Voice device…";
   if (!view) return "Join to review the current audience.";
-  if (view.state === "ended") return "Voice stopped. Join again to start a fresh call.";
+  if (view.state === "ended") return view.error ? voiceEndedText(view.error) : "Voice stopped. Join again to start a fresh call.";
   if (view.media.mediaState === "ready") return view.media.microphone ? "Encrypted voice ready — microphone on" : "Encrypted voice ready — microphone off";
   if (view.media.mediaState === "keying" || view.state === "agreed") return "Preparing encrypted media…";
   if (view.state === "retry-required") return "Audience attempt expired. Review everyone and retry.";
   if (view.state === "negotiating") return "Agreeing the full audience…";
   if (view.state === "waiting" && view.localConsentPending) return "Waiting for your full audience consent.";
   if (view.state === "waiting") return "Waiting for participant setup and audience consent.";
-  return "Verify every participant, then admit them separately.";
+  if (view.roster.length <= 1) return "Waiting for others to join…";
+  return "Compare symbols with each participant, then admit them.";
 }
-function errorText(error: unknown): string {
+const VOICE_UNSUPPORTED_BROWSER = "This browser does not support encrypted Voice. Use a current version of Chrome or Firefox.";
+const deviceLabels: Record<VoiceSource, string> = { microphone: "microphone", camera: "camera", screen_share: "screen" };
+export function voiceErrorText(error: unknown, source?: VoiceSource): string {
   if (error instanceof VoiceCallSessionError) {
+    if (error.code === "unsupported-media") return VOICE_UNSUPPORTED_BROWSER;
     if (error.code === "messaging-setup-required") return "Set up encrypted messaging in Devices and recovery first, then return and join Voice.";
     if (error.code === "not-ready") return "The other participant is not ready yet. Wait, then explicitly retry this action.";
     if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
     return `Voice stopped (${error.code}). Join again when ready.`;
   }
   // Permission errors and browser picker cancellation must never claim capture succeeded.
-  if (error instanceof DOMException && ["NotAllowedError", "NotFoundError", "NotReadableError", "AbortError"].includes(error.name)) return "Capture did not start. Check device permissions or retry the screen picker.";
+  const name = error instanceof Error ? error.name : "";
+  const label = source ? deviceLabels[source] : "microphone or camera", Label = label[0].toUpperCase() + label.slice(1);
+  if (source === "screen_share" && (name === "NotAllowedError" || name === "AbortError")) return "Screen sharing was cancelled or blocked. Try again and pick a screen or window.";
+  if (name === "NotAllowedError") return `${Label} access was blocked. Allow it in your browser's site settings (next to the address bar), then try again.`;
+  if (name === "NotFoundError" || name === "OverconstrainedError") return `No ${label} was found. Connect one, then try again.`;
+  if (name === "NotReadableError" || name === "AbortError") return `Your ${label} is in use by another app or couldn't start. Close other apps using it, then try again.`;
   return "Voice could not complete this action. Check the call status and retry.";
 }
 
@@ -87,6 +114,7 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
   const [busy, setBusy] = useState(false);
   const [pendingSources, setPendingSources] = useState<VoiceSource[]>([]);
   const sourceFlights = useRef(new Set<VoiceSource>());
+  const autoSteps = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
   const view = useSyncExternalStore(session?.subscribe ?? noopSubscribe, session?.getSnapshot ?? emptySnapshot, emptySnapshot);
   const fence = useCallback((reason = "left") => {
@@ -97,7 +125,7 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
   }, []);
   const leave = useCallback(() => {
     fence();
-    setSession(null); setChannel(null); setJoining(false); setBusy(false); setPendingSources([]); sourceFlights.current.clear();
+    setSession(null); setChannel(null); setJoining(false); setBusy(false); setPendingSources([]); sourceFlights.current.clear(); autoSteps.current.clear();
   }, [fence]);
   useEffect(() => {
     mounted.current = true;
@@ -117,20 +145,28 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     setError(null); setChannel(target); setJoining(true);
     try {
       assertSessionCurrent();
-      if (typeof RTCRtpSender === "undefined" || typeof RTCRtpReceiver === "undefined" || !("createEncodedStreams" in RTCRtpSender.prototype) || !("createEncodedStreams" in RTCRtpReceiver.prototype)) throw new VoiceCallSessionError("unsupported-media");
+      if (!voiceFrameTransform()) throw new VoiceCallSessionError("unsupported-media");
       const created = await CallSession.create({ accountId, sessionId, channelId: target.id, consent: true, assertSessionCurrent });
       try { assertSessionCurrent(); } catch (error) { void created.close("join-superseded").catch(() => {}); throw error; }
       current.current = created; setSession(created);
-    } catch (error) { if (mine === revision.current && mounted.current) setError(error instanceof VoiceCallSessionError && error.code === "unsupported-media" ? "This browser does not support the encoded-stream encryption Voice requires. Use a supported Chromium browser." : errorText(error)); }
+    } catch (error) { if (mine === revision.current && mounted.current) setError(voiceErrorText(error)); }
     finally { if (mine === revision.current && mounted.current) setJoining(false); }
   }, [accountId, sessionId, leave]);
   const run = useCallback(async (operation: (call: CallSession) => Promise<void>) => {
     const call = current.current, mine = revision.current;
     if (!call) return;
     setBusy(true); setError(null);
-    try { await operation(call); } catch (error) { if (mine === revision.current && mounted.current) setError(errorText(error)); }
+    try { await operation(call); } catch (error) { if (mine === revision.current && mounted.current) setError(voiceErrorText(error)); }
     finally { if (mine === revision.current && mounted.current) setBusy(false); }
   }, []);
+  // Protocol-only SAS steps (no trust decision) run once each; symbol confirmation and admission stay manual.
+  useEffect(() => {
+    if (!view || busy || !authenticated) return;
+    const next = automaticVoiceVerificationSteps(view).find(step => !autoSteps.current.has(step.key));
+    if (!next) return;
+    autoSteps.current.add(next.key);
+    void run(call => next.step === "request" ? call.requestVerification(next.memberId) : call.verificationStep(next.handle, next.step));
+  }, [view, busy, authenticated, run]);
   const toggleSource = async (source: VoiceSource) => {
     const call = current.current, mine = revision.current;
     if (!call || sourceFlights.current.has(source)) return;
@@ -140,14 +176,14 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
       if (source === "microphone") await call.setMicrophoneEnabled(!media.microphone);
       else if (source === "camera") await call.setCameraEnabled(!media.camera);
       else await call.setScreenShareEnabled(!media.screenShare);
-    } catch (error) { if (mine === revision.current && mounted.current) setError(errorText(error)); }
+    } catch (error) { if (mine === revision.current && mounted.current) setError(voiceErrorText(error, source)); }
     finally { if (mine === revision.current && mounted.current) { sourceFlights.current.delete(source); setPendingSources([...sourceFlights.current]); } }
   };
   const mountVideo = useCallback((id: string, element: HTMLVideoElement) => {
     try { return current.current?.mountVideo(id, element) ?? (() => {}); }
     catch { return () => {}; } // A synchronous fence can invalidate a rendered tile before its effect runs.
   }, []);
-  return <VoiceContext.Provider value={{ channel, view, joining: joining && authenticated, busy: busy && authenticated, pendingSources, authenticated, error: error ?? (view?.error ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(prepareCurrentVoiceAudience), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
+  return <VoiceContext.Provider value={{ channel, view, joining: joining && authenticated, busy: busy && authenticated, pendingSources, authenticated, error: error ?? (view?.error && view.state !== "ended" ? `Voice: ${view.error}. Review the call status before retrying.` : null), join, leave, requestVerification: id => run(call => call.requestVerification(id)), verificationStep: (handle, step) => run(call => call.verificationStep(handle, step)), admit: id => run(call => call.admit(id)), confirmFullRoster: () => run(prepareCurrentVoiceAudience), toggleSource, mountVideo, startAudio: () => run(call => call.startAudio()) }}>
     {children}<div ref={audio} hidden aria-hidden="true" />
   </VoiceContext.Provider>;
 }

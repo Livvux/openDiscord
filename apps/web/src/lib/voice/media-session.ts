@@ -1,5 +1,6 @@
 import { BaseKeyProvider, Encryption_Type, Room, RoomEvent, Track, type LocalTrack, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication } from "livekit-client";
 import { StrictVoiceWorker } from "./strict-worker";
+import { voiceFrameTransform } from "./support";
 import { sameVoiceParty, validateVoiceOwnerControl, VOICE_CONTROL_EVENT, type VoiceControlParty, type VoiceOwnerControl } from "./owner-control";
 import type { VoiceSnapshot } from "./contracts";
 import type { createVoiceHttpClient } from "./http-client";
@@ -138,7 +139,7 @@ export class MediaSession {
   start(): void { this.present(); this.run(this.initialize()); }
   private async initialize(): Promise<void> {
     this.current();
-    if (typeof RTCRtpSender === "undefined" || typeof RTCRtpReceiver === "undefined" || !("createEncodedStreams" in RTCRtpSender.prototype) || !("createEncodedStreams" in RTCRtpReceiver.prototype)) throw new Error("Encoded-stream encryption unavailable.");
+    if (!voiceFrameTransform()) throw new Error("Frame-transform encryption unavailable.");
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     const wire = btoa(String.fromCharCode(...bytes));
     const key = await this.import(bytes);
@@ -221,13 +222,14 @@ export class MediaSession {
     });
     room.on(RoomEvent.TrackUnsubscribed, track => { this.remotes.delete(track); this.removeTrack(track); this.present(); });
     await this.checked(room.setE2EEEnabled(true));
-    try {
-      this.current(); await room.connect(grant.url, grant.token, { autoSubscribe: false }); this.current();
-      // JWT expiry bounds joining only. Established media uses the latest call
-      // lease; reconnect is separately terminal and never reuses this credential.
-      this.connected = true;
-    }
-    catch (error) { void room.disconnect(); throw error; }
+    this.current();
+    try { await room.connect(grant.url, grant.token, { autoSubscribe: false }); }
+    // Signalling/ICE/TURN failure, named separately so the UI can point at the network.
+    catch (error) { void room.disconnect(); this.fail("media-connect-failed"); throw error; }
+    this.current();
+    // JWT expiry bounds joining only. Established media uses the latest call
+    // lease; reconnect is separately terminal and never reuses this credential.
+    this.connected = true;
     for (const participant of room.remoteParticipants.values()) for (const publication of participant.trackPublications.values()) this.subscribe(publication, participant);
     await this.checked(worker.waitUntilEnabled(this.context.self.participantIdentity, Math.max(1, this.context.deadline - performance.now())));
     this.localEnabled = true;

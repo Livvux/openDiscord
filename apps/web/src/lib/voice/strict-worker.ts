@@ -44,7 +44,15 @@ export class StrictVoiceWorker extends Worker {
     this.onFailure(reason);
   }
 
-  /** Both overloads preserve native transferable ownership; no frame crypto is implemented here. */
+  /**
+   * Both overloads preserve native transferable ownership; no frame crypto is implemented here.
+   * Encoded-streams browsers (Chromium) post encode/decode setup here, so the early-setup and
+   * codec checks below apply. With RTCRtpScriptTransform (Firefox, Safari) the SDK attaches the
+   * transform via `new RTCRtpScriptTransform(worker, options)`, which never passes through
+   * postMessage. setKey/enable and the positive ACK still do on both paths, and MediaSession is
+   * what orders media: publication only after own ACK plus every key-ready, subscription only
+   * after the publisher's ACK and exact-GCM/codec checks.
+   */
   override postMessage(message: unknown, transfer: Transferable[]): void;
   override postMessage(message: unknown, options?: StructuredSerializeOptions): void;
   override postMessage(message: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions): void {
