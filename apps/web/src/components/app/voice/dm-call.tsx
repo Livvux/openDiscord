@@ -13,7 +13,7 @@ const inThisCall = (voice: ReturnType<typeof useVoice>, id: string) => !!voice.c
 export function DmCallButton({ conversation, open, onToggle }: { conversation: Conversation; open: boolean; onToggle: () => void }) {
   const voice = useVoice();
   const here = inThisCall(voice, conversation.id);
-  return <Button variant="ghost" size="sm" aria-expanded={open || here} disabled={here} onClick={onToggle}><PhoneIcon aria-hidden />{here ? "In call" : "Call"}</Button>;
+  return <Button variant="ghost" size="sm" aria-expanded={open || here} disabled={here} onClick={onToggle}><PhoneIcon aria-hidden /><span className="max-sm:sr-only">{here ? "In call" : "Call"}</span></Button>;
 }
 
 /** The same encrypted Voice room as a voice channel, scoped to this conversation's current members. */
