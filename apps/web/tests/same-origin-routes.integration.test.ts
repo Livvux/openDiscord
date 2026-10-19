@@ -8,6 +8,7 @@ import { attachment, community, pushSubscription, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { createCommunity } from "@/server/communities";
 import { mediaEnabled } from "@/server/media";
+import { pushEnabled } from "@/server/push";
 import { POST as upload } from "@/app/api/channels/[channelId]/attachments/route";
 import { DELETE as unsubscribe, POST as subscribe } from "@/app/api/me/push/route";
 import { REGISTRATION_HEADERS } from "./helpers";
@@ -45,6 +46,9 @@ describe("same-origin enforcement with a valid session", () => {
     const headers = { "content-type": "text/plain" };
     expect((await subscribe(request("/api/me/push", "POST", "https://evil.example", headers, subscription))).status).toBe(403);
     expect(await db.select().from(pushSubscription).where(eq(pushSubscription.userId, userId))).toHaveLength(0);
+    expect((await unsubscribe(request("/api/me/push", "DELETE", "https://evil.example", headers, subscription))).status).toBe(403);
+    if (!pushEnabled) return;
+    // The same request from this origin works, and the foreign DELETE above didn't remove it.
     expect((await subscribe(request("/api/me/push", "POST", new URL(base).origin, headers, subscription))).status).toBe(204);
     expect((await unsubscribe(request("/api/me/push", "DELETE", "https://evil.example", headers, subscription))).status).toBe(403);
     expect(await db.select().from(pushSubscription).where(eq(pushSubscription.userId, userId))).toHaveLength(1);
