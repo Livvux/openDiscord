@@ -2,13 +2,13 @@ import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { and, asc, count, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReadState, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
-import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
+import { attachment, dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMember, dmMessage, dmReadState, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
+import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth, type DmMemberView } from "@/lib/dm/contracts";
 import { avatarOf } from "./avatars";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
@@ -19,6 +19,7 @@ import { parse, uuid } from "./validation";
 import { publish } from "./realtime";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+const DM_MAX_DEVICE_DELIVERIES = 100;
 const object = z.record(z.string(), z.unknown());
 const record = (value: unknown): Record<string, unknown> => parse(object, value);
 const conflict = (message: string) => new AppError("conflict", message);
@@ -35,15 +36,20 @@ function fromMatrix(value: string): string {
   return parse(z.string().min(1).max(64), value.slice(1, -suffix.length));
 }
 const pair = (actor: string, target: string) => [actor, target].sort();
-/** Tells both people's open tabs to refetch; carries ids only. Delivery is best effort. */
-async function announce(conversationId: string, userIds: string[], reason: "message" | "request" | "read", senderId?: string): Promise<void> {
+/** Tells the participants' open tabs to refetch; carries ids only. Delivery is best effort. */
+export async function announce(conversationId: string, userIds: string[], reason: "message" | "request" | "read", senderId?: string): Promise<void> {
   try {
     for (const userId of userIds) await publish({ type: "dm.changed", userId, conversationId, reason, ...(senderId ? { senderId } : {}) });
   } catch (error) {
     console.error("[realtime] dm event failed", error);
   }
 }
-async function blocked(tx: Tx | typeof db, actor: string, target: string): Promise<boolean> {
+/** Both people are current members of the same group (or, with `former`, the target was or is a member of one of the actor's groups). */
+async function shareGroup(tx: Tx | typeof db, actor: string, target: string, former = false): Promise<boolean> {
+  const other = alias(dmMember, "dm_other_member");
+  return (await tx.select({ id: dmMember.conversationId }).from(dmMember).innerJoin(other, and(eq(other.conversationId, dmMember.conversationId), eq(other.userId, target), former ? undefined : isNull(other.leftAt))).where(and(eq(dmMember.userId, actor), isNull(dmMember.leftAt))).limit(1)).length > 0;
+}
+export async function blocked(tx: Tx | typeof db, actor: string, target: string): Promise<boolean> {
   return !!(await tx.select({ id: userBlock.blockerId }).from(userBlock).where(or(and(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, target)), and(eq(userBlock.blockerId, target), eq(userBlock.blockedId, actor)))).limit(1))[0];
 }
 async function reachable(tx: Tx | typeof db, actor: string, target: string): Promise<void> {
@@ -51,25 +57,38 @@ async function reachable(tx: Tx | typeof db, actor: string, target: string): Pro
   const [first, second] = pair(actor, target);
   const shared = alias(member, "dm_shared_member");
   const found = await tx.select({ id: member.userId }).from(member).innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actor))).where(eq(member.userId, target)).limit(1);
-  if (!found.length && !(await areFriends(tx, actor, target)) && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length) throw notFound("Account not found.");
+  if (!found.length && !(await areFriends(tx, actor, target)) && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length && !(await shareGroup(tx, actor, target))) throw notFound("Account not found.");
   if (await blocked(tx, actor, target)) throw notFound("Account not found.");
 }
-async function cryptoReachable(tx: Tx, actor: string, target: string): Promise<void> {
+/** `query` only (public keys): a group's former members stay queryable so their earlier messages can be authenticated. */
+async function cryptoReachable(tx: Tx, actor: string, target: string, query = false): Promise<void> {
   if (actor === target) return;
   const [first, second] = pair(actor, target);
   const [accepted] = await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), eq(dmConversation.status, "accepted"))).limit(1);
-  if (!accepted || await blocked(tx, actor, target)) throw notFound("Encrypted conversation not found.");
+  // Group members exchange keys with each other, except where one has blocked the other.
+  if ((!accepted && !(await shareGroup(tx, actor, target, query))) || await blocked(tx, actor, target)) throw notFound("Encrypted conversation not found.");
   await assertActiveUser(target, tx);
 }
-async function conversationFor(tx: Tx | typeof db, actor: string, id: string, sending = false) {
-  const [row] = await tx.select().from(dmConversation).where(and(eq(dmConversation.id, parse(uuid, id)), or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))));
+/** The creator while they are a member, then whoever it was handed to; else the longest-standing member. */
+const groupOwner = (requestedBy: string | null, activeByJoin: string[]) => requestedBy && activeByJoin.includes(requestedBy) ? requestedBy : activeByJoin[0] ?? null;
+const activeMembership = (conversationId: string, userId: string) => and(eq(dmMember.conversationId, conversationId), eq(dmMember.userId, userId), isNull(dmMember.leftAt));
+/** The conversation if the person takes part now: a 1:1 participant or a current group member. */
+export async function conversationFor(tx: Tx | typeof db, actor: string, id: string, sending = false) {
+  const conversationId = parse(uuid, id);
+  const [row] = await tx.select().from(dmConversation).where(and(eq(dmConversation.id, conversationId), or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor), exists(tx.select({ id: dmMember.userId }).from(dmMember).where(activeMembership(conversationId, actor))))));
   if (!row) throw notFound("Conversation not found.");
-  const peer = row.firstId === actor ? row.secondId : row.firstId;
+  if (row.kind === "group") {
+    const members = await tx.select({ userId: dmMember.userId, joinedAt: dmMember.joinedAt }).from(dmMember).where(and(eq(dmMember.conversationId, row.id), isNull(dmMember.leftAt))).orderBy(asc(dmMember.joinedAt), asc(dmMember.userId));
+    if (sending) await assertActiveUser(actor, tx);
+    const ids = members.map((m) => m.userId);
+    return { ...row, peer: null, others: ids.filter((m) => m !== actor), owner: groupOwner(row.requestedBy, ids), joinedAt: members.find((m) => m.userId === actor)?.joinedAt ?? null };
+  }
+  const peer = row.firstId === actor ? row.secondId! : row.firstId!;
   if (sending) {
     if (row.status !== "accepted" || await blocked(tx, actor, peer)) throw forbidden("This conversation is not accepting messages.");
     await assertActiveUser(peer, tx);
   }
-  return { ...row, peer };
+  return { ...row, peer, others: [peer], owner: null, joinedAt: null };
 }
 /** Throws "not found" unless the person may post to this conversation now. */
 export async function assertCanSendDirect(actor: string, id: string): Promise<void> {
@@ -112,7 +131,7 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
     }
     if (existing?.status === "rejected") throw forbidden("This person is not accepting this request.");
     if (existing) return { id: existing.id, changed: false };
-    if (await tx.$count(dmConversation, or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))) >= 500) throw invalid("You have reached the conversation limit.");
+    await assertConversationCapacity(tx, actor);
     // Friends already agreed to hear from each other, so there's no separate message request.
     const status = friends ? "accepted" : "pending";
     const [created] = await tx.insert(dmConversation).values({ firstId, secondId, requestedBy: actor, status }).onConflictDoNothing().returning({ id: dmConversation.id });
@@ -124,11 +143,16 @@ export async function createDirectConversation(actor: string, rawTarget: unknown
   if (changed) await announce(id, [target, actor], "request");
   return id;
 }
+/** 1:1 conversations and current group memberships share one cap. */
+export async function assertConversationCapacity(tx: Tx, userId: string): Promise<void> {
+  const total = await tx.$count(dmConversation, or(eq(dmConversation.firstId, userId), eq(dmConversation.secondId, userId))) + await tx.$count(dmMember, and(eq(dmMember.userId, userId), isNull(dmMember.leftAt)));
+  if (total >= 500) throw invalid("You have reached the conversation limit.");
+}
 export async function respondToDirectRequest(actor: string, id: string, rawStatus: unknown): Promise<void> {
   const status = parse(z.enum(["accepted", "rejected"]), rawStatus);
   const peer = await db.transaction(async (tx) => {
     const row = await conversationFor(tx, actor, id);
-    if (row.requestedBy === actor || row.status !== "pending") throw forbidden("Only the recipient can answer a pending request.");
+    if (row.requestedBy === actor || row.status !== "pending" || !row.peer) throw forbidden("Only the recipient can answer a pending request.");
     if (await blocked(tx, actor, row.peer)) throw forbidden();
     const changed = await tx.update(dmConversation).set({ status }).where(and(eq(dmConversation.id, id), eq(dmConversation.status, "pending"))).returning({ id: dmConversation.id });
     if (!changed.length) throw conflict("This request has already been answered.");
@@ -138,15 +162,37 @@ export async function respondToDirectRequest(actor: string, id: string, rawStatu
 }
 /** Cached per server render: the rail and Home both need it. */
 export const listDirectConversations = cache(async (actor: string): Promise<DirectConversation[]> => {
-  const rows = await db.select().from(dmConversation).where(or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor))).orderBy(desc(dmConversation.id));
+  const rows = await db.select().from(dmConversation).where(or(eq(dmConversation.firstId, actor), eq(dmConversation.secondId, actor), exists(db.select({ id: dmMember.userId }).from(dmMember).where(and(eq(dmMember.conversationId, dmConversation.id), eq(dmMember.userId, actor), isNull(dmMember.leftAt)))))).orderBy(desc(dmConversation.id));
   if (!rows.length) return [];
-  const peers = await db.select({ id: user.id, name: user.name, avatar: avatarOf(user.id) }).from(user).where(inArray(user.id, rows.map((r) => r.firstId === actor ? r.secondId : r.firstId)));
+  const groups = rows.filter((r) => r.kind === "group").map((r) => r.id);
+  // Former members stay listed (left) so earlier messages keep a known sender.
+  const memberships = groups.length ? await db.select().from(dmMember).where(inArray(dmMember.conversationId, groups)).orderBy(asc(dmMember.joinedAt), asc(dmMember.userId)) : [];
+  const peerOf = (r: (typeof rows)[number]) => r.firstId === actor ? r.secondId! : r.firstId!;
+  const ids = [...new Set([...rows.filter((r) => r.kind === "direct").map(peerOf), ...memberships.map((m) => m.userId)])];
+  const people = new Map((ids.length ? await db.select({ id: user.id, name: user.name, avatar: avatarOf(user.id) }).from(user).where(inArray(user.id, ids)) : []).map((p) => [p.id, p]));
   const blocks = await db.select().from(userBlock).where(or(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, actor)));
+  const blockedIds = blocks.map((b) => b.blockerId === actor ? b.blockedId : b.blockerId);
+  const isBlocked = (id: string) => blockedIds.includes(id);
+  const view = (id: string, left = false): DmMemberView => ({ id, name: people.get(id)?.name ?? "Deleted account", avatar: people.get(id)?.avatar ?? null, left, blocked: isBlocked(id) });
+  const joined = new Map(memberships.filter((m) => m.userId === actor).map((m) => [m.conversationId, m.joinedAt]));
   const unread = new Map((await db.select({ id: dmMessage.conversationId, total: count() }).from(dmMessage)
     .leftJoin(dmReadState, and(eq(dmReadState.conversationId, dmMessage.conversationId), eq(dmReadState.userId, actor)))
-    .where(and(inArray(dmMessage.conversationId, rows.map((r) => r.id)), ne(dmMessage.senderId, actor), or(isNull(dmReadState.lastReadId), gt(dmMessage.id, dmReadState.lastReadId))))
+    .leftJoin(dmMember, and(eq(dmMember.conversationId, dmMessage.conversationId), eq(dmMember.userId, actor)))
+    .where(and(inArray(dmMessage.conversationId, rows.map((r) => r.id)), ne(dmMessage.senderId, actor), or(isNull(dmReadState.lastReadId), gt(dmMessage.id, dmReadState.lastReadId)), or(isNull(dmMember.joinedAt), gte(dmMessage.createdAt, dmMember.joinedAt)),
+      // Group messages from someone either side blocked are unreadable here (no keys), so they never count.
+      blockedIds.length ? notInArray(dmMessage.senderId, blockedIds) : undefined))
     .groupBy(dmMessage.conversationId)).map((r) => [r.id, r.total]));
-  return rows.map((r) => { const peerId = r.firstId === actor ? r.secondId : r.firstId; const blocked = blocks.some((b) => b.blockedId === peerId || b.blockerId === peerId); return { id: r.id, peerId, peerName: peers.find((p) => p.id === peerId)?.name ?? "Deleted account", peerAvatar: peers.find((p) => p.id === peerId)?.avatar ?? null, requestedBy: r.requestedBy, status: r.status, blocked, ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId), unread: blocked ? 0 : unread.get(r.id) ?? 0 }; });
+  return rows.map((r): DirectConversation => {
+    if (r.kind === "group") {
+      const members = memberships.filter((m) => m.conversationId === r.id && m.userId !== actor).map((m) => view(m.userId, m.leftAt !== null));
+      const active = members.filter((m) => !m.left);
+      const owner = groupOwner(r.requestedBy, memberships.filter((m) => m.conversationId === r.id && m.leftAt === null).map((m) => m.userId));
+      const label = r.name ?? (active.map((m) => m.name).join(", ") || "Empty group");
+      return { id: r.id, kind: "group", name: r.name, members, owner, joinedAt: joined.get(r.id)?.toISOString() ?? null, peerId: "", peerName: label, peerAvatar: null, requestedBy: r.requestedBy, status: r.status, blocked: false, ownBlocked: false, unread: unread.get(r.id) ?? 0 };
+    }
+    const peerId = peerOf(r), peer = view(peerId), blocked = peer.blocked;
+    return { id: r.id, kind: "direct", name: null, members: [peer], owner: null, joinedAt: null, peerId, peerName: peer.name, peerAvatar: peer.avatar, requestedBy: r.requestedBy, status: r.status, blocked, ownBlocked: blocks.some((b) => b.blockerId === actor && b.blockedId === peerId), unread: blocked ? 0 : unread.get(r.id) ?? 0 };
+  });
 });
 /** Moves the person's read marker forward to a message of this conversation; never backwards. */
 export async function markDirectConversationRead(actor: string, id: string, rawMessageId: unknown): Promise<void> {
@@ -156,15 +202,16 @@ export async function markDirectConversationRead(actor: string, id: string, rawM
   if (!found) throw notFound("Message not found.");
   if (await advanceRead(db, row.id, actor, messageId)) await announce(row.id, [actor], "read");
 }
-async function advanceRead(tx: Tx | typeof db, conversationId: string, userId: string, messageId: string): Promise<boolean> {
+export async function advanceRead(tx: Tx | typeof db, conversationId: string, userId: string, messageId: string): Promise<boolean> {
   const changed = await tx.insert(dmReadState).values({ conversationId, userId, lastReadId: messageId })
     .onConflictDoUpdate({ target: [dmReadState.conversationId, dmReadState.userId], set: { lastReadId: messageId }, setWhere: lt(dmReadState.lastReadId, messageId) })
     .returning({ id: dmReadState.conversationId });
   return changed.length > 0;
 }
 export async function listDirectMessages(actor: string, id: string, before?: string) {
-  await conversationFor(db, actor, id);
-  const rows = await db.select().from(dmMessage).where(and(eq(dmMessage.conversationId, id), before ? lt(dmMessage.id, parse(uuid, before)) : undefined)).orderBy(desc(dmMessage.id)).limit(50);
+  const { joinedAt } = await conversationFor(db, actor, id);
+  // A group member added later never had keys for earlier messages; those stay out of their timeline.
+  const rows = await db.select().from(dmMessage).where(and(eq(dmMessage.conversationId, id), before ? lt(dmMessage.id, parse(uuid, before)) : undefined, joinedAt ? gte(dmMessage.createdAt, joinedAt) : undefined)).orderBy(desc(dmMessage.id)).limit(50);
   return { messages: rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), hasMore: rows.length === 50 };
 }
 export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input: unknown) {
@@ -173,12 +220,12 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     const device = await deviceFor(tx, auth);
-    const { peer } = await conversationFor(tx, auth.userId, id, true);
+    const { others, kind } = await conversationFor(tx, auth.userId, id, true);
     if (data.content.device_id !== device.id || record(device.keys?.keys)[`curve25519:${device.id}`] !== data.content.sender_key) throw invalid("The encrypted sender does not match this device.");
     const [existing] = await tx.select().from(dmMessage).where(and(eq(dmMessage.deviceId, device.id), eq(dmMessage.transactionId, data.transactionId)));
     if (existing) {
       if (existing.conversationId !== id || !same(existing.content, data.content)) throw conflict("A message transaction cannot be reused.");
-      return { id: existing.id, peer: null };
+      return { id: existing.id, recipients: [], group: false };
     }
     const [created] = await tx.insert(dmMessage).values({ conversationId: id, senderId: auth.userId, deviceId: device.id, transactionId: data.transactionId, content: data.content }).returning({ id: dmMessage.id });
     const files = [...new Set(data.attachments ?? [])];
@@ -191,14 +238,13 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
     }
     // Replying means the sender has seen everything before it (Discord semantics), even from a stale device.
     await advanceRead(tx, id, auth.userId, created.id);
-    return { id: created.id, peer };
+    return { id: created.id, recipients: others, group: kind === "group" };
   });
-  if (result.peer) {
-    await announce(id, [result.peer], "message", auth.userId);
+  if (result.recipients.length) {
+    await announce(id, result.recipients, "message", auth.userId);
     await announce(id, [auth.userId], "message");
     // Loaded lazily (push imports the message modules); never decrypts: the server has no keys.
-    const peer = result.peer;
-    void import("./push").then(({ pushDirectMessage }) => pushDirectMessage(peer, auth.userId))
+    void import("./push").then(({ pushDirectMessage }) => Promise.all(result.recipients.map((recipient) => pushDirectMessage(recipient, auth.userId, undefined, result.group ? id : undefined))))
       .catch((error: unknown) => console.error("[push] direct message push failed", error));
   }
   return { id: result.id };
@@ -282,7 +328,8 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       let total = 0;
       for (const [, raw] of entries) {
         const inner = data.kind === "query" ? parse(z.array(uuid).max(10), raw).length : Object.keys(record(raw)).length;
-        if (inner > 20 || (total += inner) > 40) throw invalid("Too many target keys or devices.");
+        // A full group: up to ten people with up to ten devices each.
+        if (inner > 20 || (total += inner) > DM_MAX_DEVICE_DELIVERIES) throw invalid("Too many target keys or devices.");
       }
     }
   }
@@ -367,7 +414,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       if (requested.length > 50) throw invalid("Too many accounts.");
       const device_keys: Record<string, unknown> = {}, master_keys: Record<string, unknown> = {}, self_signing_keys: Record<string, unknown> = {}, user_signing_keys: Record<string, unknown> = {};
       for (const matrixId of requested) {
-        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target, true);
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
         const signatures = await tx.select().from(dmSignature).where(and(eq(dmSignature.targetId, target), or(eq(dmSignature.signerId, target), eq(dmSignature.signerId, auth.userId))));
         const attach = (keyId: string, value: Record<string, unknown>) => {
@@ -429,7 +476,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
             if (content.algorithm !== "m.olm.v1.curve25519-aes-sha2" || content.sender_key !== record(own.keys?.keys)[`curve25519:${own.id}`]) throw invalid("Invalid encrypted device event.");
           } else if ((content.from_device !== undefined && content.from_device !== own.id) || (content.requesting_device_id !== undefined && content.requesting_device_id !== own.id)) throw invalid("Verification sender mismatch.");
           for (const device of devices.filter((d) => d.id === id || id === "*")) {
-            if (++deliveries > 40) throw invalid("Too many device deliveries.");
+            if (++deliveries > DM_MAX_DEVICE_DELIVERIES) throw invalid("Too many device deliveries.");
             if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= (largeOwnTransfer ? 16 : 256)) throw invalid("The recipient's device mailbox is full.");
             await tx.insert(dmMailbox).values({ deviceId: device.id, senderId: auth.userId, event: { sender: ownUser, type: data.eventType, content } });
           }

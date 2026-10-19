@@ -1,4 +1,5 @@
 import { appendDirectMessage, createDirectConversation, markDirectConversationRead, listDirectConversations, listDirectMessages, listDmDevices, registerDmDevice, reportDirectMessage, respondToDirectRequest, revokeDmDevice } from "@/server/direct-messages";
+import { addGroupMembers, createGroupConversation, leaveGroup, removeGroupMember, renameGroup } from "@/server/dm-groups";
 import { assertDmOrigin, dmActionSchema, requireDmDevice } from "@/server/dm-http";
 import { invalid } from "@/server/errors";
 import { errorResponse, PRIVATE_NO_STORE, readJsonBody } from "@/server/http";
@@ -28,6 +29,11 @@ export async function POST(request: Request) {
     switch (body.action) {
       case "register": await registerDmDevice(user.id, user.sessionId, body.input); break;
       case "request": result = { id: await createDirectConversation(user.id, body.target) }; break;
+      case "group": result = { id: await createGroupConversation(user.id, { members: body.members, name: body.name }) }; break;
+      case "group-add": await addGroupMembers(user.id, parse(uuid, body.id), body.members); break;
+      case "group-remove": await removeGroupMember(user.id, parse(uuid, body.id), body.target); break;
+      case "group-leave": await leaveGroup(user.id, parse(uuid, body.id)); break;
+      case "group-rename": await renameGroup(user.id, parse(uuid, body.id), body.name); break;
       case "respond": await respondToDirectRequest(user.id, parse(uuid, body.id), body.status); break;
       case "send": result = await appendDirectMessage(await requireDmDevice(request), parse(uuid, body.id), body.input); break;
       case "read": await markDirectConversationRead(user.id, parse(uuid, body.id), body.message); break;

@@ -260,6 +260,13 @@
       "when": 1792401942579,
       "tag": "0036_dm_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792402671509,
+      "tag": "0037_dm_groups",
+      "breakpoints": true
     }
   ]
 }

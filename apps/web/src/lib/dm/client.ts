@@ -175,11 +175,15 @@ export class PrivateMessaging {
     await this.outgoing(requests.uploadSignaturesRequest);
     await this.query([this.userId]);
   }
-  async sync(peer?: string): Promise<void> {
+  /**
+   * `peers`: the people of the open conversation (a 1:1 peer or the group's current, unblocked members).
+   * `readers`: former group members, queried only so their earlier messages can be authenticated.
+   */
+  async sync(peers: string[] = [], readers: string[] = []): Promise<void> {
     return this.serial(async () => {
       const sync = await this.crypto<CryptoSync>({ kind: "sync" });
-      // Do not trust a server roster to enroll arbitrary strangers. Only own and explicitly opened peers are queried.
-      this.users = new Set([this.userId, ...(peer ? [peer] : [])]);
+      // Do not trust a server roster to enroll arbitrary strangers. Only own and explicitly opened conversations are queried.
+      this.users = new Set([this.userId, ...peers, ...readers]);
       await this.query([...this.users]);
       const events = await this.machine.receiveSyncChanges(JSON.stringify(sync.events), new this.C.DeviceLists([], []), new Map(Object.entries(sync.oneTimeKeys)), new Set(sync.unusedFallbackKeys));
       for (const processed of events) {
@@ -267,26 +271,36 @@ export class PrivateMessaging {
       }
     });
   }
-  async send(conversation: string, peer: string, text: string, files: File[] = []): Promise<void> {
+  /** `recipients`: the 1:1 peer, or the group's current members except people either side blocked. */
+  async send(conversation: string, recipients: string[], text: string, files: File[] = [], group = false): Promise<void> {
+    if (!recipients.length) throw new Error("Nobody else can receive messages in this conversation.");
     if (files.length > DM_MAX_ATTACHMENTS) throw new Error(`Attach at most ${DM_MAX_ATTACHMENTS} files.`);
     if (files.some((file) => file.size === 0 || file.size > DM_MAX_ATTACHMENT_BYTES)) throw new Error(`Files must be between 1 byte and ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
     // Outside the crypto queue: large uploads must not stall sync and decryption. Unsent uploads expire after an hour.
     const attachments: DmAttachment[] = [];
     for (const file of files) attachments.push(await this.uploadEncrypted(conversation, file));
     return this.serial(async () => {
-      await this.query([this.userId, peer]);
+      await this.query([this.userId, ...recipients]);
       // identityBasedStrategy also shares with own devices signed by our identity, so that identity must be the one we hold or verified.
       if (!(await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId))))?.isVerified()) throw new Error("Verify this browser with your other device in Devices and recovery before sending.");
-      const identities = [this.userId, peer];
+      const identities: string[] = [];
       const roster: string[] = [];
-      for (const user of identities) {
-        if (await this.identityChanged(user)) throw new Error("This person's encryption identity changed. Verify their device in Devices and recovery before sending.");
+      for (const user of [this.userId, ...recipients]) {
+        if (await this.identityChanged(user)) throw new Error(group ? "Someone's encryption identity in this group changed. Verify their device in Devices and recovery before sending." : "This person's encryption identity changed. Verify their device in Devices and recovery before sending.");
         const all = (await this.machine.getUserDevices(new this.C.UserId(matrixUser(user)))).devices().filter((d) => !d.isDeleted());
         const devices: Matrix.Device[] = [];
         for (const d of all) if (await this.acceptsDevice(user, d)) devices.push(d);
-        if (!devices.length) throw new Error(user === this.userId ? "This browser's encryption device is unavailable. Reload, then retry." : "This person hasn't set up encrypted messages yet. Ask them to open openDiscord once, then retry.");
+        if (!devices.length) {
+          if (user === this.userId) throw new Error("This browser's encryption device is unavailable. Reload, then retry.");
+          // A group member who never set up encryption gets no key and cannot read this message; 1:1 refuses instead.
+          if (group) continue;
+          throw new Error("This person hasn't set up encrypted messages yet. Ask them to open openDiscord once, then retry.");
+        }
+        identities.push(user);
         roster.push(...devices.map((d) => `${user}/${d.deviceId.toString()}/${d.ed25519Key?.toBase64()}`));
       }
+      if (identities.length < 2) throw new Error("Nobody else in this group has set up encrypted messages yet.");
+      // Any change of people or devices (join, leave, removal, new or revoked device) rotates the outbound Megolm session.
       const room = matrixRoom(conversation), rosterKey = roster.sort().join("|");
       if (this.rosters.get(room) !== rosterKey) { await this.machine.invalidateGroupSession(new this.C.RoomId(room)); this.rosters.set(room, rosterKey); }
       const claim = await this.machine.getMissingSessions(identities.map((id) => new this.C.UserId(matrixUser(id))));
@@ -325,7 +339,8 @@ export class PrivateMessaging {
       return new Blob([this.C.Attachment.decrypt(attachment) as Uint8Array<ArrayBuffer>], { type: inlineImage(file) ? file.mime : "application/octet-stream" });
     } finally { attachment.free(); }
   }
-  async decrypt(envelopes: DirectEnvelope[], conversation: string, peer: string): Promise<PrivateMessageView[]> {
+  /** `senders`: everyone who may have written here (the peer, or current and former group members). */
+  async decrypt(envelopes: DirectEnvelope[], conversation: string, senders: string[]): Promise<PrivateMessageView[]> {
     return this.serial(async () => {
       const result: PrivateMessageView[] = [];
       let historyChanged = false;
@@ -334,7 +349,7 @@ export class PrivateMessaging {
         let stage: DecryptionStage = "envelope";
         let shieldDiagnostic: ShieldDiagnostic | undefined;
         try {
-          if (envelope.conversationId !== conversation || ![this.userId, peer].includes(envelope.senderId)) throw new Error("Unexpected message sender.");
+          if (envelope.conversationId !== conversation || ![this.userId, ...senders].includes(envelope.senderId)) throw new Error("Unexpected message sender.");
           const event = { type: "m.room.encrypted", event_id: `$${envelope.id}`, sender: matrixUser(envelope.senderId), origin_server_ts: new Date(envelope.createdAt).getTime(), content: envelope.content };
           stage = "sdk_decrypt";
           const decrypted = await this.machine.decryptRoomEvent(JSON.stringify(event), new this.C.RoomId(matrixRoom(conversation)), new this.C.DecryptionSettings(this.C.TrustRequirement.CrossSigned));
@@ -347,7 +362,7 @@ export class PrivateMessaging {
           stage = "sender_binding";
           if (!decrypted.senderDevice || decrypted.senderDevice.toString() !== envelope.deviceId || decrypted.sender.toString() !== matrixUser(envelope.senderId)) throw new Error("The sender cannot be authenticated.");
           stage = "device_trust";
-          // Cached state is enough: refresh() and loadEarlier() run sync(peer), which re-queries the peer, before every decrypt,
+          // Cached state is enough: refresh() and loadEarlier() run sync(peers), which re-queries them, before every decrypt,
           // and a device first seen after that query is unknown here, so the message fails closed until then.
           const device = await this.machine.getDevice(decrypted.sender, decrypted.senderDevice);
           if (!device || await this.identityChanged(envelope.senderId) || !(await this.acceptsDevice(envelope.senderId, device))) throw new Error("Verify the sender's device to read this message.");

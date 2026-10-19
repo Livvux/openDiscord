@@ -113,7 +113,7 @@ export async function pushMention(userId: string, channelId: string, messageId: 
  * New encrypted DM. The server cannot read it and never tries: the payload names the sender only.
  * Skipped for Do not disturb and blocks. One notification per conversation (same tag) instead of a stack.
  */
-export async function pushDirectMessage(userId: string, senderId: string, send: PushSender = sendWithWebPush): Promise<number> {
+export async function pushDirectMessage(userId: string, senderId: string, send: PushSender = sendWithWebPush, groupId?: string): Promise<number> {
   if (!pushEnabled && send === sendWithWebPush) return 0;
   const subs = await db.select().from(pushSubscription).where(eq(pushSubscription.userId, userId));
   if (subs.length === 0) return 0;
@@ -126,8 +126,8 @@ export async function pushDirectMessage(userId: string, senderId: string, send: 
   const payload: PushPayload = {
     title: sender.name,
     body: "New encrypted message",
-    url: `/app/messages?to=${encodeURIComponent(senderId)}`,
-    tag: `dm:${senderId}`,
+    url: groupId ? `/app/messages?c=${encodeURIComponent(groupId)}` : `/app/messages?to=${encodeURIComponent(senderId)}`,
+    tag: `dm:${groupId ?? senderId}`,
   };
   return deliver(subs, JSON.stringify(payload), send);
 }

@@ -4,6 +4,38 @@ Direct conversations require a request and acceptance. Start a request from a co
 message; there is no global account directory. Blocking either participant stops new messages and
 cross-account encryption traffic. Existing local history is not erased by blocking.
 
+## Groups
+
+A group has 3–10 people. Its creator picks two to nine of their friends; any member can add more of
+their own friends (never someone they blocked or who blocked them) and rename the group; the owner
+(the creator, or after they leave the longest-standing member) can remove people; anyone can leave.
+The last person leaving deletes the group and all of its ciphertext, as does deleting that person's
+account. Deleting the creator's account keeps the group for the others.
+
+Each group is one Megolm conversation. Before every send the browser fetches the current member list,
+queries every member's devices and applies the same trust rules as in 1:1 conversations; any change of
+people or devices (join, leave, removal, a new or revoked device) rotates the outbound session, so
+someone who left or was removed receives no key for later messages. The server enforces membership at
+the same time: a former member can no longer list messages or exchange device keys with the group.
+Someone added later receives keys only for later messages, and the server lists only messages from
+after they joined. Former members' earlier messages stay readable and are attributed to them; the
+remaining members may still look up a former member's public device keys for that, never deliver keys
+to them. A message whose send began just before a removal committed can still be encrypted to the
+removed person's devices; the server then refuses them the ciphertext, but a dishonest server could
+hand it over. Removal is not a ban: any member who is friends with a removed person can add them
+again, and they then receive keys for messages from that point.
+
+A member who has not set up encryption yet gets no keys and cannot read messages sent before they do;
+sending is not blocked for the others. Two members where one blocked the other exchange no keys and
+cannot read each other's new messages; a changed identity of any member stops sending until verified.
+
+The server manages membership, so it can add a person or device to a group just as it can substitute
+keys before first contact (see below). New members are shown in the member list; verify devices with
+SAS to rule this out. The group name and member list are **plaintext metadata**: the server stores
+the name and sees who is in which group, who joined, left or was removed, and when. Unread markers,
+live updates and push notifications use the same content-free events as 1:1 conversations, and a
+group push names only the sender.
+
 ## Trust and delivery
 
 The browser runs `@matrix-org/matrix-sdk-crypto-wasm` **18.9.0**, whose reported native versions are
@@ -167,10 +199,10 @@ participants' local browser copies cannot be remotely erased.
 
 ## Operational limits and evidence
 
-Limits: ten active devices, 500 conversations initiated within the account's checked conversation
-cap, 4,000-character messages, 24,000-character message ciphertext, four encrypted attachments of up to 25 MB each per message, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
+Limits: ten active devices, 500 conversations (1:1 conversations plus current group memberships)
+within the account's checked conversation cap, groups of 3–10 people with 100-character names, 4,000-character messages, 24,000-character message ciphertext, four encrypted attachments of up to 25 MB each per message, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
 events),
-8 KB per peer device event, 40 device deliveries per crypto operation, 100 available one-time prekeys and 100,000 lifetime prekey
+8 KB per peer device event, 100 device deliveries per crypto operation (a full group of ten people with ten devices each), 100 available one-time prekeys and 100,000 lifetime prekey
 or transaction entries per device. Enroll a replacement device when a lifetime limit is reached.
 Target account/device counts and signing payload sizes are checked before database locks. A short
 global database transaction lock serializes claims, receipts and mailbox sequence commits. This is a
@@ -187,7 +219,7 @@ Dependency evidence and audit boundaries:
 - [Matrix client/server encryption and SAS specification](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption)
 
 Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-attachments.test.ts`,
-`tests/dm-attachments.integration.test.ts`, `e2e/dm-attachments.spec.ts`, `tests/dm-matrix.integration.test.ts`,
+`tests/dm-attachments.integration.test.ts`, `e2e/dm-attachments.spec.ts`, `tests/dm-groups.integration.test.ts`, `e2e/dm-groups.spec.ts`, `tests/dm-matrix.integration.test.ts`,
 `tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts` and
 `e2e/direct-messages.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.
