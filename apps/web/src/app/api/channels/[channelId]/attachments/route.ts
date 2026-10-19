@@ -1,11 +1,12 @@
 import { after } from "next/server";
-import { errorResponse, PRIVATE_NO_STORE } from "@/server/http";
+import { assertSameOrigin, errorResponse, PRIVATE_NO_STORE } from "@/server/http";
 import { readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
 import { requireUser } from "@/server/session";
 
 /** Upload: the raw file is the body, its name in `X-Filename` (URI-encoded). Returns an id for sending. */
 export async function POST(request: Request, ctx: RouteContext<"/api/channels/[channelId]/attachments">) {
   try {
+    assertSameOrigin(request);
     const user = await requireUser(request.headers);
     const { channelId } = await ctx.params;
     const length = Number(request.headers.get("content-length"));

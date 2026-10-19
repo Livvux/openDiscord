@@ -43,7 +43,7 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T1 | Spoofing: credential stuffing, brute force | Better Auth per-IP rate limits on sign-in/sign-up; min. password length 10; optional TOTP; passkeys | ✅ (shared across replicas: D4) |
 | T2 | Spoofing: session theft | HttpOnly, Secure, SameSite cookies; HSTS; sessions revocable in settings; all sessions revoked on password reset | ✅ |
 | T3 | Spoofing: phishing via open redirect after sign-in | `safeNextPath` parses like a browser and rejects `//`, `\`, control characters | ✅ tested |
-| T4 | Tampering: CSRF on mutations | Server Actions enforce same-origin; Better Auth checks `Origin`; no state-changing GET routes | ✅ |
+| T4 | Tampering: CSRF on mutations | Server Actions enforce same-origin; Better Auth checks `Origin`; cookie-authenticated route handlers call `assertSameOrigin`/`assertDmOrigin` (tests/same-origin-routes.integration.test.ts); no state-changing GET routes | ✅ |
 | T5 | Tampering: SQL injection | Drizzle parameterised queries only; no string-built SQL with user input | ✅ |
 | T6 | Tampering/EoP: moderator escalates via roles | Strict rank comparison, permission subset rule, community-row lock in every role/member mutation | ✅ tested |
 | T7 | EoP: lower moderator lifts a higher moderator's ban | Unban requires outranking the issuing moderator | ✅ tested |

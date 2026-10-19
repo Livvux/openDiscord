@@ -7,7 +7,7 @@ import { attachment } from "@/db/schema";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES } from "@/lib/limits";
 import { exportUserData } from "@/server/account";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
-import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, processImage, readAttachment, readLimited, sweepAttachments, uploadAttachment } from "@/server/media";
+import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, processImage, readAttachment, readLimited, stageAvatarAttachment, sweepAttachments, uploadAttachment } from "@/server/media";
 import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
 import { testUsers } from "./helpers";
 
@@ -164,6 +164,25 @@ describe.skipIf(!mediaEnabled)("attachments in private storage", () => {
     await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `attachments/${heavy}.bin`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
     const small = new Uint8Array(8);
     await expect(uploadAttachment(heavy, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/per day/);
+  });
+
+  it("stores nothing when the configured scanner is unreachable (fail closed)", async () => {
+    const uploader = await fixtures.create("Scanned uploader");
+    await acceptInvite(uploader, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));
+    const saved = { host: process.env.CLAMAV_HOST, port: process.env.CLAMAV_PORT };
+    // Port 1 on loopback: nothing listens there, so the connection is refused.
+    Object.assign(process.env, { CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: "1" });
+    try {
+      const file = new TextEncoder().encode("plain file");
+      await expect(uploadAttachment(uploader, channelId, "application/zip", file.byteLength, async () => file, "a.zip")).rejects.toThrow(/scanner is unavailable/);
+      await expect(upload(uploader)).rejects.toThrow(/scanner is unavailable/);
+      await expect(stageAvatarAttachment(uploader, await jpegWithGps(), new AbortController().signal)).rejects.toThrow(/scanner is unavailable/);
+    } finally {
+      for (const [key, value] of [["CLAMAV_HOST", saved.host], ["CLAMAV_PORT", saved.port]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+    expect(await db.select().from(attachment).where(eq(attachment.uploaderId, uploader))).toHaveLength(0);
   });
 
   it("requires text or at least one image", async () => {
