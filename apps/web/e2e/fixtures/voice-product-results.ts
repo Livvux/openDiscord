@@ -59,7 +59,8 @@ export type VoiceProductCheckpoint = "initial-consent" | "delayed-consent" | "wa
 /** Runs in the page: only fixed enums leave the DOM, never source status/alert text. */
 export function readVoiceProductPresentation(elements: Pick<Element, "getAttribute" | "textContent">[]): { phase: VoiceProductPhase; reason: VoiceProductReason } {
   const phases = new Map<string, VoiceProductPhase>([
-    ["Verify every participant, then admit them separately.", "verifying"],
+    ["Compare symbols with each participant, then admit them.", "verifying"],
+    ["Waiting for others to join…", "verifying"],
     ["Waiting for participant setup and audience consent.", "waiting"],
     ["Waiting for your full audience consent.", "consent-pending"],
     ["Agreeing the full audience…", "negotiating"],
@@ -81,7 +82,8 @@ export function readVoiceProductPresentation(elements: Pick<Element, "getAttribu
   const statuses = new Set<VoiceProductPhase>(), alerts = new Set<VoiceProductReason>();
   for (const element of elements) {
     const role = element.getAttribute("role"), text = element.textContent?.trim() ?? "";
-    if (role === "status" && phases.has(text)) statuses.add(phases.get(text)!);
+    // Ended statuses carry a human reason after a fixed prefix; only the phase leaves the page.
+    if (role === "status" && (phases.has(text) || /^Voice stopped(: | \([a-z_-]+\)\. Rejoin when ready\.$)/.test(text))) statuses.add(phases.get(text) ?? "stopped");
     if (role === "alert" && text) alerts.add(templates.get(text) ?? "other");
   }
   return { phase: statuses.size === 1 ? [...statuses][0] : "unknown", reason: alerts.size === 0 ? "none" : alerts.size === 1 ? [...alerts][0] : "other" };

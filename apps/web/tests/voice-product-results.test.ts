@@ -65,7 +65,8 @@ function element(role: string, textContent: string): Pick<Element, "getAttribute
 }
 describe("fixed public Voice phase and reason diagnostics", () => {
   const phases: [string, VoiceProductPhase][] = [
-    ["Verify every participant, then admit them separately.", "verifying"],
+    ["Compare symbols with each participant, then admit them.", "verifying"],
+    ["Waiting for others to join…", "verifying"],
     ["Waiting for participant setup and audience consent.", "waiting"],
     ["Waiting for your full audience consent.", "consent-pending"],
     ["Agreeing the full audience…", "negotiating"],
@@ -74,6 +75,8 @@ describe("fixed public Voice phase and reason diagnostics", () => {
     ["Encrypted voice ready — microphone off", "ready"],
     ["Encrypted voice ready — microphone on", "ready"],
     ["Voice stopped. Join again to start a fresh call.", "stopped"],
+    ["Voice stopped: you no longer have permission to use this voice channel.", "stopped"],
+    ["Voice stopped (some-reason). Rejoin when ready.", "stopped"],
   ];
   it.each(phases)("maps exact public status %s only to %s", (text, phase) => {
     expect(readVoiceProductPresentation([element("status", text), element("status", text)])).toEqual({ phase, reason: "none" });
@@ -93,7 +96,7 @@ describe("fixed public Voice phase and reason diagnostics", () => {
     const result = readVoiceProductPresentation([element("status", privateText), element("alert", `Voice: ${privateText}. Review the call status before retrying.`)]);
     expect(result).toEqual({ phase: "unknown", reason: "other" });
     expect(JSON.stringify(result)).not.toContain(privateText);
-    expect(readVoiceProductPresentation([element("status", phases[0][0]), element("status", phases[1][0]), element("alert", "Voice: context-expired. Review the call status before retrying."), element("alert", privateText)])).toEqual({ phase: "unknown", reason: "other" });
+    expect(readVoiceProductPresentation([element("status", phases[0][0]), element("status", phases[2][0]), element("alert", "Voice: context-expired. Review the call status before retrying."), element("alert", privateText)])).toEqual({ phase: "unknown", reason: "other" });
     expect(readVoiceProductPresentation([element("alert", ""), element("status", "Agreeing the full audience… suffix")])).toEqual({ phase: "unknown", reason: "none" });
   });
 });

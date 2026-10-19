@@ -43,11 +43,46 @@ and authenticated CallSession survive text-channel navigation.
 Joining requires separate consent to a temporary Voice device and existing encrypted
 messaging setup. Voice never enrolls a messaging device. Each exact full-roster peer must
 complete genuine native SDK SAS comparison on both browsers, then be separately admitted.
-Full-audience consent is another explicit action. The UI displays native `Sas.emoji()`
+Full-audience consent is another explicit action.
+
+The protocol steps that carry no trust decision run automatically once keys are prepared
+(`voice-verification.ts`): the lower member ID requests, the peer accepts, the requester
+starts SAS and the peer accepts SAS. Each step is attempted once per generation; after a
+failure the matching manual button remains. Comparing the symbols ("they match"),
+admitting, cancelling and full-audience consent stay explicit clicks. Admission is not
+merged into the match confirmation: the Voice Olm proof spec defines admission as a
+separate, deliberate publisher choice after native verification (you can verify who a
+device is and still decline to send it your media keys), so per pair a person now clicks
+"they match" and "admit" instead of six buttons. Reusing DM verification for Voice stays a
+follow-up: the same spec says DM verification never substitutes for Voice SAS, and carrying
+trust over would need the DM identity to sign each temporary Voice device, which the
+current integration does not do. The UI displays native `Sas.emoji()`
 symbols and descriptions from pinned Matrix crypto SDK18.9.0; no local emoji table or
 trust conversion is involved. Generation changes clear current media and require full
 roster consent again. Microphone, camera and screen sharing remain off until explicit
 source clicks. Screen capture requests video only.
+
+Statuses name the phase in plain words (connecting, waiting for others, comparing symbols,
+agreeing the audience, preparing media, ready) and an ended call states why (connection
+interrupted, could not reach the voice server, keying timed out, permission lost, signed
+out). After a failure a "Rejoin" button creates a fresh temporary device and call. SDK
+reconnects stay terminal, so old keys are never restored; a user rejoin starts from zero.
+Capture errors distinguish blocked permission, missing device, busy device and a
+cancelled screen picker.
+
+### Browser support
+
+Media encryption runs in livekit-client's unchanged E2EE worker through either Chromium's
+encoded streams (`createEncodedStreams`) or standard `RTCRtpScriptTransform` (Firefox,
+Safari); `support.ts` accepts either and nothing else, with no plaintext fallback.
+setKey/enable and the positive own ACK pass through `StrictVoiceWorker` on both paths. On
+the script-transform path the SDK attaches transforms via `new RTCRtpScriptTransform(worker)`,
+which bypasses `postMessage`, so the worker's early encode/decode and codec checks cannot
+observe it; MediaSession's ordering (publish only after own ACK plus every key-ready,
+subscribe only after the publisher's ACK and exact-GCM/Opus/VP8 checks) is the enforcing
+layer there. Product acceptance runs in Chromium and Firefox. Playwright WebKit reached
+decoded Opus and moving VP8 locally but is not in CI (unrelated DM-client page errors);
+real Safari, Edge and mobile browsers are untested.
 
 CallView exposes immutable, key-free media state and opaque playback tile IDs. It does
 not expose Room, Track, tokens or key material. `agreed` alone is never displayed as media
@@ -58,8 +93,9 @@ grants control local actions, while a listen-only peer can still decrypt admitte
 `Voice product acceptance` is a separate disposable hosted job. It builds the actual
 Next production server and starts LiveKit1.13.10 with `room.auto_create: false`. Its
 three separate authenticated accounts use real product signup, community membership,
-messaging setup, Voice consent, three native SAS pair comparisons, six admissions and
-three full-audience decisions. Native Worker/RTCPeerConnection observers forward original
+messaging setup, Voice consent, three native SAS pair comparisons (protocol steps automatic,
+symbol confirmation clicked), six admissions and three full-audience decisions. The job runs
+the spec in Chromium, then again in Firefox (`VOICE_PRODUCT_BROWSER=firefox`). Native Worker/RTCPeerConnection observers forward original
 operations unchanged and retain only counts/order/stats. The test checks worker fetch
 content type/CSP, own positive SDK ACK after all exact key submissions, listen-only empty
 source grants, non-silent decoded Opus, changing VP8 pixels in actual product video
@@ -70,7 +106,7 @@ are excluded from the diagnostic summary; comparison traces are disabled.
 These are test requirements, not a claim that the current revision has passed them.
 The exact hosted check IDs and outcomes belong in the implementation report. Existing
 control/lifecycle/media suites retain lower-layer negative coverage; they do not substitute
-for the actual Next product gate. Physical audio devices, WebKit encrypted media,
+for the actual Next product gate. Physical audio devices, WebKit/Safari encrypted media,
 eight-browser capacity, arbitrary networks and external cryptographic audit remain outside
 this acceptance. Source CI never enables production: operator freeze, migration, exact SFU
 configuration, cleanup and independent review remain release prerequisites.

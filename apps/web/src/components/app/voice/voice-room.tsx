@@ -33,7 +33,7 @@ export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string
     <header className="text-center"><h2 className="text-xl font-semibold">{channel.name}</h2><p className="mt-2 text-sm text-muted-foreground" role="status">{voiceStatus(view, here && voice.joining)}</p></header>
     {view && view.state !== "ended" && <section aria-label="Full Voice audience" className="grid w-full max-w-2xl gap-3">
       <h3 className="font-semibold">Full Voice audience</h3>
-      <p className="text-sm text-muted-foreground">Verify each temporary device over another trusted channel. Confirm on both browsers, then admit each participant. Messaging verification does not verify Voice.</p>
+      <p className="text-sm text-muted-foreground">Verification starts automatically. Compare the seven symbols with each participant over another trusted channel (in person or a call you trust), confirm they match, then admit them. Messaging verification does not verify Voice.</p>
       <ul className="grid gap-3">{view.roster.map(member => {
         const self = member.memberId === view.selfMemberId;
         const sas = [...view.sas].reverse().find(flow => flow.peer.memberId === member.memberId && !flow.cancelled);
@@ -45,7 +45,7 @@ export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string
             {admitted ? <p>Admitted for this exact device.</p> : sas?.done ? <Button disabled={voice.busy} onClick={() => void voice.admit(member.memberId)}>Admit this verified participant</Button> : <>
               {!sas && (view.selfMemberId < member.memberId ? <Button disabled={voice.busy || !view.keysPrepared} onClick={() => void voice.requestVerification(member.memberId)}>Request Voice verification</Button> : <p className="text-sm">Waiting for this participant to request verification.</p>)}
               {sas && !sas.done && <>
-                {!sas.ready && !sas.weStarted && <Button disabled={voice.busy} onClick={() => void voice.verificationStep(sas.handle, "accept")}>Accept Voice verification</Button>}
+                {!sas.ready && !sas.weStarted && !sas.hasSas && <Button disabled={voice.busy} onClick={() => void voice.verificationStep(sas.handle, "accept")}>Accept Voice verification</Button>}
                 {sas.ready && !sas.hasSas && sas.weStarted && <Button disabled={voice.busy} onClick={() => void voice.verificationStep(sas.handle, "start")}>Start SAS comparison</Button>}
                 {sas.hasSas && !sas.sasAccepted && !sas.weStarted && <Button disabled={voice.busy} onClick={() => void voice.verificationStep(sas.handle, "accept-sas")}>Accept SAS comparison</Button>}
                 {sas.emoji && <div aria-label="Voice comparison" className="grid gap-2"><p className="text-sm">Compare these seven symbols and descriptions with this participant over another trusted channel.</p><ol className="flex flex-wrap gap-3" aria-label="Voice SAS symbols">{sas.emoji.map((emoji, index) => <li key={index} className="text-center"><span className="block text-2xl" aria-hidden>{emoji.symbol}</span><span className="text-xs">{emoji.description}</span></li>)}</ol><Button disabled={voice.busy || sas.confirmed} onClick={() => void voice.verificationStep(sas.handle, "confirm")}>{sas.confirmed ? "Waiting for their confirmation" : "I compared all seven symbols — they match"}</Button></div>}
@@ -62,7 +62,7 @@ export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string
     {here && voice.error && <p role="alert" className="max-w-xl text-sm text-destructive">{voice.error}</p>}
     {here && voice.error?.includes("Devices and recovery") && <Link href="/app/messages" className="underline">Open encrypted messages — Devices and recovery</Link>}
     {media?.audioBlocked && <Button onClick={() => void voice.startAudio()}>Enable audio playback</Button>}
-    {active ? <Button variant="destructive" onClick={voice.leave}>Leave Voice</Button> : !canConnect ? <p>You don&apos;t have permission to join this voice channel.</p> : consent ? <section aria-label="Voice join consent" className="grid w-full max-w-xl gap-3 rounded-lg border p-4">
+    {active ? <Button variant="destructive" onClick={voice.leave}>Leave Voice</Button> : here && canConnect ? <Button disabled={!voice.authenticated} onClick={() => void voice.join({ ...channel, href })}>Rejoin voice with a new temporary device</Button> : !canConnect ? <p>You don&apos;t have permission to join this voice channel.</p> : consent ? <section aria-label="Voice join consent" className="grid w-full max-w-xl gap-3 rounded-lg border p-4">
       <h3 className="font-semibold">Join encrypted Voice?</h3><p className="text-sm">Create a temporary Voice device for this browser session. Every participant must separately verify, admit and consent to the full audience. Your microphone stays off until you activate it. The server sees participants and timing; a compromised browser can access media.</p>
       <Button disabled={!voice.authenticated} onClick={() => { setConsent(false); void voice.join({ ...channel, href }); }}>Create temporary device and join</Button><Button variant="outline" onClick={() => setConsent(false)}>Cancel joining Voice</Button>
     </section> : <Button disabled={!voice.authenticated} onClick={() => setConsent(true)}>Join voice</Button>}

@@ -10,7 +10,7 @@ type RoomDouble = {
   disconnect: ReturnType<typeof vi.fn>;
   localParticipant: { trackPublications: Map<string, unknown>; setMicrophoneEnabled: ReturnType<typeof vi.fn>; setCameraEnabled: ReturnType<typeof vi.fn>; setScreenShareEnabled: ReturnType<typeof vi.fn> };
 };
-const harness = vi.hoisted(() => ({ rooms: [] as RoomDouble[], keys: true, connect: undefined as Promise<void> | undefined }));
+const harness = vi.hoisted(() => ({ rooms: [] as RoomDouble[], keys: true, connect: undefined as Promise<void> | undefined, connectError: undefined as Error | undefined }));
 vi.mock("livekit-client", () => {
   class Keys {
     keys = new Map<string, CryptoKey>();
@@ -27,6 +27,7 @@ vi.mock("livekit-client", () => {
     async setE2EEEnabled() {}
     async connect() {
       if (harness.connect) await harness.connect;
+      if (harness.connectError) throw harness.connectError;
       if (harness.keys) this.options.encryption.keyProvider.keys.forEach((key, participantIdentity) => this.worker.postMessage({ kind: "setKey", data: { key, participantIdentity, keyIndex: 0 } }));
     }
   }
@@ -42,7 +43,7 @@ function gate<T>() { let resolve!: (value: T) => void; const promise = new Promi
 async function settle() { for (let i = 0; i < 4; i++) await new Promise<void>(resolve => setImmediate(resolve)); }
 let media: MediaSession | undefined;
 beforeEach(() => {
-  harness.rooms.length = 0; harness.keys = true; harness.connect = undefined;
+  harness.rooms.length = 0; harness.keys = true; harness.connect = undefined; harness.connectError = undefined;
   vi.stubGlobal("Worker", WorkerDouble);
   vi.stubGlobal("RTCRtpSender", class { createEncodedStreams() {} });
   vi.stubGlobal("RTCRtpReceiver", class { createEncodedStreams() {} });
@@ -218,6 +219,33 @@ describe("MediaSession deterministic public Room/Worker effect doubles (not real
     const failed = vi.fn(), worker = new StrictVoiceWorker(new URL("https://example.test/worker"), ["self"], failed, { ownIdentity: "self", expected: new Map([["self", key]]) });
     worker.postMessage({ kind: "setKey", data: { participantIdentity: "self", key, keyIndex: 0 } }); worker.postMessage({ kind: "setKey", data: { participantIdentity: "self", key, keyIndex: 0 } }); ack(worker, "self");
     await worker.waitUntilEnabled("self"); expect(failed).not.toHaveBeenCalled(); worker.terminate();
+  });
+  it("RTCRtpScriptTransform-only browsers (Firefox/Safari) keep the exact-key ACK, key-ready and GCM gates", async () => {
+    vi.stubGlobal("RTCRtpSender", class {}); vi.stubGlobal("RTCRtpReceiver", class {}); vi.stubGlobal("RTCRtpScriptTransform", class {});
+    const test = setup(); await open(test); await prepare(test);
+    expect(harness.rooms).toHaveLength(1);
+    await expect(media!.setSource("microphone", true)).rejects.toThrow("Media not ready");
+    ownAck(test); await settle();
+    await media!.consume(receipt(test, 0, "key-ready")); await media!.consume(receipt(test, 1, "key-ready"));
+    expect(test.presentation.mock.lastCall?.[0].mediaState).toBe("ready");
+    const subscribed = vi.fn();
+    harness.rooms[0].events.get("trackPublished")!({ source: "microphone", kind: "audio", mimeType: "audio/opus", isEncrypted: true, trackInfo: { encryption: 2 }, setSubscribed: subscribed }, { identity: test.peers[0].participantIdentity }); await settle();
+    expect(test.fatal).toHaveBeenCalledExactlyOnceWith("media-failed"); expect(subscribed).not.toHaveBeenCalledWith(true);
+  });
+  it("RTCRtpScriptTransform path still refuses ownACK before every exact setKey", async () => {
+    vi.stubGlobal("RTCRtpSender", class {}); vi.stubGlobal("RTCRtpReceiver", class {}); vi.stubGlobal("RTCRtpScriptTransform", class {});
+    harness.keys = false; const test = setup(); await open(test); await prepare(test); ownAck(test); await settle();
+    expect(test.fatal).toHaveBeenCalledOnce(); expect(test.send.mock.calls.some(([control]) => control.kind === "key-ready")).toBe(false);
+  });
+  it("browsers without any frame-transform API stop before sending key material", async () => {
+    vi.stubGlobal("RTCRtpSender", class {}); vi.stubGlobal("RTCRtpReceiver", class {});
+    const test = setup(); await open(test);
+    expect(test.fatal).toHaveBeenCalledExactlyOnceWith("media-failed"); expect(test.send).not.toHaveBeenCalled(); expect(harness.rooms).toHaveLength(0);
+  });
+  it("reports an SFU connection failure distinctly so the UI can explain network/TURN problems", async () => {
+    harness.connectError = new Error("could not establish pc connection");
+    const test = setup(); await open(test); await prepare(test);
+    expect(test.fatal).toHaveBeenCalledExactlyOnceWith("media-connect-failed"); expect(harness.rooms[0].disconnect).toHaveBeenCalled();
   });
   it("latest valid call authority permits established media beyond JWT join expiry; signal-only reconnect stays terminal", async () => {
     const test = setup(); await open(test); await prepare(test); ownAck(test); await settle();
