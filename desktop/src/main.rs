@@ -48,7 +48,8 @@ fn confirm_update(version: &str) -> bool {
     );
     dialog.set_secondary_text(Some(UPDATE_PROMPT));
     let accepted = dialog.run() == gtk::ResponseType::Yes;
-    dialog.destroy();
+    // SAFETY: the dialog is owned here and not used after destruction.
+    unsafe { dialog.destroy() };
     accepted
 }
 
@@ -82,7 +83,8 @@ fn media_permission(kind: &PermissionKind) -> PermissionResponse {
         &format!("Allow OpenDiscord to use your {device}?"),
     );
     let allowed = dialog.run() == gtk::ResponseType::Yes;
-    dialog.destroy();
+    // SAFETY: the dialog is owned here and not used after destruction.
+    unsafe { dialog.destroy() };
     if allowed {
         PermissionResponse::Allow
     } else {
