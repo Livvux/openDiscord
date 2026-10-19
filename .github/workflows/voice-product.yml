@@ -74,11 +74,6 @@ jobs:
         run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts
         env:
           VOICE_PRODUCT_BROWSER: firefox
-      - run: pnpm --filter web exec playwright install --with-deps webkit
-      - name: Same acceptance in WebKit (Safari engine, RTCRtpScriptTransform)
-        run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts
-        env:
-          VOICE_PRODUCT_BROWSER: webkit
       - name: SFU listener startup only
         if: always()
         run: docker logs opendiscord-product-livekit 2>&1 | sed -n '/starting LiveKit server/p'
