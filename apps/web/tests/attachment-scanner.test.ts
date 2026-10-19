@@ -47,3 +47,37 @@ it("fails closed on a stalled scanner and accepts explicitly disabled scanning",
   await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", probe.port, 25)).rejects.toThrow("unavailable");
   await expect(scanAttachment(new Uint8Array([1]), "")).resolves.toBeUndefined();
 });
+
+async function closedPort() {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+it("fails closed when the configured scanner refuses the connection", async () => {
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", await closedPort())).rejects.toThrow("unavailable");
+});
+
+it("fails closed when the scanner hangs up without a verdict", async () => {
+  const probe = await scanner("");
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", probe.port)).rejects.toThrow("unavailable");
+});
+
+it("fails closed on an oversized or unterminated reply", async () => {
+  const flood = await scanner("x".repeat(5000));
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", flood.port)).rejects.toThrow("unavailable");
+  const unterminated = await scanner("stream: OK");
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", unterminated.port)).rejects.toThrow("unavailable");
+});
+
+it("names a detection as a malware rejection, not an outage", async () => {
+  const probe = await scanner("stream: Eicar-Test-Signature FOUND\0");
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", probe.port)).rejects.toThrow("malware scanner");
+});
+
+it("refuses an invalid scanner port instead of skipping the scan", async () => {
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", 70000)).rejects.toThrow("CLAMAV_PORT");
+  await expect(scanAttachment(new Uint8Array([1]), "127.0.0.1", Number.NaN)).rejects.toThrow("CLAMAV_PORT");
+});
