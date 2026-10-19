@@ -64,6 +64,10 @@ describe.runIf(pushEnabled)("mention pushes", () => {
     expect(await pushDirectMessage(member, owner, ok)).toBe(1);
     const payload = JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "));
     expect(payload).toEqual({ title: "Owner", body: "New encrypted message", url: `/app/messages?to=${encodeURIComponent(owner)}`, tag: `dm:${owner}` });
+    // A group message opens the group; still content-free.
+    const group = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    expect(await pushDirectMessage(member, owner, ok, group)).toBe(1);
+    expect(JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "))).toEqual({ title: "Owner", body: "New encrypted message", url: `/app/messages?c=${group}`, tag: `dm:${group}` });
     await setPresenceStatus(member, "dnd");
     expect(await pushDirectMessage(member, owner, ok)).toBe(0);
     await setPresenceStatus(member, "online");

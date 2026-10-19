@@ -63,14 +63,14 @@ describe("per-message processing failure boundaries", () => {
   let decrypted: ReturnType<typeof decryptedFixture>;
   const machine = {
     outgoingRequests: vi.fn(async () => []),
-    queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
+    queryKeysForUsers: vi.fn<(ids: C.UserId[]) => { type: C.RequestType; body: string; id: string }>(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
     markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})), crossSigningStatus: vi.fn(async () => ({ hasMaster: false })),
     decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
-    shareRoomKey: vi.fn(async () => []), close: vi.fn(),
+    shareRoomKey: vi.fn(async () => []), close: vi.fn(), receiveSyncChanges: vi.fn(async () => []),
   };
   const history = {
     cached: vi.fn(async () => []), archives: vi.fn(async () => []), pendingIdentity: vi.fn(async () => null),
-    acceptEvent: vi.fn(), put: vi.fn(), close: vi.fn(),
+    acceptEvent: vi.fn(), put: vi.fn(), close: vi.fn(), outgoing: vi.fn(async () => []),
   };
 
   beforeEach(async () => {
@@ -105,7 +105,7 @@ describe("per-message processing failure boundaries", () => {
       case "history_schema": envelope.content = {}; break;
       case "replay_storage": history.acceptEvent.mockRejectedValueOnce(new Error("private storage exception")); break;
     }
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
     expect(row.diagnostic).toEqual(stage === "shield" ? { stage, code: "unknown", shieldColor: "Red", shieldCode: "unknown" } : { stage, code: "unknown" });
@@ -116,7 +116,7 @@ describe("per-message processing failure boundaries", () => {
 
   it.each([C.ShieldColor.Red, C.ShieldColor.Grey])("preserves shield rejection for public color %s without reading descriptions", async (color) => {
     decrypted.shieldState.mockReturnValueOnce(shieldFixture(color, C.ShieldStateCode.UnverifiedIdentity));
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
     expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: publicShieldColor(color, C), shieldCode: "UnverifiedIdentity" });
@@ -129,7 +129,7 @@ describe("per-message processing failure boundaries", () => {
     const error = C.MegolmDecryptionError.unable_to_decrypt("private shield acquisition exception");
     try {
       decrypted.shieldState.mockImplementationOnce(() => { throw error; });
-      const [row] = await client.decrypt([envelope], conversation, peer);
+      const [row] = await client.decrypt([envelope], conversation, [peer]);
       expect(row.body).toBeNull();
       expect(row.error).toBe(genericError);
       expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
@@ -141,7 +141,7 @@ describe("per-message processing failure boundaries", () => {
 
   it("rejects future shield values while exposing only fixed unknown classifications", async () => {
     decrypted.shieldState.mockReturnValueOnce(shieldFixture(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBeNull();
     expect(row.error).toBe(genericError);
     expect(row.diagnostic).toEqual({ stage: "shield", code: "unknown", shieldColor: "unknown", shieldCode: "unknown" });
@@ -154,7 +154,7 @@ describe("per-message processing failure boundaries", () => {
     const error = C.MegolmDecryptionError.unable_to_decrypt("private SDK description");
     try {
       machine.decryptRoomEvent.mockRejectedValueOnce(error);
-      const [row] = await client.decrypt([envelope], conversation, peer);
+      const [row] = await client.decrypt([envelope], conversation, [peer]);
       expect(row.body).toBeNull();
       expect(row.error).toBe(genericError);
       expect(row.diagnostic).toEqual({ stage: "sdk_decrypt", code: "UnableToDecrypt" });
@@ -162,7 +162,7 @@ describe("per-message processing failure boundaries", () => {
   });
 
   it("adds no diagnostic metadata to successful rows and preserves SDK and replay checks", async () => {
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBe(plain.body);
     expect(row).not.toHaveProperty("diagnostic");
     expect(row).not.toHaveProperty("error");
@@ -175,7 +175,7 @@ describe("per-message processing failure boundaries", () => {
 
   it("trusts an unverified peer device on first use when its owner's identity signed it", async () => {
     machine.getDevice.mockResolvedValueOnce({ isVerified: () => false, isCrossSignedByOwner: () => true });
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBe(plain.body);
   });
 
@@ -183,25 +183,34 @@ describe("per-message processing failure boundaries", () => {
     const changed = Object.assign(Object.create(C.OtherUserIdentity.prototype), { identityNeedsUserApproval: () => true, hasVerificationViolation: () => false });
     machine.getIdentity.mockResolvedValueOnce(changed);
     machine.getDevice.mockResolvedValueOnce({ isVerified: () => false, isCrossSignedByOwner: () => true });
-    const [row] = await client.decrypt([envelope], conversation, peer);
+    const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBeNull();
     expect(row.diagnostic).toEqual({ stage: "device_trust", code: "unknown" });
   });
 
+  it("a group sync survives one member whose key lookup the server refuses; a 1:1 sync does not", async () => {
+    machine.queryKeysForUsers.mockImplementation((ids: C.UserId[]) => ({ type: C.RequestType.KeysQuery, body: JSON.stringify({ device_keys: Object.fromEntries(ids.map((id) => [id.toString(), []])) }), id: "query" }));
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => String(init?.body).includes("refused")
+      ? Response.json({ error: "Encrypted conversation not found." }, { status: 404 })
+      : Response.json({ cursor: "0", events: [], oneTimeKeys: {}, unusedFallbackKeys: [] })));
+    await expect(client.sync(["member", "refused"])).resolves.toBeUndefined();
+    await expect(client.sync(["refused"])).rejects.toThrow("not found");
+  });
+
   it("refuses to send before sharing keys when this account's own identity isn't trusted", async () => {
     machine.getIdentity.mockResolvedValueOnce({ isVerified: () => false });
-    await expect(client.send(conversation, peer, "hi")).rejects.toThrow(/Verify this browser/);
+    await expect(client.send(conversation, [peer], "hi")).rejects.toThrow(/Verify this browser/);
     expect(machine.shareRoomKey).not.toHaveBeenCalled();
   });
 
   it("keeps failures per envelope and drops their classification on a later successful refresh", async () => {
     history.acceptEvent.mockRejectedValueOnce(new Error("private storage exception"));
     const next = { ...envelope, id: randomUUID() };
-    const rows = await client.decrypt([envelope, next], conversation, peer);
+    const rows = await client.decrypt([envelope, next], conversation, [peer]);
     expect(rows[0].diagnostic).toEqual({ stage: "replay_storage", code: "unknown" });
     expect(rows[1].body).toBe(plain.body);
     expect(rows[1]).not.toHaveProperty("diagnostic");
-    const [refreshed] = await client.decrypt([envelope], conversation, peer);
+    const [refreshed] = await client.decrypt([envelope], conversation, [peer]);
     expect(refreshed.body).toBe(plain.body);
     expect(refreshed).not.toHaveProperty("diagnostic");
   });

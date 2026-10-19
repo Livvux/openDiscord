@@ -2,7 +2,7 @@
 // Replaced or removed pictures and those of deleted accounts lose their link and the media sweeper deletes them.
 import { and, eq, getTableName, gt, isNull, sql, type Column, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, dmConversation, friendship, member } from "@/db/schema";
+import { attachment, dmConversation, dmMember, friendship, member } from "@/db/schema";
 import { configuredAttachmentStorage } from "./attachment-storage";
 import { AVATAR_RAW_BYTES } from "@/lib/limits";
 import { AppError, invalid, notFound } from "./errors";
@@ -53,7 +53,7 @@ export async function removeAvatar(userId: string): Promise<void> {
 
 const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]) as [string, string];
 
-/** Same audience as the profile card: yourself, a shared community, a friendship (or request) or a direct conversation. */
+/** Yourself, a shared community, a friendship (or request), a direct conversation or a group you are in. */
 async function canSee(viewerId: string, ownerId: string): Promise<boolean> {
   if (viewerId === ownerId) return true;
   try { await assertActiveUser(ownerId); } catch (error) { if (error instanceof AccountBlocked) return false; throw error; }
@@ -62,6 +62,7 @@ async function canSee(viewerId: string, ownerId: string): Promise<boolean> {
     exists (select 1 from ${member} a join ${member} b on a.community_id = b.community_id where a.user_id = ${ownerId} and b.user_id = ${viewerId})
     or exists (select 1 from ${friendship} where first_id = ${first} and second_id = ${second})
     or exists (select 1 from ${dmConversation} where first_id = ${first} and second_id = ${second} and status <> 'rejected')
+    or exists (select 1 from ${dmMember} a join ${dmMember} b on a.conversation_id = b.conversation_id where a.user_id = ${ownerId} and b.user_id = ${viewerId} and b.left_at is null)
   ) as visible`);
   return row?.visible === true;
 }

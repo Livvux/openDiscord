@@ -41,7 +41,22 @@ export const plainMessageSchema = z.object({
 }).strict().refine((message) => message.body.length > 0 || !!message.attachments, "A message needs text or an attachment.");
 export type PlainDirectMessage = z.infer<typeof plainMessageSchema>;
 export type DmDeviceAuth = { userId: string; sessionId: string; deviceId: string; secret: string };
-export type DirectConversation = { id: string; peerId: string; peerName: string; peerAvatar: string | null; requestedBy: string; status: "pending" | "accepted" | "rejected"; blocked: boolean; ownBlocked: boolean; /** Messages from the peer after the read marker. */ unread: number };
+export const DM_GROUP_MAX_MEMBERS = 10;
+export const DM_GROUP_NAME_MAX = 100;
+export type DmMemberView = { id: string; name: string; avatar: string | null; /** A former group member, still shown as the sender of earlier messages. */ left: boolean; /** Either of you blocked the other: no keys are exchanged. */ blocked: boolean };
+export type DirectConversation = {
+  id: string; kind: "direct" | "group";
+  /** Group name (plaintext metadata); null for 1:1 conversations and unnamed groups. */
+  name: string | null;
+  /** Everyone else: the peer of a 1:1 conversation, or current and former group members. */
+  members: DmMemberView[];
+  /** The group's longest-standing member, who may remove others; null for 1:1 conversations. */
+  owner: string | null;
+  /** When you joined a group; earlier messages are not yours to read. */
+  joinedAt: string | null;
+  /** For groups: peerId is empty and peerName is the display label. */
+  peerId: string; peerName: string; peerAvatar: string | null; requestedBy: string | null; status: "pending" | "accepted" | "rejected"; blocked: boolean; ownBlocked: boolean; /** Messages from others after the read marker. */ unread: number;
+};
 /** Shown in the DM list: declined requests and people you blocked are hidden. */
 export const visibleConversation = (c: DirectConversation) => c.status !== "rejected" && !c.ownBlocked;
 export const unreadTotal = (list: DirectConversation[]) => list.filter(visibleConversation).reduce((sum, c) => sum + (c.blocked ? 0 : c.unread), 0);

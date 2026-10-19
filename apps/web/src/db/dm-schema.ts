@@ -1,18 +1,39 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, index, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
 
 const id = () => uuid("id").primaryKey().default(sql`uuidv7()`);
 const created = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
 
+/** A 1:1 conversation (first/second, a request until accepted) or a group whose people are in `dm_member`. */
 export const dmConversation = pgTable("dm_conversation", {
   id: id(),
-  firstId: text("first_id").notNull().references(() => user.id, { onDelete: "cascade" }),
-  secondId: text("second_id").notNull().references(() => user.id, { onDelete: "cascade" }),
-  requestedBy: text("requested_by").notNull().references(() => user.id, { onDelete: "cascade" }),
+  firstId: text("first_id").references(() => user.id, { onDelete: "cascade" }),
+  secondId: text("second_id").references(() => user.id, { onDelete: "cascade" }),
+  /** The requester of a 1:1 conversation, or a group's creator; a deleted creator leaves the group intact. */
+  requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
   status: text("status", { enum: ["pending", "accepted", "rejected"] }).notNull().default("pending"),
+  kind: text("kind", { enum: ["direct", "group"] }).notNull().default("direct"),
+  /** Group name: plaintext metadata the server can read (docs/PRIVATE-MESSAGES.md). */
+  name: text("name"),
   createdAt: created(),
-}, (t) => [uniqueIndex("dm_pair_idx").on(t.firstId, t.secondId), index("dm_second_idx").on(t.secondId)]);
+}, (t) => [
+  uniqueIndex("dm_pair_idx").on(t.firstId, t.secondId), index("dm_second_idx").on(t.secondId),
+  check("dm_conversation_kind_valid", sql`(${t.kind} = 'direct' and ${t.firstId} is not null and ${t.secondId} is not null and ${t.name} is null) or (${t.kind} = 'group' and ${t.firstId} is null and ${t.secondId} is null and ${t.status} = 'accepted')`),
+]);
+
+/**
+ * Group membership. Former members keep their row (left_at) so their earlier messages keep a known sender.
+ * Trigger dm_member_cleanup (migration 0037, not in drizzle snapshots) deletes a group without active members.
+ */
+export const dmMember = pgTable("dm_member", {
+  conversationId: uuid("conversation_id").notNull().references(() => dmConversation.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+  leftAt: timestamp("left_at", { withTimezone: true }),
+  /** Set when the owner removed this person (not when they left): only the owner may add them again. */
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+}, (t) => [primaryKey({ columns: [t.conversationId, t.userId] }), index("dm_member_user_idx").on(t.userId)]);
 
 export const dmDevice = pgTable("dm_device", {
   id: uuid("id").primaryKey(),

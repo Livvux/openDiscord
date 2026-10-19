@@ -55,7 +55,7 @@ function desktopNotifyDm(notice: DmNotice, onClick: () => void) {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   if (localStorage.getItem(DESKTOP_NOTIFICATIONS_KEY) !== "on") return;
   // The server only knows who wrote; the text stays encrypted until this browser opens the conversation.
-  const n = new Notification(notice.senderName ?? "Private message", { body: "New encrypted message", tag: `dm:${notice.senderId}` });
+  const n = new Notification(notice.senderName ?? "Private message", { body: "New encrypted message", tag: `dm:${notice.conversationId}` });
   n.onclick = () => {
     window.focus();
     onClick();
@@ -145,8 +145,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       if (notice.reason === "request") window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT));
       if (notice.reason !== "message" || !notice.senderId) return;
       const params = new URLSearchParams(window.location.search);
-      const watching = window.location.pathname === "/app/messages" && params.get("to") === notice.senderId && document.visibilityState === "visible";
-      const url = `/app/messages?to=${encodeURIComponent(notice.senderId)}`;
+      const watching = window.location.pathname === "/app/messages" && (params.get("to") === notice.senderId || params.get("c") === notice.conversationId) && document.visibilityState === "visible";
+      // ?c= opens 1:1 conversations and groups alike.
+      const url = `/app/messages?c=${encodeURIComponent(notice.conversationId)}`;
       if (!watching && !quiet.current) desktopNotifyDm(notice, () => router.push(url));
     });
     es.addEventListener("friends", () => window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT)));
