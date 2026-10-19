@@ -49,7 +49,9 @@ A trusted private ClamAV service can be enabled with `CLAMAV_HOST` and `CLAMAV_P
 Use the [dedicated operations guide](../ops/scanner/README.md) for a pinned image, persistent
 signature updater, private network, monitoring and recovery. Budget an additional 4 GiB for the
 scanner plus update/reload headroom and disk. Once configured, engine failure rejects new
-uploads/imports; existing downloads are unchanged. No configured host means scanning is bypassed.
+uploads/imports; existing downloads are unchanged. No configured host means scanning is bypassed. End-to-end encrypted
+private message attachments are ciphertext the server cannot read and are never scanned
+([details](PRIVATE-MESSAGES.md#encrypted-attachments)).
 Signature age is monitored, not automatically enforced by the app; scanning cannot guarantee safe files.
 
 ## Security notes

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 3200;
+// E2E_PORT lets several local worktrees run their own server side by side.
+const port = Number(process.env.E2E_PORT ?? 3200);
 
 // Runs against a production build: `pnpm build && pnpm test:e2e` (needs DATABASE_URL).
 export default defineConfig({
