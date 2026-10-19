@@ -10,6 +10,7 @@ import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
 import { mutedCommunities, touchPresence } from "@/server/presence";
 import { excerptOf } from "@/lib/mentions";
+import type { DmCallNotice } from "@/components/app/voice/dm-call-ring";
 import { acquireStreamLease, MAX_STREAM_LIFETIME_MS } from "@/server/stream-leases";
 
 const HEARTBEAT_MS = 25_000;
@@ -96,6 +97,11 @@ export async function GET(request: Request) {
           if (!(await sessionValid())) return;
           const [sender] = event.senderId ? await db.select({ name: user.name }).from(user).where(eq(user.id, event.senderId)) : [];
           return send("dm", { conversationId: event.conversationId, reason: event.reason, senderId: event.senderId ?? null, senderName: sender?.name ?? null } satisfies DmNotice);
+        }
+        if (event.type === "dm.call") {
+          if (!(await sessionValid())) return;
+          const [caller] = event.callerId ? await db.select({ name: user.name }).from(user).where(eq(user.id, event.callerId)) : [];
+          return send("call", { conversationId: event.conversationId, state: event.state, callerId: event.callerId ?? null, callerName: caller?.name ?? null } satisfies DmCallNotice);
         }
         if (event.type === "friends.changed") return (await sessionValid()) && send("friends", {});
         if (event.type !== "mention.created" || !(await sessionValid())) return;

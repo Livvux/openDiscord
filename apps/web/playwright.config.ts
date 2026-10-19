@@ -18,9 +18,9 @@ export default defineConfig({
     },
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"] }, testIgnore: /closed-alpha\.spec|voice-product\.spec/ },
+    { name: "desktop", use: { ...devices["Desktop Chrome"] }, testIgnore: /closed-alpha\.spec|voice-product\.spec|dm-calls\.spec/ },
     // Auth flow runs once: Better Auth rate-limits sign-in to 3 attempts per 10s per IP.
-    { name: "mobile", use: { ...devices["Pixel 7"] }, testIgnore: /auth\.spec|closed-alpha\.spec|voice-product\.spec/ },
+    { name: "mobile", use: { ...devices["Pixel 7"] }, testIgnore: /auth\.spec|closed-alpha\.spec|voice-product\.spec|dm-calls\.spec/ },
     // Toggles an instance-wide setting, so it must not overlap with other sign-ups.
     { name: "closed-alpha", use: { ...devices["Desktop Chrome"] }, testMatch: /closed-alpha\.spec/, dependencies: ["desktop", "mobile"] },
   ],

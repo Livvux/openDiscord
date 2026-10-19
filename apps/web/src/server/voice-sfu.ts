@@ -5,12 +5,13 @@ import { RoomServiceClient, ServerError, TrackSource } from "livekit-server-sdk"
 import { db } from "@/db";
 import { channel, dmDevice, session, userBlock } from "@/db/schema";
 import { voiceCall, voiceCallMember, voiceSfuRoom } from "@/db/voice-schema";
-import { parseVoiceRoomName, voiceRoomName } from "@/lib/voice/room";
+import { parseVoiceRoomName, voiceRoomName, voiceRoomScope } from "@/lib/voice/room";
 import { loadChannelAuthority, lockCommunity } from "./access";
 import { AppError, forbidden } from "./errors";
 import { assertActiveUser } from "./instance-policy";
 import { has, Permission } from "./permissions";
 import { lockVoiceLifecycle } from "./voice-locks";
+import { dmCallAllowed } from "./voice-dm";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type OwnedRoom = typeof voiceSfuRoom.$inferSelect;
@@ -62,12 +63,14 @@ async function roomAuthority(name: string) {
     if (!owned || !parseVoiceRoomName(name)) return null;
     if (owned.status === "retired") return { owned, members: null };
     const [ref] = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall)
-      .innerJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, owned.callId));
-    if (!ref || ref.call.channelId !== owned.channelId || ref.call.status !== "active" || ref.call.generation !== owned.generation) {
+      .leftJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, owned.callId));
+    // owned.channelId holds the room scope: the channel, or a direct-message call's own ID.
+    if (!ref || voiceRoomScope({ channelId: ref.call.channelId, callId: ref.call.id }) !== owned.channelId || ref.call.status !== "active" || ref.call.generation !== owned.generation) {
       await retire(tx, name);
       return { owned: { ...owned, status: "retired" as const }, members: null };
     }
-    await lockCommunity(tx, ref.communityId);
+    const conversationId = ref.call.conversationId;
+    if (ref.communityId) await lockCommunity(tx, ref.communityId);
     await tx.select({ id: voiceCall.id }).from(voiceCall).where(eq(voiceCall.id, owned.callId)).for("update");
     const members = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.callId, owned.callId), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCallMember.id)).limit(9);
     const ids = members.map(member => member.userId);
@@ -81,11 +84,15 @@ async function roomAuthority(name: string) {
       if (s) sessionExpiries.push(s.expiresAt);
       const [anchor] = await tx.select({ id: dmDevice.id }).from(dmDevice).where(and(eq(dmDevice.id, member.anchorDeviceId), eq(dmDevice.userId, member.userId), isNull(dmDevice.revokedAt))).for("share");
       let access: Awaited<ReturnType<typeof loadChannelAuthority>> = null;
-      try { access = await loadChannelAuthority(tx, owned.channelId, member.userId); }
-      catch (error) { if (!(error instanceof AppError)) throw error; valid = false; }
+      const dmAllowed = conversationId ? await dmCallAllowed(tx, conversationId, member.userId) : false;
+      if (!conversationId) {
+        try { access = await loadChannelAuthority(tx, owned.channelId, member.userId); }
+        catch (error) { if (!(error instanceof AppError)) throw error; valid = false; }
+      }
+      const permitted = conversationId ? dmAllowed : !!access && access.channel.kind === "voice" && has(access.authority, Permission.Connect);
       try { await assertActiveUser(member.userId, tx); } catch (error) { if (!(error instanceof AppError)) throw error; valid = false; }
-      if (!s || !anchor || member.voiceUserId !== `@voice_${owned.callId}_${member.id}:opendiscord.local` || member.leaseExpiresAt <= now || !access || access.channel.kind !== "voice" || !has(access.authority, Permission.Connect)) { valid = false; continue; }
-      allowed.push({ identity: `v1:${member.id}`, sources: [
+      if (!s || !anchor || member.voiceUserId !== `@voice_${owned.callId}_${member.id}:opendiscord.local` || member.leaseExpiresAt <= now || !permitted) { valid = false; continue; }
+      allowed.push({ identity: `v1:${member.id}`, sources: !access ? [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] : [
         ...(has(access.authority, Permission.Speak) ? [TrackSource.MICROPHONE] : []),
         ...(has(access.authority, Permission.Video) ? [TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] : []),
       ] });

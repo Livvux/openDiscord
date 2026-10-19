@@ -107,6 +107,27 @@ exported message ciphertext. Recovery backups and device transfers carry the att
 the archived message, not the files; an archive copy shows the text only, and the file stays
 retrievable only while its conversation exists on the server.
 
+## Calls
+
+Any member of an accepted 1:1 conversation or a group can start or join its voice/video call with
+**Call** in the conversation header (screen sharing included). Calls use the same end-to-end encrypted
+Voice as voice channels ([voice/call-session.md](voice/call-session.md)): a temporary Voice device per
+call, SAS comparison and separate admission of every participant, full-audience consent, fresh media
+keys whenever the audience changes, and no plaintext fallback. Messaging verification does not verify
+Voice. Up to eight devices take part in one call.
+
+You may be in a conversation's call exactly while you may send a message there: never in a pending
+or declined request, never with someone who has a block with you in either direction, never after you
+left or were removed from the group, and not while your account (or, for 1:1, the other person's) is
+suspended. These checks repeat at least every ten seconds and on every key or token request; leaving or
+removal from a group, a block or a suspension ends the call membership immediately and the others
+continue with new keys. Someone who could be removed mid-call can still hear what was said before.
+
+Starting a call rings the other members over the personal event stream and Web Push with the caller's
+name only ("Incoming call"); people with a block with the caller are not rung. An unanswered ring
+becomes a missed call. The server sees who called which conversation, who joined and when; the media
+server sees a random call ID, never the conversation. Missed calls are kept only in the open browser.
+
 ## Additional devices and recovery
 
 A new browser enrolls a distinct device. Verify it against an existing trusted device using SAS and
@@ -224,6 +245,6 @@ Dependency evidence and audit boundaries:
 
 Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-attachments.test.ts`,
 `tests/dm-attachments.integration.test.ts`, `e2e/dm-attachments.spec.ts`, `tests/dm-groups.integration.test.ts`, `e2e/dm-groups.spec.ts`, `tests/dm-matrix.integration.test.ts`,
-`tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts` and
-`e2e/direct-messages.spec.ts`; passing results must be checked on the exact release commit. Tests and
+`tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts`,
+`tests/voice-dm-calls.integration.test.ts`, `e2e/direct-messages.spec.ts` and `e2e/dm-calls.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.

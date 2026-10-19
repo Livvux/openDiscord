@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { channel, dmDevice, session, user, userBlock } from "@/db/schema";
 import { voiceCall, voiceCallMember, voiceControlMailbox, voiceControlReceipt, voiceIdentity, voicePrekey, voiceSignature } from "@/db/voice-schema";
 import { VOICE_DOMAIN, VOICE_LIMITS as L, voiceBindingSchema, voiceCryptoInputSchema, voiceDeviceKeysSchema, voiceEventSchema, voiceJoinAuthSchema, voiceJoinSchema, voiceMemberAuthSchema, voicePrekeySchema, voiceSignedObjectSchema, type VoiceBinding, type VoiceJoinAuth, type VoiceMemberAuth, type VoiceRemoval, type VoiceSnapshot, type VoiceMediaGrant, type VoiceMediaSource } from "@/lib/voice/contracts";
-import { voiceRoomName } from "@/lib/voice/room";
+import { voiceRoomName, voiceRoomScope } from "@/lib/voice/room";
 import { loadChannelAuthority, lockCommunity, requireChannel } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { assertActiveUser } from "./instance-policy";
@@ -14,6 +14,7 @@ import { consume } from "./limits";
 import { has, Permission } from "./permissions";
 import { parse } from "./validation";
 import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
+import { announceDmCallEnded, dmCallAllowed, DM_CALL_SOURCES, requireDmCall, ringDmCall } from "./voice-dm";
 
 import { consumeVoiceRooms, reserveVoiceRoom, voiceTransaction, type VoiceRoomBudget, type VoiceRoomCleanup } from "./voice-sfu";
 
@@ -84,7 +85,7 @@ async function markLeft(tx: Tx, call: Call, rows: Member[], reason: string, now:
   const remaining = await liveMembers(tx, call.id);
   await tx.update(voiceCall).set({ generation: call.generation + 1, ...(remaining.length ? {} : { status: "closed" as const, closedAt: now }) }).where(eq(voiceCall.id, call.id));
   call.generation++;
-  if (!remaining.length) { call.status = "closed"; call.closedAt = now; }
+  if (!remaining.length) { call.status = "closed"; call.closedAt = now; if (call.conversationId) await announceDmCallEnded(tx, call.conversationId); }
   return rows.map((m) => ({ callId: call.id, memberId: m.id, participantIdentity: participant(m.id), reason }));
 }
 async function expireAndRevalidate(tx: Tx, call: Call, cutoff?: Date): Promise<VoiceRemoval[]> {
@@ -96,8 +97,11 @@ async function expireAndRevalidate(tx: Tx, call: Call, cutoff?: Date): Promise<V
       try {
         const currentSession = await accountSession(tx, m.userId, m.sessionId, cutoff);
         await anchorFor(tx, m.userId, m.anchorDeviceId);
-        const access = await loadChannelAuthority(tx, call.channelId, m.userId);
-        valid = !!access && access.channel.kind === "voice" && has(access.authority, Permission.Connect);
+        if (call.conversationId) valid = await dmCallAllowed(tx, call.conversationId, m.userId);
+        else {
+          const access = await loadChannelAuthority(tx, call.channelId!, m.userId);
+          valid = !!access && access.channel.kind === "voice" && has(access.authority, Permission.Connect);
+        }
         if (valid) locked.push({ member: m, sessionExpiresAt: currentSession.expiresAt });
       } catch (error) {
         if (!(error instanceof AppError)) throw error;
@@ -118,26 +122,35 @@ async function expireAndRevalidate(tx: Tx, call: Call, cutoff?: Date): Promise<V
 async function snapshot(tx: Tx, call: Call, own: Member, now: Date, removals: VoiceRemoval[] = []): Promise<VoiceSnapshot> {
   const members = await liveMembers(tx, call.id);
   const accounts = members.length ? await tx.select({ id: user.id, name: user.name }).from(user).where(inArray(user.id, members.map((m) => m.userId))) : [];
-  return { callId: call.id, channelId: call.channelId, generation: call.generation, memberId: own.id, joinNonce: own.joinNonce, voiceUserId: own.voiceUserId, voiceDeviceId: own.voiceDeviceId, participantIdentity: participant(own.id), leaseExpiresAt: own.leaseExpiresAt.toISOString(), serverTime: now.toISOString(), removals,
+  return { callId: call.id, ...(call.conversationId ? { conversationId: call.conversationId } : { channelId: call.channelId! }), generation: call.generation, memberId: own.id, joinNonce: own.joinNonce, voiceUserId: own.voiceUserId, voiceDeviceId: own.voiceDeviceId, participantIdentity: participant(own.id), leaseExpiresAt: own.leaseExpiresAt.toISOString(), serverTime: now.toISOString(), removals,
     members: members.map((m) => ({ memberId: m.id, userId: m.userId, anchorDeviceId: m.anchorDeviceId, voiceUserId: m.voiceUserId, voiceDeviceId: m.voiceDeviceId, joinNonce: m.joinNonce, participantIdentity: participant(m.id), displayName: accounts.find((a) => a.id === m.userId)?.name ?? "Member", state: m.state === "active" ? "active" : "waiting" })) };
 }
 
 export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promise<VoiceSnapshot> {
   const auth = parse(voiceJoinAuthSchema, rawAuth), data = parse(voiceJoinSchema, input);
   await consume(`voice-control-join:${auth.userId}`, 30, 60_000);
+  const conversationId = data.conversationId;
+  let rung: string[] = [];
   const result = await voiceTransaction(async (tx): Promise<VoiceSnapshot | AppError> => {
     await lockVoice(tx);
     let now = new Date();
-    const [ch] = await tx.select().from(channel).where(eq(channel.id, data.channelId));
-    if (!ch) throw notFound("Voice channel not found.");
-    await lockCommunity(tx, ch.communityId);
-    let [call] = await tx.select().from(voiceCall).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCall.status, "active"))).for("update");
+    let ch: typeof channel.$inferSelect | undefined;
+    if (!conversationId) {
+      [ch] = await tx.select().from(channel).where(eq(channel.id, data.channelId!));
+      if (!ch) throw notFound("Voice channel not found.");
+      await lockCommunity(tx, ch.communityId);
+    }
+    const context = conversationId ? eq(voiceCall.conversationId, conversationId) : eq(voiceCall.channelId, ch!.id);
+    let [call] = await tx.select().from(voiceCall).where(and(context, eq(voiceCall.status, "active"))).for("update");
     const ownSession = await joinAuth(tx, auth);
-    const access = await requireChannel(tx, ch.id, auth.userId, Permission.Connect);
-    if (access.channel.kind !== "voice") throw invalid("This is not a voice channel.");
+    if (conversationId) await requireDmCall(tx, conversationId, auth.userId);
+    else {
+      const access = await requireChannel(tx, ch!.id, auth.userId, Permission.Connect);
+      if (access.channel.kind !== "voice") throw invalid("This is not a voice channel.");
+    }
     const removals = call ? await expireAndRevalidate(tx, call) : [];
     const [previous] = await tx.select({ member: voiceCallMember, call: voiceCall }).from(voiceCallMember)
-      .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).where(and(eq(voiceCall.channelId, ch.id), eq(voiceCallMember.joinNonce, data.joinNonce)));
+      .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).where(and(context, eq(voiceCallMember.joinNonce, data.joinNonce)));
     if (previous) {
       const m = previous.member;
       if (m.userId !== auth.userId || m.sessionId !== auth.sessionId || m.anchorDeviceId !== auth.anchorDeviceId || m.voiceDeviceId !== data.voiceDeviceId || !matchesSecret(m.enrollmentSecretHash, data.enrollmentSecret)) return conflict("This join nonce already has a different binding.");
@@ -154,9 +167,8 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
     if (current.some((m) => m.anchorDeviceId === auth.anchorDeviceId)) return conflict("This anchor already has a live voice enrollment.");
     if (call && (await tx.select({ id: voiceCallMember.id }).from(voiceCallMember).where(and(eq(voiceCallMember.callId, call.id), eq(voiceCallMember.voiceDeviceId, data.voiceDeviceId)))).length) return conflict("This voice device ID has already been used in this call.");
     try { return await tx.transaction(async tx => {
-    if (!call || call.status === "closed") {
-      [call] = await tx.insert(voiceCall).values({ channelId: ch.id }).returning();
-    }
+    const starting = !call || call.status === "closed";
+    if (starting) [call] = await tx.insert(voiceCall).values(conversationId ? { conversationId } : { channelId: ch!.id }).returning();
     const { rows: [{ id }] } = await tx.execute<{ id: string }>(sql`select uuidv7() as id`);
     now = new Date();
     if (ownSession.expiresAt <= now) throw forbidden("This account session is unavailable.");
@@ -169,10 +181,16 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
     const result = await snapshot(tx, call, own, now, removals);
     now = new Date();
     if (ownSession.expiresAt <= now || own.leaseExpiresAt <= now) throw forbidden("This voice enrollment has ended.");
+    // Content-free ring for a newly started conversation call; NOTIFY is delivered only on commit.
+    if (starting && conversationId) rung = await ringDmCall(tx, conversationId, auth.userId);
     return { ...result, serverTime: now.toISOString() };
     }); } catch (error) { if (error instanceof AppError) return error; throw error; }
   });
   if (result instanceof AppError) throw result;
+  // Best effort after commit: "Incoming call" with the caller's name only (never blocks or fails the join).
+  // At most one push per caller and conversation every 30 seconds, so restarting a call cannot spam closed apps.
+  if (rung.length) void consume(`voice-ring:${auth.userId}:${conversationId}`, 1, 30_000).then(() => import("./push"))
+    .then(({ pushDirectMessage }) => Promise.all(rung.map((userId) => pushDirectMessage(userId, auth.userId, undefined, conversationId, "call")))).catch(() => {});
   return result;
 }
 
@@ -181,9 +199,9 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
 type Access = { call: Call; own: Member; now: Date; removals: VoiceRemoval[] };
 async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding, allowLeft = false): Promise<Access | AppError> {
   await lockVoice(tx);
-  const [ref] = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, binding.callId));
+  const [ref] = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).leftJoin(channel, eq(channel.id, voiceCall.channelId)).where(eq(voiceCall.id, binding.callId));
   if (!ref) throw notFound("Voice enrollment not found.");
-  await lockCommunity(tx, ref.communityId);
+  if (ref.communityId) await lockCommunity(tx, ref.communityId);
   const [call] = await tx.select().from(voiceCall).where(eq(voiceCall.id, binding.callId)).for("update");
   const ownSession = await accountSession(tx, auth.userId, auth.sessionId);
   const [own] = await tx.select().from(voiceCallMember).where(and(eq(voiceCallMember.id, binding.memberId), eq(voiceCallMember.callId, call.id), eq(voiceCallMember.userId, auth.userId), eq(voiceCallMember.sessionId, auth.sessionId)));
@@ -198,7 +216,8 @@ async function boundAccess(tx: Tx, auth: VoiceMemberAuth, binding: VoiceBinding,
   if (current.state === "left" || call.status !== "active") return forbidden("This voice enrollment has ended.");
   try {
     await anchorFor(tx, own.userId, own.anchorDeviceId);
-    await requireChannel(tx, call.channelId, own.userId, Permission.Connect);
+    if (call.conversationId) await requireDmCall(tx, call.conversationId, own.userId);
+    else await requireChannel(tx, call.channelId!, own.userId, Permission.Connect);
   } catch (error) { if (error instanceof AppError) return error; throw error; }
   try { await noBlockedPairs(tx, await liveMembers(tx, call.id)); } catch (error) { if (error instanceof AppError) return error; throw error; }
   const now = new Date();
@@ -218,16 +237,22 @@ export async function grantBoundVoiceMedia(rawAuth: unknown, input: unknown, cle
     if (access instanceof AppError) return access;
     const { call, own, now, removals } = access;
     if (binding.expectedGeneration !== call.generation) return conflict("Voice membership changed. Refresh the current roster.");
-    const { authority } = await requireChannel(tx, call.channelId, auth.userId, Permission.Connect);
+    let sources: VoiceMediaSource[];
+    // boundAccess just required current conversation access under the same locks.
+    if (call.conversationId) sources = DM_CALL_SOURCES;
+    else {
+      const { authority } = await requireChannel(tx, call.channelId!, auth.userId, Permission.Connect);
+      sources = [
+        ...(has(authority, Permission.Speak) ? ["microphone" as const] : []),
+        ...(has(authority, Permission.Video) ? ["camera" as const, "screen_share" as const, "screen_share_audio" as const] : []),
+      ];
+    }
     const [currentSession] = await tx.select({ expiresAt: session.expiresAt }).from(session).where(eq(session.id, auth.sessionId));
-    const sources: VoiceMediaSource[] = [
-      ...(has(authority, Permission.Speak) ? ["microphone" as const] : []),
-      ...(has(authority, Permission.Video) ? ["camera" as const, "screen_share" as const, "screen_share_audio" as const] : []),
-    ];
     const expiresAt = new Date(Math.min(own.leaseExpiresAt.getTime(), currentSession.expiresAt.getTime(), now.getTime() + 60_000));
-    try { await reserveVoiceRoom(tx, { channelId: call.channelId, callId: call.id, generation: call.generation }, expiresAt); }
+    const room = { channelId: voiceRoomScope({ channelId: call.channelId, callId: call.id }), callId: call.id, generation: call.generation };
+    try { await reserveVoiceRoom(tx, room, expiresAt); }
     catch (error) { if (error instanceof AppError) return error; throw error; }
-    return { snapshot: await snapshot(tx, call, own, now, removals), roomName: voiceRoomName({ channelId: call.channelId, callId: call.id, generation: call.generation }), participantIdentity: participant(own.id), sources, canPublishData: false,
+    return { snapshot: await snapshot(tx, call, own, now, removals), roomName: voiceRoomName(room), participantIdentity: participant(own.id), sources, canPublishData: false,
       expiresAt: expiresAt.toISOString() };
   });
   // A successful first token reservation defers opportunistic consumption until its mandatory
@@ -271,17 +296,20 @@ const selectorSchema = z.union([
   z.object({ callId: z.uuid() }).strict(), z.object({ memberId: z.uuid() }).strict(),
   z.object({ sessionId: z.string().min(1).max(128) }).strict(), z.object({ anchorDeviceId: z.uuid() }).strict(),
   z.object({ userId: z.string().min(1).max(128) }).strict(), z.object({ channelId: z.uuid() }).strict(),
+  z.object({ conversationId: z.uuid(), userId: z.string().min(1).max(128).optional() }).strict(),
 ]);
 type Selector = z.infer<typeof selectorSchema>;
 async function selectedVoiceMembers(tx: Tx, selector?: Selector) {
   const predicate = !selector ? undefined : "communityId" in selector ? and(eq(channel.communityId, selector.communityId), selector.userId ? eq(voiceCallMember.userId, selector.userId) : undefined)
     : "callId" in selector ? eq(voiceCallMember.callId, selector.callId) : "memberId" in selector ? eq(voiceCallMember.id, selector.memberId)
     : "sessionId" in selector ? eq(voiceCallMember.sessionId, selector.sessionId) : "anchorDeviceId" in selector ? eq(voiceCallMember.anchorDeviceId, selector.anchorDeviceId)
+    : "conversationId" in selector ? and(eq(voiceCall.conversationId, selector.conversationId), selector.userId ? eq(voiceCallMember.userId, selector.userId) : undefined)
     : "userId" in selector ? eq(voiceCallMember.userId, selector.userId) : eq(voiceCall.channelId, selector.channelId);
+  // Direct-message calls have no channel; community/channel selectors never match them.
   const selected = await tx.select({ member: voiceCallMember, call: voiceCall, communityId: channel.communityId }).from(voiceCallMember)
-    .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).innerJoin(channel, eq(channel.id, voiceCall.channelId))
+    .innerJoin(voiceCall, eq(voiceCall.id, voiceCallMember.callId)).leftJoin(channel, eq(channel.id, voiceCall.channelId))
     .where(and(predicate, eq(voiceCall.status, "active"), ne(voiceCallMember.state, "left"))).orderBy(asc(voiceCall.id), asc(voiceCallMember.id));
-  for (const communityId of [...new Set(selected.map(r => r.communityId))].sort()) await lockCommunity(tx, communityId);
+  for (const communityId of [...new Set(selected.flatMap(r => r.communityId ?? []))].sort()) await lockCommunity(tx, communityId);
   for (const callId of [...new Set(selected.map(r => r.call.id))].sort()) await tx.select({ id: voiceCall.id }).from(voiceCall).where(eq(voiceCall.id, callId)).for("update");
   return selected;
 }
@@ -305,8 +333,8 @@ async function capabilities(tx: Tx, channelId: string, userId: string) {
 /** Snapshot actual effective capabilities under the same serialized mutation transaction. */
 export async function captureVoiceCapabilities(tx: Tx, selector?: Selector) {
   await lockVoice(tx);
-  const rows = await selectedVoiceMembers(tx, selector);
-  return Promise.all(rows.map(async ({ member, call }) => ({ memberId: member.id, userId: member.userId, channelId: call.channelId, permissions: await capabilities(tx, call.channelId, member.userId) })));
+  const rows = (await selectedVoiceMembers(tx, selector)).flatMap(r => r.call.channelId ? [{ ...r, channelId: r.call.channelId }] : []);
+  return Promise.all(rows.map(async ({ member, channelId }) => ({ memberId: member.id, userId: member.userId, channelId, permissions: await capabilities(tx, channelId, member.userId) })));
 }
 export async function invalidateLostVoiceCapabilities(tx: Tx, before: Awaited<ReturnType<typeof captureVoiceCapabilities>>) {
   const effects: VoiceRemoval[] = [];
@@ -330,6 +358,7 @@ export async function invalidateBlockedVoicePair(tx: Tx, first: string, second: 
 async function closeEmptyVoiceCall(tx: Tx, call: Call, now: Date) {
   if (call.status !== "active" || (await liveMembers(tx, call.id)).length) return;
   await tx.update(voiceCall).set({ status: "closed", closedAt: now }).where(eq(voiceCall.id, call.id));
+  if (call.conversationId) await announceDmCallEnded(tx, call.conversationId);
   await tx.delete(voiceControlMailbox).where(eq(voiceControlMailbox.callId, call.id));
   const ids = (await tx.select({ id: voiceCallMember.id }).from(voiceCallMember).where(eq(voiceCallMember.callId, call.id))).map(m => m.id);
   if (ids.length) {
@@ -365,9 +394,9 @@ export async function sweepVoiceLifecycle({ apply, now, batchSize, maxBatches }:
   for (let batch = 0; batch < maxBatches; batch++) {
     const result = await db.transaction(async tx => {
       await lockVoice(tx);
-      const calls = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).innerJoin(channel, eq(channel.id, voiceCall.channelId))
+      const calls = await tx.select({ call: voiceCall, communityId: channel.communityId }).from(voiceCall).leftJoin(channel, eq(channel.id, voiceCall.channelId))
         .where(and(eq(voiceCall.status, "active"), voiceRepairEligible(now), cursor ? gt(voiceCall.id, cursor) : undefined)).orderBy(asc(voiceCall.id)).limit(voiceBatchSize);
-      for (const id of [...new Set(calls.map(c => c.communityId))].sort()) await lockCommunity(tx, id);
+      for (const id of [...new Set(calls.flatMap(c => c.communityId ?? []))].sort()) await lockCommunity(tx, id);
       let closed = 0, removed = 0;
       const closedCallIds: string[] = [];
       for (const row of calls) {

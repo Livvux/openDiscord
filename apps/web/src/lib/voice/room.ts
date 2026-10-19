@@ -7,6 +7,9 @@ export function voiceRoomName(binding: z.infer<typeof roomBinding>): string {
   return `voice:${value.channelId}:${value.callId}:${value.generation}`;
 }
 
+/** Room scope segment: the channel, or for a direct-message call its own random call ID, so the SFU never learns a conversation ID. */
+export const voiceRoomScope = (call: { channelId?: string | null; callId: string }) => call.channelId ?? call.callId;
+
 /** Whole namespace segments only; callers must separately prove instance ownership. */
 export function parseVoiceRoomName(name: string): z.infer<typeof roomBinding> | null {
   const parts = name.split(":");

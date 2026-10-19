@@ -8,7 +8,8 @@ import { voiceFrameTransform } from "@/lib/voice/support";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
 import { automaticVoiceVerificationSteps } from "./voice-verification";
 
-type Channel = { id: string; name: string; href: string };
+/** A community voice channel, or with `dm` a direct-message conversation (same encrypted call, different authorization). */
+type Channel = { id: string; name: string; href: string; dm?: boolean };
 type VerificationStep = Parameters<CallSession["verificationStep"]>[1];
 interface VoiceValue {
   channel: Channel | null;
@@ -146,7 +147,7 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     try {
       assertSessionCurrent();
       if (!voiceFrameTransform()) throw new VoiceCallSessionError("unsupported-media");
-      const created = await CallSession.create({ accountId, sessionId, channelId: target.id, consent: true, assertSessionCurrent });
+      const created = await CallSession.create({ accountId, sessionId, ...(target.dm ? { conversationId: target.id } : { channelId: target.id }), consent: true, assertSessionCurrent });
       try { assertSessionCurrent(); } catch (error) { void created.close("join-superseded").catch(() => {}); throw error; }
       current.current = created; setSession(created);
     } catch (error) { if (mine === revision.current && mounted.current) setError(voiceErrorText(error)); }

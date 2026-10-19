@@ -17,6 +17,7 @@ import { PrivateMessageItem, type MessageView } from "./dm-message";
 import { IdentityReset } from "./identity-reset";
 import { GroupAvatars, GroupSettings, NewGroupForm, type FriendOption } from "./group-panel";
 import { PeerProfile } from "./peer-profile";
+import { DmCallButton, DmCallPanel } from "../voice/dm-call";
 import { shortFilename } from "@/lib/filename";
 import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_TEXT, type DeviceView, type DirectConversation, type DirectEnvelope } from "@/lib/dm/contracts";
 import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
@@ -74,6 +75,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const [security, setSecurity] = useState(false);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [groupSettings, setGroupSettings] = useState(false);
+  const [callFor, setCallFor] = useState<string | null>(null);
   const [archives, setArchives] = useState<HistoryArchive[]>([]);
   const [transfers, setTransfers] = useState<Awaited<ReturnType<PrivateMessaging["pendingTransfers"]>>>([]);
   const [pendingIdentity, setPendingIdentity] = useState(false);
@@ -217,12 +219,14 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
         </> : <h1 className="font-semibold">Private messages</h1>}
         <div className="ml-auto flex items-center gap-1">
           {friends.length >= 2 && <Button variant="ghost" size="sm" aria-expanded={creatingGroup} onClick={() => setCreatingGroup((v) => !v)}>New group</Button>}
+          {active?.status === "accepted" && !active.blocked && <DmCallButton conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id} onToggle={() => setCallFor((id) => (id === active.id ? null : active.id))} />}
           {active && group && <Button variant="ghost" size="sm" aria-expanded={groupSettings} onClick={() => setGroupSettings((v) => !v)}>Group settings</Button>}
           <Button variant="ghost" size="sm" aria-expanded={security} onClick={toggleSecurity}><ShieldCheckIcon aria-hidden />Devices and recovery</Button>
           {active && !group && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button>}
         </div>
       </header>
       <div className="border-b px-4 py-1.5"><p className="text-xs text-muted-foreground" role="status">{status}</p>{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
+      {active && <DmCallPanel key={active.id} conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id && active.status === "accepted" && !active.blocked} />}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {creatingGroup && <NewGroupForm friends={friends} busy={busy} onCancel={() => setCreatingGroup(false)} onCreate={(members, name) => void run(() => createGroup(members, name))} />}
         {active && group && groupSettings && <GroupSettings key={active.id} conversation={active} userId={userId} friends={friends} busy={busy}

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { DmNotice, MentionNotice } from "@/app/api/me/events/route";
 import type { DirectConversation } from "@/lib/dm/contracts";
+import { DM_CALL_EVENT } from "@/components/app/voice/dm-call-ring";
 
 export interface UnreadSummary {
   unread: boolean;
@@ -150,6 +151,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       const url = `/app/messages?c=${encodeURIComponent(notice.conversationId)}`;
       if (!watching && !quiet.current) desktopNotifyDm(notice, () => router.push(url));
     });
+    es.addEventListener("call", (e) => window.dispatchEvent(new CustomEvent(DM_CALL_EVENT, { detail: JSON.parse((e as MessageEvent<string>).data) })));
     es.addEventListener("friends", () => window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT)));
     es.addEventListener("mention", (e) => {
       const notice = JSON.parse((e as MessageEvent<string>).data) as MentionNotice;
