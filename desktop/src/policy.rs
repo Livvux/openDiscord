@@ -27,9 +27,23 @@ pub fn allowed_origin(instance: &Url, target: &Url) -> bool {
             && Url::parse(target.path()).is_ok_and(|inner| same_origin(instance, &inner)))
 }
 
+/// Self-hosted builds would otherwise accept upstream releases, which are compiled for the default instance.
+pub fn updates_enabled(pubkey: Option<&str>, custom_instance: bool) -> bool {
+    !custom_instance && pubkey.is_some_and(|key| !key.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_needs_pubkey_and_default_instance() {
+        assert!(updates_enabled(Some("RWQ..."), false));
+        assert!(!updates_enabled(Some(""), false));
+        assert!(!updates_enabled(Some("  "), false));
+        assert!(!updates_enabled(None, false));
+        assert!(!updates_enabled(Some("RWQ..."), true));
+    }
 
     #[test]
     fn binds_blob_exports_to_instance() {

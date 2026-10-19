@@ -1,0 +1,165 @@
+name: Desktop release
+# Tag `desktop-vX.Y.Z` (matching desktop/tauri.conf.json "version") to build and attach bundles to a
+# draft GitHub Release. Every signing secret is optional; see desktop/README.md "Releases".
+# Pull requests touching this file run the same builds without publishing anything.
+on:
+  push:
+    tags: ['desktop-v*']
+  pull_request:
+    paths: ['.github/workflows/desktop-release.yml']
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="desktop-v$(jq -r .version desktop/tauri.conf.json)"
+          [ "$GITHUB_REF_NAME" = "$expected" ] || { echo "::error::Tag $GITHUB_REF_NAME does not match $expected"; exit 1; }
+      # A draft is invisible to the updater (releases/latest) until an operator publishes it.
+      - name: Create draft release
+        id: draft
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "OpenDiscord desktop ${GITHUB_REF_NAME#desktop-v}" \
+            --notes "Desktop bundles built by the Desktop release workflow from $GITHUB_SHA. Check the job summaries for which platforms were publisher-signed and whether latest.json was produced before publishing."
+          echo "id=$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target universal-apple-darwin
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: windows-latest
+          # The oldest supported runner keeps the AppImage/deb glibc requirement low.
+          - os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - name: Linux WebView dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file xdg-utils
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          save-if: false
+      - name: Install Tauri bundler
+        uses: taiki-e/cache-cargo-install-action@v3
+        with: { tool: tauri-cli@2 }
+      - name: Generate native icons from existing brand
+        run: cargo tauri icon ../apps/web/public/brand/symbol-flat.svg
+      - name: Import Windows code-signing certificate
+        id: wincert
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { exit 0 }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+      # The bundler treats a set-but-empty APPLE_*/TAURI_* variable as configured, so only
+      # secrets that exist are exported, and the summary records what this build was signed with.
+      - name: Signing configuration
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_THUMBPRINT: ${{ steps.wincert.outputs.thumbprint }}
+        run: |
+          export_env() { { echo "$1<<__OD_EOF__"; printenv "$1"; echo "__OD_EOF__"; } >> "$GITHUB_ENV"; }
+          overlay='{}'
+          summary() { echo "- $1" >> "$GITHUB_STEP_SUMMARY"; }
+          echo "### Desktop signing on $RUNNER_OS" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            if [ -z "$(jq -r '.plugins.updater.pubkey' tauri.conf.json)" ]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY is set but plugins.updater.pubkey in desktop/tauri.conf.json is empty"; exit 1
+            fi
+            overlay=$(jq -c '.bundle.createUpdaterArtifacts = true' <<<"$overlay")
+            export_env TAURI_SIGNING_PRIVATE_KEY
+            export_env TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            summary "Updater artifacts: signed (latest.json uploaded)"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: no updater artifacts or latest.json."
+            summary "Updater artifacts: skipped (no TAURI_SIGNING_PRIVATE_KEY)"
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+              overlay=$(jq -c --arg id "$APPLE_SIGNING_IDENTITY" '.bundle.macOS.signingIdentity = $id' <<<"$overlay")
+              export_env APPLE_CERTIFICATE
+              export_env APPLE_CERTIFICATE_PASSWORD
+              export_env APPLE_SIGNING_IDENTITY
+              summary "macOS: Developer ID signed"
+              if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                export_env APPLE_ID; export_env APPLE_PASSWORD; export_env APPLE_TEAM_ID
+                summary "macOS: notarized"
+              else
+                echo "::warning::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID missing: not notarized."
+                summary "macOS: NOT notarized"
+              fi
+            else
+              echo "::warning::APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY missing: ad-hoc signed only."
+              summary "macOS: ad-hoc signed only (Gatekeeper will block it)"
+            fi
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            if [ -n "$WINDOWS_THUMBPRINT" ]; then
+              overlay=$(jq -c --arg t "$WINDOWS_THUMBPRINT" '.bundle.windows = {certificateThumbprint: $t, digestAlgorithm: "sha256", timestampUrl: "http://timestamp.digicert.com"}' <<<"$overlay")
+              summary "Windows: Authenticode signed"
+            else
+              echo "::warning::WINDOWS_CERTIFICATE is not set: unsigned installers (SmartScreen will warn)."
+              summary "Windows: unsigned"
+            fi
+          fi
+          [ "$RUNNER_OS" = Linux ] && summary "Linux: no publisher signing (AppImage/deb/rpm)"
+          echo "$overlay" > release.conf.json
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: desktop
+          tauriScript: cargo tauri
+          args: --ci --config release.conf.json ${{ matrix.args }}
+          releaseId: ${{ needs.release.outputs.id }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          updaterJsonPreferNsis: true
+      - name: Verify macOS signature
+        if: runner.os == 'macOS'
+        run: codesign --verify --deep --strict --verbose=2 target/universal-apple-darwin/release/bundle/macos/OpenDiscord.app

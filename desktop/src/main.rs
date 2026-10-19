@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod policy;
+mod update;
 
 #[cfg(target_os = "linux")]
 fn save_destination(filename: &str) -> Option<std::path::PathBuf> {
@@ -32,13 +33,94 @@ fn save_destination(filename: &str) -> Option<std::path::PathBuf> {
         .save_file()
 }
 
+const UPDATE_PROMPT: &str = "Install it and restart OpenDiscord now? Active calls will end.";
+
+#[cfg(target_os = "linux")]
+fn confirm_update(version: &str) -> bool {
+    use gtk::prelude::*;
+
+    let dialog = gtk::MessageDialog::new(
+        None::<&gtk::Window>,
+        gtk::DialogFlags::MODAL,
+        gtk::MessageType::Question,
+        gtk::ButtonsType::YesNo,
+        &format!("OpenDiscord {version} is available"),
+    );
+    dialog.set_secondary_text(Some(UPDATE_PROMPT));
+    let accepted = dialog.run() == gtk::ResponseType::Yes;
+    dialog.destroy();
+    accepted
+}
+
+#[cfg(not(target_os = "linux"))]
+fn confirm_update(version: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title(format!("OpenDiscord {version} is available"))
+        .set_description(UPDATE_PROMPT)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+use tauri::webview::{PermissionKind, PermissionResponse};
+
+/// WebKitGTK denies media requests without a handler and has no prompt of its own.
+#[cfg(target_os = "linux")]
+fn media_permission(kind: &PermissionKind) -> PermissionResponse {
+    use gtk::prelude::*;
+
+    let device = match kind {
+        PermissionKind::Microphone => "microphone",
+        PermissionKind::Camera => "camera",
+        _ => "screen",
+    };
+    let dialog = gtk::MessageDialog::new(
+        None::<&gtk::Window>,
+        gtk::DialogFlags::MODAL,
+        gtk::MessageType::Question,
+        gtk::ButtonsType::YesNo,
+        &format!("Allow OpenDiscord to use your {device}?"),
+    );
+    let allowed = dialog.run() == gtk::ResponseType::Yes;
+    dialog.destroy();
+    if allowed {
+        PermissionResponse::Allow
+    } else {
+        PermissionResponse::Deny
+    }
+}
+
+/// WKWebView and WebView2 show their own per-origin prompt; wry's macOS default would grant silently.
+#[cfg(not(target_os = "linux"))]
+fn media_permission(_: &PermissionKind) -> PermissionResponse {
+    PermissionResponse::Default
+}
+
 fn main() {
     let instance = policy::instance(
         option_env!("OPENDISCORD_INSTANCE_URL").unwrap_or("https://opendiscord.app"),
     )
     .expect("Invalid build-time OPENDISCORD_INSTANCE_URL");
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let pubkey = context
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|key| key.as_str());
+    let updates =
+        policy::updates_enabled(pubkey, option_env!("OPENDISCORD_INSTANCE_URL").is_some());
+    let mut builder = tauri::Builder::default();
+    if updates {
+        // No capability grants it to the remote page; only Rust calls the updater.
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .setup(move |app| {
+            if updates {
+                tauri::async_runtime::spawn(update::check(app.handle().clone()));
+            }
             let pinned = instance.clone();
             let downloads = instance.clone();
             tauri::WebviewWindowBuilder::new(
@@ -49,6 +131,13 @@ fn main() {
             .title("OpenDiscord")
             .inner_size(1200.0, 800.0)
             .min_inner_size(360.0, 600.0)
+            .on_permission_request(|_, kind| match kind {
+                PermissionKind::Microphone
+                | PermissionKind::Camera
+                | PermissionKind::DisplayCapture => media_permission(&kind),
+                PermissionKind::Geolocation => PermissionResponse::Deny,
+                _ => PermissionResponse::Default,
+            })
             .on_navigation(move |target| policy::allowed_origin(&pinned, target))
             .on_new_window(|target, _| {
                 if policy::safe_https(&target) && open::that_detached(target.as_str()).is_err() {
@@ -77,6 +166,6 @@ fn main() {
             .build()?;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("OpenDiscord desktop runtime failed");
 }
