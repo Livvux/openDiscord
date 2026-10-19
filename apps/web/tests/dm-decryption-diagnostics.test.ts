@@ -63,14 +63,14 @@ describe("per-message processing failure boundaries", () => {
   let decrypted: ReturnType<typeof decryptedFixture>;
   const machine = {
     outgoingRequests: vi.fn(async () => []),
-    queryKeysForUsers: vi.fn(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
+    queryKeysForUsers: vi.fn<(ids: C.UserId[]) => { type: C.RequestType; body: string; id: string }>(() => ({ type: C.RequestType.KeysQuery, body: "{}", id: "query" })),
     markRequestAsSent: vi.fn(), getIdentity: vi.fn(async () => ({})), crossSigningStatus: vi.fn(async () => ({ hasMaster: false })),
     decryptRoomEvent: vi.fn<(event: string, room: C.RoomId, settings: C.DecryptionSettings) => Promise<ReturnType<typeof decryptedFixture>>>(async () => decrypted), getDevice: vi.fn(async () => ({ isVerified: (): boolean => true, isCrossSignedByOwner: (): boolean => false })),
-    shareRoomKey: vi.fn(async () => []), close: vi.fn(),
+    shareRoomKey: vi.fn(async () => []), close: vi.fn(), receiveSyncChanges: vi.fn(async () => []),
   };
   const history = {
     cached: vi.fn(async () => []), archives: vi.fn(async () => []), pendingIdentity: vi.fn(async () => null),
-    acceptEvent: vi.fn(), put: vi.fn(), close: vi.fn(),
+    acceptEvent: vi.fn(), put: vi.fn(), close: vi.fn(), outgoing: vi.fn(async () => []),
   };
 
   beforeEach(async () => {
@@ -186,6 +186,15 @@ describe("per-message processing failure boundaries", () => {
     const [row] = await client.decrypt([envelope], conversation, [peer]);
     expect(row.body).toBeNull();
     expect(row.diagnostic).toEqual({ stage: "device_trust", code: "unknown" });
+  });
+
+  it("a group sync survives one member whose key lookup the server refuses; a 1:1 sync does not", async () => {
+    machine.queryKeysForUsers.mockImplementation((ids: C.UserId[]) => ({ type: C.RequestType.KeysQuery, body: JSON.stringify({ device_keys: Object.fromEntries(ids.map((id) => [id.toString(), []])) }), id: "query" }));
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => String(init?.body).includes("refused")
+      ? Response.json({ error: "Encrypted conversation not found." }, { status: 404 })
+      : Response.json({ cursor: "0", events: [], oneTimeKeys: {}, unusedFallbackKeys: [] })));
+    await expect(client.sync(["member", "refused"])).resolves.toBeUndefined();
+    await expect(client.sync(["refused"])).rejects.toThrow("not found");
   });
 
   it("refuses to send before sharing keys when this account's own identity isn't trusted", async () => {

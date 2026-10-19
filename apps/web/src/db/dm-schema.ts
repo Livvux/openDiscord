@@ -31,6 +31,8 @@ export const dmMember = pgTable("dm_member", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
   leftAt: timestamp("left_at", { withTimezone: true }),
+  /** Set when the owner removed this person (not when they left): only the owner may add them again. */
+  removedAt: timestamp("removed_at", { withTimezone: true }),
 }, (t) => [primaryKey({ columns: [t.conversationId, t.userId] }), index("dm_member_user_idx").on(t.userId)]);
 
 export const dmDevice = pgTable("dm_device", {

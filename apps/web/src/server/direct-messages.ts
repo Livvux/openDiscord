@@ -14,7 +14,7 @@ import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
 import { requireInstanceAdmin, type AdminActor } from "./instance-admin";
 import { areFriends } from "./friends";
-import { assertActiveUser } from "./instance-policy";
+import { AccountBlocked, assertActiveUser } from "./instance-policy";
 import { parse, uuid } from "./validation";
 import { publish } from "./realtime";
 
@@ -52,26 +52,35 @@ async function shareGroup(tx: Tx | typeof db, actor: string, target: string, for
 export async function blocked(tx: Tx | typeof db, actor: string, target: string): Promise<boolean> {
   return !!(await tx.select({ id: userBlock.blockerId }).from(userBlock).where(or(and(eq(userBlock.blockerId, actor), eq(userBlock.blockedId, target)), and(eq(userBlock.blockerId, target), eq(userBlock.blockedId, actor)))).limit(1))[0];
 }
-async function reachable(tx: Tx | typeof db, actor: string, target: string): Promise<void> {
+/** `groups`: a shared group also counts (device listings only); it never makes a 1:1 message request possible. */
+async function reachable(tx: Tx | typeof db, actor: string, target: string, groups = false): Promise<void> {
   if (actor === target) return;
   const [first, second] = pair(actor, target);
   const shared = alias(member, "dm_shared_member");
   const found = await tx.select({ id: member.userId }).from(member).innerJoin(shared, and(eq(shared.communityId, member.communityId), eq(shared.userId, actor))).where(eq(member.userId, target)).limit(1);
-  if (!found.length && !(await areFriends(tx, actor, target)) && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length && !(await shareGroup(tx, actor, target))) throw notFound("Account not found.");
+  if (!found.length && !(await areFriends(tx, actor, target)) && !(await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), ne(dmConversation.status, "rejected"))).limit(1)).length && !(groups && await shareGroup(tx, actor, target))) throw notFound("Account not found.");
   if (await blocked(tx, actor, target)) throw notFound("Account not found.");
 }
-/** `query` only (public keys): a group's former members stay queryable so their earlier messages can be authenticated. */
-async function cryptoReachable(tx: Tx, actor: string, target: string, query = false): Promise<void> {
-  if (actor === target) return;
+/**
+ * Whether device traffic to `target` may proceed; throws when they are no contact at all.
+ * `query` (public keys only): a group's former members stay queryable so their earlier messages can be authenticated.
+ * Within a group, a suspended or unapproved member is skipped (false) so one person cannot stall everyone; 1:1 still refuses.
+ */
+async function cryptoReachable(tx: Tx, actor: string, target: string, query = false): Promise<boolean> {
+  if (actor === target) return true;
   const [first, second] = pair(actor, target);
   const [accepted] = await tx.select({ id: dmConversation.id }).from(dmConversation).where(and(eq(dmConversation.firstId, first), eq(dmConversation.secondId, second), eq(dmConversation.status, "accepted"))).limit(1);
   // Group members exchange keys with each other, except where one has blocked the other.
   if ((!accepted && !(await shareGroup(tx, actor, target, query))) || await blocked(tx, actor, target)) throw notFound("Encrypted conversation not found.");
-  await assertActiveUser(target, tx);
+  if (accepted) { await assertActiveUser(target, tx); return true; }
+  if (query) return true;
+  try { await assertActiveUser(target, tx); return true; } catch (error) { if (error instanceof AccountBlocked) return false; throw error; }
 }
 /** The creator while they are a member, then whoever it was handed to; else the longest-standing member. */
 const groupOwner = (requestedBy: string | null, activeByJoin: string[]) => requestedBy && activeByJoin.includes(requestedBy) ? requestedBy : activeByJoin[0] ?? null;
 const activeMembership = (conversationId: string, userId: string) => and(eq(dmMember.conversationId, conversationId), eq(dmMember.userId, userId), isNull(dmMember.leftAt));
+/** Group members only see messages from after they joined (as listDirectMessages). */
+const visibleTo = (conversation: { joinedAt: Date | null }, createdAt: Date) => !conversation.joinedAt || createdAt >= conversation.joinedAt;
 /** The conversation if the person takes part now: a 1:1 participant or a current group member. */
 export async function conversationFor(tx: Tx | typeof db, actor: string, id: string, sending = false) {
   const conversationId = parse(uuid, id);
@@ -96,9 +105,9 @@ export async function assertCanSendDirect(actor: string, id: string): Promise<vo
 }
 /** The conversation of a sent DM file, for membership checks; unsent uploads are never readable. */
 export async function directAttachmentFor(actor: string, id: string): Promise<{ key: string }> {
-  const [row] = await db.select({ key: attachment.key, conversationId: dmMessage.conversationId }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).where(eq(attachment.id, parse(uuid, id)));
+  const [row] = await db.select({ key: attachment.key, conversationId: dmMessage.conversationId, createdAt: dmMessage.createdAt }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).where(eq(attachment.id, parse(uuid, id)));
   if (!row) throw notFound("Attachment not found.");
-  await conversationFor(db, actor, row.conversationId);
+  if (!visibleTo(await conversationFor(db, actor, row.conversationId), row.createdAt)) throw notFound("Attachment not found.");
   return { key: row.key };
 }
 async function activeSession(tx: Tx, actor: string, sessionId: string): Promise<void> {
@@ -219,6 +228,8 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
   await consume(`dm-send:${auth.userId}`, 5, 5000);
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
+    // Same lock as membership changes (dm-groups.ts): a send cannot commit after its sender's removal.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${parse(uuid, id)}, 34))`);
     const device = await deviceFor(tx, auth);
     const { others, kind } = await conversationFor(tx, auth.userId, id, true);
     if (data.content.device_id !== device.id || record(device.keys?.keys)[`curve25519:${device.id}`] !== data.content.sender_key) throw invalid("The encrypted sender does not match this device.");
@@ -263,7 +274,7 @@ export async function registerDmDevice(actor: string, sessionId: string, input: 
   });
 }
 export async function listDmDevices(actor: string, target = actor): Promise<DeviceView[]> {
-  await reachable(db, actor, target);
+  await reachable(db, actor, target, true);
   return (await db.select().from(dmDevice).where(eq(dmDevice.userId, target)).orderBy(asc(dmDevice.createdAt))).map((d) => ({ id: d.id, userId: d.userId, name: d.name, revoked: !!d.revokedAt, createdAt: d.createdAt.toISOString() }));
 }
 export async function revokeDmDevice(actor: string, id: string): Promise<void> {
@@ -394,7 +405,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     if (data.kind === "signatures") {
       if (Object.keys(body).length > 20) throw invalid("Too many signatures.");
       for (const [matrixId, values] of Object.entries(body)) {
-        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); if (!(await cryptoReachable(tx, auth.userId, target))) continue;
         for (const [keyId, raw] of Object.entries(record(values))) {
           const [targetDevice] = uuid.safeParse(keyId).success ? await tx.select({ id: dmDevice.id }).from(dmDevice).where(and(eq(dmDevice.userId, target), eq(dmDevice.id, keyId), isNull(dmDevice.revokedAt))) : [];
           const [identity] = await tx.select().from(dmIdentity).where(eq(dmIdentity.userId, target));
@@ -444,8 +455,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       const requested = record(body.one_time_keys), one_time_keys: Record<string, unknown> = {};
       if (Object.keys(requested).length > 50) throw invalid("Too many accounts.");
       for (const [matrixId, rawDevices] of Object.entries(requested)) {
-        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId);
         const response: Record<string, unknown> = {};
+        if (!(await cryptoReachable(tx, auth.userId, target))) { one_time_keys[matrixId] = response; continue; }
         for (const [id, algorithm] of Object.entries(record(rawDevices))) {
           if (algorithm !== "signed_curve25519") throw invalid("Unsupported prekey algorithm.");
           const [device] = await tx.select().from(dmDevice).where(and(eq(dmDevice.id, parse(uuid, id)), eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
@@ -466,7 +478,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       if (Object.keys(recipients).length > 20) throw invalid("Too many recipients.");
       let deliveries = 0;
       for (const [matrixId, rawDevices] of Object.entries(recipients)) {
-        const target = fromMatrix(matrixId); await cryptoReachable(tx, auth.userId, target);
+        const target = fromMatrix(matrixId); if (!(await cryptoReachable(tx, auth.userId, target))) continue;
         const devices = await tx.select().from(dmDevice).where(and(eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
         for (const [id, rawContent] of Object.entries(record(rawDevices))) {
           const content = parseDeviceEvent(data.eventType, rawContent);
@@ -515,7 +527,7 @@ export async function reportDirectMessage(actor: string, input: unknown): Promis
   await consume(`dm-report:${actor}`, 10, 3_600_000);
   const [message] = await db.select().from(dmMessage).where(eq(dmMessage.id, data.id));
   if (!message || message.senderId === actor) throw notFound("Message not found.");
-  await conversationFor(db, actor, message.conversationId);
+  if (!visibleTo(await conversationFor(db, actor, message.conversationId), message.createdAt)) throw notFound("Message not found.");
   const rows = await db.insert(dmReport).values({ messageId: data.id, reporterId: actor, reason: data.reason, excerpt: data.excerpt }).onConflictDoNothing().returning({ id: dmReport.id });
   if (!rows.length) throw conflict("You have already reported this message.");
 }

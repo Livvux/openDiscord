@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { dmConversation, friendship, session, user } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { attachment, dmConversation, dmMember, friendship, session, user, userSuspension } from "@/db/schema";
+import { and, eq, sql } from "drizzle-orm";
 import { blockUser } from "@/server/blocks";
-import { appendDirectMessage, createDirectConversation, exportDirectData, handleCryptoRequest, listDirectConversations, listDirectMessages, listDmDevices, markDirectConversationRead, registerDmDevice } from "@/server/direct-messages";
+import { appendDirectMessage, createDirectConversation, directAttachmentFor, reportDirectMessage, exportDirectData, handleCryptoRequest, listDirectConversations, listDirectMessages, listDmDevices, markDirectConversationRead, registerDmDevice } from "@/server/direct-messages";
 import { addGroupMembers, createGroupConversation, leaveGroup, removeGroupMember, renameGroup } from "@/server/dm-groups";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { testUsers } from "./helpers";
@@ -18,15 +18,16 @@ const envelope = (p: Person) => ({ algorithm: "m.megolm.v1.aes-sha2", sender_key
 const befriend = (a: string, b: string) => db.insert(friendship).values({ firstId: [a, b].sort()[0], secondId: [a, b].sort()[1], requestedBy: a, status: "accepted" });
 let group: string;
 
+async function enroll(name: string): Promise<Person> {
+  const id = await users.create(`Group ${name}`);
+  const person = { id, device: randomUUID(), session: randomUUID(), secret: randomBytes(32).toString("hex") };
+  await db.insert(session).values({ id: person.session, userId: id, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) });
+  await registerDmDevice(id, person.session, { id: person.device, secret: person.secret, name: `${name} browser` });
+  await handleCryptoRequest(auth(person), { kind: "upload", body: { device_keys: { user_id: matrix(id), device_id: person.device, algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"], keys: { [`curve25519:${person.device}`]: envelope(person).sender_key, [`ed25519:${person.device}`]: "e".repeat(43) }, signatures: {} } } });
+  return person;
+}
 beforeAll(async () => {
-  for (const name of ["Gina", "Hugo", "Ivy", "Jon", "Kim", "Stranger"]) {
-    const id = await users.create(`Group ${name}`);
-    const person = { id, device: randomUUID(), session: randomUUID(), secret: randomBytes(32).toString("hex") };
-    people[name] = person;
-    await db.insert(session).values({ id: person.session, userId: id, token: randomUUID(), createdAt: new Date(), updatedAt: new Date(), expiresAt: new Date(Date.now() + 3_600_000) });
-    await registerDmDevice(id, person.session, { id: person.device, secret: person.secret, name: `${name} browser` });
-    await handleCryptoRequest(auth(person), { kind: "upload", body: { device_keys: { user_id: matrix(id), device_id: person.device, algorithms: ["m.olm.v1.curve25519-aes-sha2", "m.megolm.v1.aes-sha2"], keys: { [`curve25519:${person.device}`]: envelope(person).sender_key, [`ed25519:${person.device}`]: "e".repeat(43) }, signatures: {} } } });
-  }
+  for (const name of ["Gina", "Hugo", "Ivy", "Jon", "Kim", "Stranger"]) people[name] = await enroll(name);
   // Gina is friends with everyone but Stranger; the others don't know each other.
   for (const name of ["Hugo", "Ivy", "Jon", "Kim"]) await befriend(people.Gina.id, people[name].id);
 });
@@ -97,7 +98,7 @@ describe("encrypted group conversations", () => {
   });
 
   it("blocked members exchange no keys; the creator's leaving hands the group on; deletion cascades", async () => {
-    const { Gina, Jon, Kim } = people;
+    const { Gina, Hugo, Jon, Kim } = people;
     await blockUser(Jon.id, Kim.id);
     expect((await listDirectConversations(Jon.id)).find((c) => c.id === group)!.members.find((m) => m.id === Kim.id)).toMatchObject({ blocked: true });
     await expect(handleCryptoRequest(auth(Jon), { kind: "query", body: { device_keys: { [matrix(Kim.id)]: [] } } })).rejects.toThrow("not found");
@@ -106,13 +107,83 @@ describe("encrypted group conversations", () => {
     await removeGroupMember(Jon.id, group, Kim.id);
     expect(JSON.stringify(await exportDirectData(Jon.id))).toContain(group);
     // Deleting the creator's account keeps the group for the others.
-    const other = await createGroupConversation(Gina.id, { members: [Jon.id, Kim.id] });
+    // (Jon and Kim, who have a block, can no longer be put in a group together.)
+    await expect(createGroupConversation(Gina.id, { members: [Jon.id, Kim.id] })).rejects.toThrow("block");
+    const other = await createGroupConversation(Gina.id, { members: [Jon.id, Hugo.id] });
     await db.delete(user).where(eq(user.id, Gina.id));
-    expect((await listDirectConversations(Kim.id)).find((c) => c.id === other)!.members.map((m) => m.id)).toEqual([Jon.id]);
+    expect((await listDirectConversations(Hugo.id)).find((c) => c.id === other)!.members.map((m) => m.id)).toEqual([Jon.id]);
     await db.delete(user).where(eq(user.id, Jon.id));
     // The last member is gone, so is the group and its ciphertext.
     expect(await db.select().from(dmConversation).where(eq(dmConversation.id, group))).toEqual([]);
-    await leaveGroup(Kim.id, other);
+    await leaveGroup(Hugo.id, other);
     expect(await db.select().from(dmConversation).where(eq(dmConversation.id, other))).toEqual([]);
+  });
+});
+
+describe("group hardening", () => {
+  const p: Record<string, Person> = {};
+  let g: string;
+  beforeAll(async () => {
+    for (const name of ["Owner", "Ann", "Ben", "Cal", "Dee"]) p[name] = await enroll(name);
+    for (const name of ["Ann", "Ben", "Cal", "Dee"]) await befriend(p.Owner.id, p[name].id);
+    await befriend(p.Ann.id, p.Dee.id);
+    g = await createGroupConversation(p.Owner.id, { members: [p.Ann.id, p.Ben.id] });
+  });
+
+  it("a suspended or former member never bricks key lookup for the rest of the group", async () => {
+    await db.insert(userSuspension).values({ userId: p.Ben.id, reason: "test" });
+    try {
+      const query = await handleCryptoRequest(auth(p.Owner), { kind: "query", body: { device_keys: { [matrix(p.Ann.id)]: [], [matrix(p.Ben.id)]: [] } } });
+      expect(Object.keys(query.device_keys as object)).toContain(matrix(p.Ben.id));
+      // Key delivery to the suspended member is skipped, not an error for the whole request.
+      const claim = await handleCryptoRequest(auth(p.Owner), { kind: "claim", requestId: randomUUID(), body: { one_time_keys: { [matrix(p.Ann.id)]: { [p.Ann.device]: "signed_curve25519" }, [matrix(p.Ben.id)]: { [p.Ben.device]: "signed_curve25519" } } } });
+      expect((claim.one_time_keys as Record<string, object>)[matrix(p.Ben.id)]).toEqual({});
+      await handleCryptoRequest(auth(p.Owner), { kind: "send", requestId: randomUUID(), eventType: "m.key.verification.done", body: { messages: { [matrix(p.Ben.id)]: { "*": { transaction_id: randomUUID() } } } } });
+    } finally { await db.delete(userSuspension).where(eq(userSuspension.userId, p.Ben.id)); }
+  });
+
+  it("refuses adds where anyone in the group and anyone added have a block, and groups grant no 1:1 requests", async () => {
+    // Ann and Ben share only the group: no message request between them.
+    await expect(createDirectConversation(p.Ann.id, p.Ben.id)).rejects.toThrow("not found");
+    await befriend(p.Ben.id, p.Cal.id);
+    await blockUser(p.Ben.id, p.Cal.id);
+    await expect(addGroupMembers(p.Owner.id, g, [p.Cal.id])).rejects.toThrow("block");
+    await expect(createGroupConversation(p.Owner.id, { members: [p.Ben.id, p.Cal.id] })).rejects.toThrow("block");
+  });
+
+  it("only the owner re-adds someone they removed", async () => {
+    await removeGroupMember(p.Owner.id, g, p.Ben.id);
+    await addGroupMembers(p.Owner.id, g, [p.Dee.id]);
+    await removeGroupMember(p.Owner.id, g, p.Dee.id);
+    await expect(addGroupMembers(p.Ann.id, g, [p.Dee.id])).rejects.toThrow("owner");
+    await addGroupMembers(p.Owner.id, g, [p.Dee.id]);
+    expect((await listDirectConversations(p.Ann.id)).find((c) => c.id === g)!.members.find((m) => m.id === p.Dee.id)).toMatchObject({ left: false });
+  });
+
+  it("a send cannot commit after a concurrent removal of its sender", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const removal = db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${g}, 34))`);
+      await tx.update(dmMember).set({ leftAt: new Date() }).where(and(eq(dmMember.conversationId, g), eq(dmMember.userId, p.Dee.id)));
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const send = appendDirectMessage(auth(p.Dee), g, { transactionId: randomUUID(), content: envelope(p.Dee) });
+    await new Promise((r) => setTimeout(r, 300));
+    release();
+    await removal;
+    await expect(send).rejects.toThrow("not found");
+  });
+
+  it("history from before joining stays out of reach for attachments and reports", async () => {
+    const [file] = await db.insert(attachment).values({ uploaderId: p.Owner.id, key: `attachments/${randomUUID()}.bin`, contentType: "application/octet-stream", size: 1, width: 0, height: 0 }).returning({ id: attachment.id });
+    const old = await appendDirectMessage(auth(p.Owner), g, { transactionId: randomUUID(), content: envelope(p.Owner), attachments: [file.id] });
+    await new Promise((r) => setTimeout(r, 20));
+    // Ann was there; Dee (removed above) is added again only after the message.
+    await expect(directAttachmentFor(p.Ann.id, file.id)).resolves.toBeTruthy();
+    await addGroupMembers(p.Owner.id, g, [p.Dee.id]);
+    await expect(directAttachmentFor(p.Dee.id, file.id)).rejects.toThrow("not found");
+    await expect(reportDirectMessage(p.Dee.id, { id: old.id, reason: "Not mine to see", excerpt: null })).rejects.toThrow("not found");
   });
 });

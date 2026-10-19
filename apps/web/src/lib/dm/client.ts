@@ -163,9 +163,20 @@ export class PrivateMessaging {
       for (const request of requests) await this.outgoing(request);
     }
   }
-  private async query(users: string[]): Promise<void> {
+  /**
+   * `tolerant` (groups): if the batch is refused, query people one by one and return those the server refused,
+   * so one unavailable member cannot stall the others. Our own account must always succeed.
+   */
+  private async query(users: string[], tolerant = false): Promise<Set<string>> {
     for (const id of users) this.users.add(id);
-    await this.outgoing(this.machine.queryKeysForUsers(users.map((id) => new this.C.UserId(matrixUser(id)))));
+    const ask = (ids: string[]) => this.outgoing(this.machine.queryKeysForUsers(ids.map((id) => new this.C.UserId(matrixUser(id)))));
+    try { await ask(users); return new Set(); } catch (error) {
+      if (!tolerant) throw error;
+      const failed = new Set<string>();
+      for (const id of users) await ask([id]).catch(() => failed.add(id));
+      if (failed.has(this.userId)) throw error;
+      return failed;
+    }
   }
   private async bootstrap(): Promise<void> {
     const requests = await this.machine.bootstrapCrossSigning(false);
@@ -184,7 +195,8 @@ export class PrivateMessaging {
       const sync = await this.crypto<CryptoSync>({ kind: "sync" });
       // Do not trust a server roster to enroll arbitrary strangers. Only own and explicitly opened conversations are queried.
       this.users = new Set([this.userId, ...peers, ...readers]);
-      await this.query([...this.users]);
+      // Failed people stay unknown here: their messages fail closed, and they get no keys.
+      await this.query([...this.users], this.users.size > 2);
       const events = await this.machine.receiveSyncChanges(JSON.stringify(sync.events), new this.C.DeviceLists([], []), new Map(Object.entries(sync.oneTimeKeys)), new Set(sync.unusedFallbackKeys));
       for (const processed of events) {
         if (!(processed instanceof this.C.DecryptedToDeviceEvent) || !processed.encryptionInfo.isSenderVerified()) continue;
@@ -280,12 +292,13 @@ export class PrivateMessaging {
     const attachments: DmAttachment[] = [];
     for (const file of files) attachments.push(await this.uploadEncrypted(conversation, file));
     return this.serial(async () => {
-      await this.query([this.userId, ...recipients]);
+      const unavailable = await this.query([this.userId, ...recipients], group);
       // identityBasedStrategy also shares with own devices signed by our identity, so that identity must be the one we hold or verified.
       if (!(await this.machine.getIdentity(new this.C.UserId(matrixUser(this.userId))))?.isVerified()) throw new Error("Verify this browser with your other device in Devices and recovery before sending.");
       const identities: string[] = [];
       const roster: string[] = [];
-      for (const user of [this.userId, ...recipients]) {
+      // Refused lookups (e.g. a suspended member) are excluded from the roster; they receive no key, never plaintext.
+      for (const user of [this.userId, ...recipients].filter((id) => !unavailable.has(id))) {
         if (await this.identityChanged(user)) throw new Error(group ? "Someone's encryption identity in this group changed. Verify their device in Devices and recovery before sending." : "This person's encryption identity changed. Verify their device in Devices and recovery before sending.");
         const all = (await this.machine.getUserDevices(new this.C.UserId(matrixUser(user)))).devices().filter((d) => !d.isDeleted());
         const devices: Matrix.Device[] = [];

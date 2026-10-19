@@ -7,8 +7,12 @@ cross-account encryption traffic. Existing local history is not erased by blocki
 ## Groups
 
 A group has 3–10 people. Its creator picks two to nine of their friends; any member can add more of
-their own friends (never someone they blocked or who blocked them) and rename the group; the owner
-(the creator, or after they leave the longest-standing member) can remove people; anyone can leave.
+their own friends and rename the group; the owner (the creator, or after they leave the
+longest-standing member) can remove people; anyone can leave. As on Discord, friends can add you
+without asking first; leaving is the remedy. Nobody can be added (or created into a group) together
+with anyone they have a block with, in either direction. A group does not make its members
+contacts elsewhere: it never allows a 1:1 message request between people who are not otherwise
+connected. Someone the owner removed can only be added back by the owner.
 The last person leaving deletes the group and all of its ciphertext, as does deleting that person's
 account. Deleting the creator's account keeps the group for the others.
 
@@ -22,11 +26,11 @@ after they joined. Former members' earlier messages stay readable and are attrib
 remaining members may still look up a former member's public device keys for that, never deliver keys
 to them. A message whose send began just before a removal committed can still be encrypted to the
 removed person's devices; the server then refuses them the ciphertext, but a dishonest server could
-hand it over. Removal is not a ban: any member who is friends with a removed person can add them
-again, and they then receive keys for messages from that point.
+hand it over. A person who left by themselves can be added again by any member who is their friend;
+they then receive keys only for messages from that point.
 
-A member who has not set up encryption yet gets no keys and cannot read messages sent before they do;
-sending is not blocked for the others. Two members where one blocked the other exchange no keys and
+A member who has not set up encryption yet, or whose account is suspended or awaiting approval, gets
+no keys and cannot read messages sent meanwhile; sending is not blocked for the others. Two members where one blocked the other exchange no keys and
 cannot read each other's new messages; a changed identity of any member stops sending until verified.
 
 The server manages membership, so it can add a person or device to a group just as it can substitute

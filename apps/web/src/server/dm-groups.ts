@@ -1,5 +1,5 @@
 // Group conversations (3–10 people). Content stays end-to-end encrypted; membership and the name are server metadata.
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { dmConversation, dmMember, dmMessage } from "@/db/schema";
@@ -16,11 +16,17 @@ const person = z.string().min(1).max(64);
 const groupName = z.string().trim().max(DM_GROUP_NAME_MAX).transform((name) => name || null);
 const lockGroup = (tx: Tx, id: string) => tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id}, 34))`);
 
-/** Only your own friends can be added, and nobody you blocked or who blocked you. */
-async function assertAddable(tx: Tx, actor: string, ids: string[]): Promise<void> {
+/**
+ * Only your own friends can be added (no consent step, as on Discord; leaving is the remedy), and never into a
+ * group where anyone already there, or anyone added with them, has a block with them in either direction.
+ */
+async function assertAddable(tx: Tx, actor: string, ids: string[], members: string[]): Promise<void> {
   for (const id of ids) {
     if (id === actor || !(await areFriends(tx, actor, id)) || await blocked(tx, actor, id)) throw invalid("Add only your friends to a group.");
     await assertActiveUser(id, tx);
+  }
+  for (const [index, id] of ids.entries()) {
+    for (const other of [...members, ...ids.slice(index + 1)]) if (other !== actor && await blocked(tx, id, other)) throw invalid("Someone in this group has a block with a person you are adding.");
   }
 }
 async function groupFor(tx: Tx, actor: string, id: string) {
@@ -37,7 +43,7 @@ export async function createGroupConversation(actor: string, input: unknown): Pr
   const id = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${actor}, 31))`);
     for (const userId of [actor, ...members]) await assertConversationCapacity(tx, userId);
-    await assertAddable(tx, actor, members);
+    await assertAddable(tx, actor, members, []);
     const [created] = await tx.insert(dmConversation).values({ kind: "group", status: "accepted", requestedBy: actor, name: data.name ?? null }).returning({ id: dmConversation.id });
     await tx.insert(dmMember).values([actor, ...members].map((userId) => ({ conversationId: created.id, userId })));
     return created.id;
@@ -55,11 +61,13 @@ export async function addGroupMembers(actor: string, id: string, rawMembers: unk
     const fresh = added.filter((userId) => userId !== actor && !group.others.includes(userId));
     if (!fresh.length) return null;
     if (group.others.length + 1 + fresh.length > DM_GROUP_MAX_MEMBERS) throw invalid(`A group has at most ${DM_GROUP_MAX_MEMBERS} people.`);
-    await assertAddable(tx, actor, fresh);
+    const removed = await tx.select({ id: dmMember.userId }).from(dmMember).where(and(eq(dmMember.conversationId, group.id), inArray(dmMember.userId, fresh), isNotNull(dmMember.removedAt)));
+    if (removed.length && group.owner !== actor) throw forbidden("Only the group owner can add back someone they removed.");
+    await assertAddable(tx, actor, fresh, group.others);
     for (const userId of fresh) await assertConversationCapacity(tx, userId);
     // Database time, like dm_message.created_at, which the history cut-off compares against.
     await tx.insert(dmMember).values(fresh.map((userId) => ({ conversationId: group.id, userId })))
-      .onConflictDoUpdate({ target: [dmMember.conversationId, dmMember.userId], set: { joinedAt: sql`now()`, leftAt: null } });
+      .onConflictDoUpdate({ target: [dmMember.conversationId, dmMember.userId], set: { joinedAt: sql`now()`, leftAt: null, removedAt: null } });
     const [latest] = await tx.select({ id: dmMessage.id }).from(dmMessage).where(eq(dmMessage.conversationId, group.id)).orderBy(desc(dmMessage.id)).limit(1);
     if (latest) for (const userId of fresh) await advanceRead(tx, group.id, userId, latest.id);
     return [actor, ...group.others, ...fresh];
@@ -79,7 +87,7 @@ async function depart(actor: string, id: string, target: string): Promise<void> 
     // Ownership passes to the longest-standing remaining member; a later rejoin does not take it back.
     if (target === group.owner) await tx.update(dmConversation).set({ requestedBy: group.others.find((id) => id !== target) ?? null }).where(eq(dmConversation.id, group.id));
     // The last member leaving deletes the group (database trigger dm_member_cleanup).
-    await tx.update(dmMember).set({ leftAt: new Date() }).where(and(eq(dmMember.conversationId, group.id), eq(dmMember.userId, target), isNull(dmMember.leftAt)));
+    await tx.update(dmMember).set({ leftAt: new Date(), removedAt: target === actor ? null : new Date() }).where(and(eq(dmMember.conversationId, group.id), eq(dmMember.userId, target), isNull(dmMember.leftAt)));
     return [actor, ...group.others];
   });
   await announce(id, everyone, "request");
