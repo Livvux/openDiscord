@@ -3,13 +3,13 @@ import type { TestInfo } from "@playwright/test";
 
 export function classifyVoiceProductConsole(text: string, location: string, pageUrl: string) {
   const status = /^Failed to load resource: the server responded with a status of ([45]\d{2}) \([^\r\n]*\)$/.exec(text);
-  let endpoint: "voice-control" | "app-script" | "other" = "other";
+  let endpoint: "voice-control" | "app-script" | "turnstile" | "other" = "other";
   try {
     const url = new URL(location), page = new URL(pageUrl);
     if (url.origin === page.origin) {
       if (url.pathname === "/api/voice/control") endpoint = "voice-control";
       else if (url.pathname.startsWith("/_next/static/")) endpoint = "app-script";
-    }
+    } else if (url.origin === "https://challenges.cloudflare.com") endpoint = "turnstile";
   } catch { /* Missing console locations remain unclassified. */ }
   const code = /^DataChannel error on (?:lossy|reliable):/.test(text) ? "data-channel-error"
     : /^Unknown DataChannel error on (?:lossy|reliable)/.test(text) ? "data-channel-unknown"

@@ -113,6 +113,11 @@ describe("bounded Voice console diagnostics", () => {
     expect(classifyVoiceProductConsole("Failed to load resource: the server responded with a status of 409 (Conflict)", "https://foreign.test/api/voice/control", "https://example.test/app")).toEqual({ kind: "http-resource", status: 409, endpoint: "other", code: "other" });
     expect(classifyVoiceProductConsole("private error", "https://example.test/_next/static/chunks/private.js", "https://example.test/app")).toEqual({ kind: "other", status: null, endpoint: "app-script", code: "other" });
   });
+  it("attributes errors raised inside Cloudflare's Turnstile frame to it, never to the product", () => {
+    // WebKit logs a revoked blob inside the sign-up challenge frame.
+    expect(classifyVoiceProductConsole("Failed to load resource: The operation couldn’t be completed. (WebKitBlobResource error 1.)", "blob:https://challenges.cloudflare.com/38dfc988-f837-4c2a-8375-a5fb6d17dcc2", "https://example.test/sign-up")).toEqual({ kind: "other", status: null, endpoint: "turnstile", code: "other" });
+    expect(classifyVoiceProductConsole("private error", "https://challenges.cloudflare.com.evil.test/x.js", "https://example.test/sign-up").endpoint).toBe("other");
+  });
 });
 
 

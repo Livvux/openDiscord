@@ -15,7 +15,7 @@ export async function newUserPage(browser: Browser) {
   ipCounter += 1;
   const ip = `10.${process.pid % 250}.${Math.floor(ipCounter / 250)}.${ipCounter % 250}`;
   // Same device and baseURL as the running project.
-  const { baseURL, viewport, userAgent, deviceScaleFactor, isMobile, hasTouch } = test.info().project.use;
+  const { baseURL, viewport, userAgent, deviceScaleFactor, isMobile, hasTouch, serviceWorkers } = test.info().project.use;
   const context = await browser.newContext({
     baseURL,
     viewport,
@@ -23,6 +23,7 @@ export async function newUserPage(browser: Browser) {
     deviceScaleFactor,
     isMobile,
     hasTouch,
+    serviceWorkers,
     extraHTTPHeaders: { "X-Forwarded-For": ip },
   });
   return context.newPage();

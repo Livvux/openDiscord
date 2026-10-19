@@ -24,6 +24,9 @@ test.describe("AutoMod", () => {
     await expect(member.getByRole("log").getByText("join my crypto giveaway")).toHaveCount(0);
 
     await owner.reload();
-    await expect(owner.getByText("had a message blocked by AutoMod")).toBeVisible();
+    // Role queries skip React's hidden streaming container (<div hidden id="S:n">), which can briefly
+    // hold a second copy of the server-rendered section; exactly one entry was audited.
+    const audit = owner.getByRole("region", { name: "Audit log" });
+    await expect(audit.getByRole("listitem").filter({ hasText: "had a message blocked by AutoMod" })).toHaveCount(1);
   });
 });

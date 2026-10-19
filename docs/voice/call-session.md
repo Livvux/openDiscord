@@ -80,9 +80,8 @@ the script-transform path the SDK attaches transforms via `new RTCRtpScriptTrans
 which bypasses `postMessage`, so the worker's early encode/decode and codec checks cannot
 observe it; MediaSession's ordering (publish only after own ACK plus every key-ready,
 subscribe only after the publisher's ACK and exact-GCM/Opus/VP8 checks) is the enforcing
-layer there. Product acceptance runs in Chromium and Firefox. Playwright WebKit reached
-decoded Opus and moving VP8 locally but is not in CI (unrelated DM-client page errors);
-real Safari, Edge and mobile browsers are untested.
+layer there. Product acceptance runs in Chromium, Firefox and Playwright WebKit (Safari's
+engine on Linux, not Safari itself); real Safari, Edge and mobile browsers are untested.
 
 CallView exposes immutable, key-free media state and opaque playback tile IDs. It does
 not expose Room, Track, tokens or key material. `agreed` alone is never displayed as media
@@ -95,7 +94,9 @@ Next production server and starts LiveKit1.13.10 with `room.auto_create: false`.
 three separate authenticated accounts use real product signup, community membership,
 messaging setup, Voice consent, three native SAS pair comparisons (protocol steps automatic,
 symbol confirmation clicked), six admissions and three full-audience decisions. The job runs
-the spec in Chromium, then again in Firefox (`VOICE_PRODUCT_BROWSER=firefox`). Native Worker/RTCPeerConnection observers forward original
+the spec in Chromium, then again in Firefox (`VOICE_PRODUCT_BROWSER=firefox`) and WebKit
+(`VOICE_PRODUCT_BROWSER=webkit`; its service worker is blocked there, because WebKit routes a
+page's fetches through it and the test's request observers would not see them). Native Worker/RTCPeerConnection observers forward original
 operations unchanged and retain only counts/order/stats. The test checks worker fetch
 content type/CSP, own positive SDK ACK after all exact key submissions, listen-only empty
 source grants, non-silent decoded Opus, changing VP8 pixels in actual product video
@@ -106,7 +107,7 @@ are excluded from the diagnostic summary; comparison traces are disabled.
 These are test requirements, not a claim that the current revision has passed them.
 The exact hosted check IDs and outcomes belong in the implementation report. Existing
 control/lifecycle/media suites retain lower-layer negative coverage; they do not substitute
-for the actual Next product gate. Physical audio devices, WebKit/Safari encrypted media,
+for the actual Next product gate. Physical audio devices, real Safari encrypted media,
 eight-browser capacity, arbitrary networks and external cryptographic audit remain outside
 this acceptance. Source CI never enables production: operator freeze, migration, exact SFU
 configuration, cleanup and independent review remain release prerequisites.
