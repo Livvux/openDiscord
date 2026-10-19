@@ -3,14 +3,16 @@ import { sql } from "drizzle-orm";
 import { bigint, boolean, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { channel } from "./app-schema";
 import { session, user } from "./auth-schema";
-import { dmDevice } from "./dm-schema";
+import { dmConversation, dmDevice } from "./dm-schema";
 
 const id = () => uuid("id").primaryKey().default(sql`uuidv7()`);
 const created = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
 
 export const voiceCall = pgTable("voice_call", {
   id: id(),
-  channelId: uuid("channel_id").notNull().references(() => channel.id, { onDelete: "cascade" }),
+  /** Exactly one call context: a community voice channel or a direct-message conversation. */
+  channelId: uuid("channel_id").references(() => channel.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").references(() => dmConversation.id, { onDelete: "cascade" }),
   generation: integer("generation").notNull().default(1),
   status: text("status", { enum: ["active", "closed"] }).notNull().default("active"),
   createdAt: created(),
@@ -18,6 +20,8 @@ export const voiceCall = pgTable("voice_call", {
 }, (t) => [
   uniqueIndex("voice_call_active_channel_idx").on(t.channelId).where(sql`${t.status} = 'active'`),
   index("voice_call_channel_idx").on(t.channelId),
+  uniqueIndex("voice_call_active_conversation_idx").on(t.conversationId).where(sql`${t.status} = 'active'`),
+  check("voice_call_context", sql`num_nonnulls(${t.channelId}, ${t.conversationId}) = 1`),
   check("voice_call_generation_positive", sql`${t.generation} > 0`),
   check("voice_call_status", sql`(${t.status} = 'active' and ${t.closedAt} is null) or (${t.status} = 'closed' and ${t.closedAt} is not null)`),
 ]);

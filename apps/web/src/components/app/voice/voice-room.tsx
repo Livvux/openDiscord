@@ -22,9 +22,10 @@ export function VoiceSourceButton({ source, sidebar = false }: { source: VoiceSo
   const label = source === "microphone" ? active ? "Mute microphone" : "Unmute microphone" : source === "camera" ? active ? "Stop camera" : "Camera" : active ? "Stop sharing" : "Share screen";
   return <Button size={sidebar ? "sm" : "default"} variant="secondary" aria-pressed={!!active} disabled={media?.mediaState !== "ready" || !media.sources.includes(source) || voice.pendingSources.includes(source)} onClick={() => void voice.toggleSource(source)}>{label}</Button>;
 }
-export function VoiceRoom({ channel, href, canConnect }: { channel: { id: string; name: string }; href: string; canConnect: boolean }) {
+/** `askConsent` opens on the join consent directly (a deliberate call button was already pressed). */
+export function VoiceRoom({ channel, href, canConnect, askConsent = false }: { channel: { id: string; name: string; dm?: boolean }; href: string; canConnect: boolean; askConsent?: boolean }) {
   const voice = useVoice();
-  const [consent, setConsent] = useState(false);
+  const [consent, setConsent] = useState(askConsent);
   const here = voice.channel?.id === channel.id;
   const view = here ? voice.view : null;
   const active = here && (voice.joining || !!view && view.state !== "ended");

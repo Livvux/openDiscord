@@ -25,7 +25,8 @@ export type VoiceCallView = Readonly<{
   localConsentPending: boolean; media: VoiceMediaView; error?: string;
 }>;
 export type VoiceCallOptions = {
-  accountId: string; sessionId: string; channelId: string; consent: true;
+  /** Exactly one call context: a community voice channel or a direct-message conversation. */
+  accountId: string; sessionId: string; channelId?: string; conversationId?: string; consent: true;
   /** Must throw after account/session replacement or provider destruction. */
   assertSessionCurrent(): void;
   fetch?: typeof fetch;
@@ -78,7 +79,7 @@ export class CallSession {
   static async create(options: VoiceCallOptions): Promise<CallSession> {
     if (typeof window === "undefined") throw new VoiceCallSessionError("browser-unavailable");
     options.assertSessionCurrent();
-    if (options.consent !== true || !options.accountId || !options.sessionId) throw new VoiceCallSessionError("not-ready");
+    if (options.consent !== true || !options.accountId || !options.sessionId || !options.channelId === !options.conversationId) throw new VoiceCallSessionError("not-ready");
     let anchor = readExistingDmEnrollment(options.accountId);
     if (!anchor) throw new VoiceCallSessionError("messaging-setup-required");
     const session = new CallSession(options);
@@ -87,7 +88,7 @@ export class CallSession {
       session.assertAlive();
       session.secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
       const start = session.issue("priority");
-      const snapshot = await session.http.join({ channelId: options.channelId, joinNonce: crypto.randomUUID(), voiceDeviceId: crypto.randomUUID(), enrollmentSecret: session.secret, consent: true }, anchor, session.lifetime.signal);
+      const snapshot = await session.http.join({ ...(options.conversationId ? { conversationId: options.conversationId } : { channelId: options.channelId }), joinNonce: crypto.randomUUID(), voiceDeviceId: crypto.randomUUID(), enrollmentSecret: session.secret, consent: true }, anchor, session.lifetime.signal);
       anchor = null;
       session.acceptGrant(session.grant(snapshot, start));
       // WASM/native module evaluation happens only after explicit browser join consent.
@@ -139,7 +140,7 @@ export class CallSession {
   private grant(raw: VoiceSnapshot, start: number): Grant {
     this.assertAlive();
     const snapshot = voiceHttpSnapshotSchema.parse(raw), own = snapshot.members.find(member => member.memberId === snapshot.memberId);
-    if (snapshot.channelId !== this.options.channelId || own?.userId !== this.options.accountId) throw new VoiceCallSessionError("binding-changed");
+    if (snapshot.channelId !== this.options.channelId || snapshot.conversationId !== this.options.conversationId || own?.userId !== this.options.accountId) throw new VoiceCallSessionError("binding-changed");
     const old = this.authority?.snapshot;
     if (old && (snapshot.callId !== old.callId || snapshot.memberId !== old.memberId || snapshot.joinNonce !== old.joinNonce || snapshot.voiceUserId !== old.voiceUserId || snapshot.voiceDeviceId !== old.voiceDeviceId || snapshot.participantIdentity !== old.participantIdentity)) throw new VoiceCallSessionError("binding-changed");
     if (old && snapshot.generation === old.generation && (snapshot.members.length !== old.members.length || snapshot.members.some(member => !old.members.some(prior => sameVoiceParty(voiceControlParty(member), voiceControlParty(prior)))))) throw new VoiceCallSessionError("binding-changed");

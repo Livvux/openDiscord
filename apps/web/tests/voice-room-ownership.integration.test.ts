@@ -186,7 +186,7 @@ describe("bounded persistent cleanup", () => {
   ])("only narrows $name against canonical microphone authority", async ({ permission, sources }) => {
     const f = await fixture(), p = await peer(f);
     const [everyone] = await db.select().from(role).where(and(eq(role.communityId, f.communityId), eq(role.isDefault, true)));
-    await db.insert(channelOverride).values({ channelId: f.snapshot.channelId, roleId: everyone.id, deny: Permission.Video });
+    await db.insert(channelOverride).values({ channelId: f.snapshot.channelId!, roleId: everyone.id, deny: Permission.Video });
     const grant = await grantBoundVoiceMedia(p.auth, p.binding);
     expect(grant.sources).toEqual(["microphone"]);
     const participant = new ParticipantInfo({ identity: grant.participantIdentity, permission });

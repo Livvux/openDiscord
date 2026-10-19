@@ -6,6 +6,7 @@ import { MobileNavProvider, MobilePanel } from "@/components/app/mobile-nav";
 import { NotificationsProvider } from "@/components/app/notifications-provider";
 import { ServiceWorkerRegistration } from "@/components/app/service-worker";
 import { VoiceProvider } from "@/components/app/voice/voice-provider";
+import { DmCallRinger } from "@/components/app/voice/dm-call-ringer";
 
 // Private area: never indexed.
 export const metadata: Metadata = { robots: { index: false, follow: false } };
@@ -22,6 +23,7 @@ async function AuthenticatedShell({ children }: { children: React.ReactNode }) {
     <VoiceProvider key={`${id}:${sessionId}`} accountId={id} sessionId={sessionId}>
     <MobileNavProvider>
       <ServiceWorkerRegistration />
+      <DmCallRinger />
       <div data-app-shell className="flex h-dvh overflow-hidden bg-background pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] text-sm text-foreground">
         <MobilePanel
           label="Communities"

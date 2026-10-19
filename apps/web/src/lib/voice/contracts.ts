@@ -8,7 +8,9 @@ const secret = z.string().regex(/^[a-f0-9]{64}$/);
 const realId = z.string().min(1).max(128);
 export const voiceJoinAuthSchema = z.object({ userId: realId, sessionId: realId, anchorDeviceId: id, anchorSecret: secret }).strict();
 export const voiceMemberAuthSchema = z.object({ userId: realId, sessionId: realId, memberId: id, secret }).strict();
-export const voiceJoinSchema = z.object({ channelId: id, joinNonce: id, voiceDeviceId: id, enrollmentSecret: secret, consent: z.literal(true) }).strict();
+/** The call context is exactly one community voice channel or one direct-message conversation. */
+export const voiceJoinSchema = z.object({ channelId: id.optional(), conversationId: id.optional(), joinNonce: id, voiceDeviceId: id, enrollmentSecret: secret, consent: z.literal(true) }).strict()
+  .refine(value => (value.channelId === undefined) !== (value.conversationId === undefined), "Join exactly one voice channel or conversation.");
 export const voiceBindingSchema = z.object({ callId: id, memberId: id, joinNonce: id, expectedGeneration: z.number().int().positive() }).strict();
 const object = z.record(z.string().min(1).max(256), z.unknown());
 const requestId = z.string().min(1).max(128);
@@ -32,7 +34,8 @@ export type VoiceDeviceOutcome = { nativeResponse: Record<string, never>; dispos
 export type VoiceCryptoRequest = z.infer<typeof voiceCryptoSchema>;
 export type VoiceMember = { memberId: string; userId: string; anchorDeviceId: string; voiceUserId: string; voiceDeviceId: string; joinNonce: string; participantIdentity: string; displayName: string; state: "waiting" | "active" };
 export type VoiceRemoval = { callId: string; memberId: string; participantIdentity: string; reason: string };
-export type VoiceSnapshot = { callId: string; channelId: string; generation: number; memberId: string; joinNonce: string; voiceUserId: string; voiceDeviceId: string; participantIdentity: string; leaseExpiresAt: string; serverTime: string; members: VoiceMember[]; removals: VoiceRemoval[] };
+/** Channel calls carry `channelId`, direct-message calls `conversationId`; never both. */
+export type VoiceSnapshot = { callId: string; channelId?: string; conversationId?: string; generation: number; memberId: string; joinNonce: string; voiceUserId: string; voiceDeviceId: string; participantIdentity: string; leaseExpiresAt: string; serverTime: string; members: VoiceMember[]; removals: VoiceRemoval[] };
 
 const base64 = z.string().regex(/^[A-Za-z0-9+/_=-]+$/);
 export const voiceSignedObjectSchema = z.object({ user_id: z.string().max(256), keys: z.record(z.string().max(160), base64.max(128)), signatures: z.record(z.string().max(256), z.record(z.string().max(160), base64.max(128))).optional() }).strict();

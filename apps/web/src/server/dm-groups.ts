@@ -10,6 +10,9 @@ import { areFriends } from "./friends";
 import { assertActiveUser } from "./instance-policy";
 import { consume } from "./limits";
 import { parse, uuid } from "./validation";
+import { invalidateVoiceMembership } from "./voice-control";
+import { lockVoiceLifecycle } from "./voice-locks";
+import { voiceTransaction } from "./voice-sfu";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const person = z.string().min(1).max(64);
@@ -75,9 +78,11 @@ export async function addGroupMembers(actor: string, id: string, rawMembers: unk
   if (everyone) await announce(id, everyone, "request");
 }
 
-/** Leaving (or being removed) is immediate: the server stops listing messages and key traffic to that person. */
+/** Leaving (or being removed) is immediate: the server stops listing messages, key traffic and the group's call for that person. */
 async function depart(actor: string, id: string, target: string): Promise<void> {
-  const everyone = await db.transaction(async (tx) => {
+  // Voice before the group lock (the Voice lock order); the call membership ends in the same commit.
+  const everyone = await voiceTransaction(async (tx) => {
+    await lockVoiceLifecycle(tx);
     await lockGroup(tx, parse(uuid, id));
     const group = await groupFor(tx, actor, id);
     if (target !== actor) {
@@ -86,6 +91,7 @@ async function depart(actor: string, id: string, target: string): Promise<void> 
     }
     // Ownership passes to the longest-standing remaining member; a later rejoin does not take it back.
     if (target === group.owner) await tx.update(dmConversation).set({ requestedBy: group.others.find((id) => id !== target) ?? null }).where(eq(dmConversation.id, group.id));
+    await invalidateVoiceMembership(tx, { conversationId: group.id, userId: target }, target === actor ? "conversation-left" : "conversation-removed");
     // The last member leaving deletes the group (database trigger dm_member_cleanup).
     await tx.update(dmMember).set({ leftAt: new Date(), removedAt: target === actor ? null : new Date() }).where(and(eq(dmMember.conversationId, group.id), eq(dmMember.userId, target), isNull(dmMember.leftAt)));
     return [actor, ...group.others];

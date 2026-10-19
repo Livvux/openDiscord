@@ -299,7 +299,7 @@ describe("unreachable VoiceCryptoOwner against the actual PostgreSQL voice servi
     const [first, second] = await fixture();
     const a = loss === "permission" ? second : first, b = loss === "permission" ? first : second;
     if (loss === "permission") {
-      const [ch] = await db.select().from(channel).where(eq(channel.id, a.snapshot.channelId));
+      const [ch] = await db.select().from(channel).where(eq(channel.id, a.snapshot.channelId!));
       await db.update(role).set({ permissions: sql`${role.permissions} & ${~Permission.Connect}` }).where(and(eq(role.communityId, ch.communityId), eq(role.isDefault, true)));
     }
     if (loss === "session") await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, a.sessionId));

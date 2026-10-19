@@ -110,3 +110,54 @@ for the actual Next product gate. Physical audio devices, WebKit/Safari encrypte
 eight-browser capacity, arbitrary networks and external cryptographic audit remain outside
 this acceptance. Source CI never enables production: operator freeze, migration, exact SFU
 configuration, cleanup and independent review remain release prerequisites.
+
+## Direct-message calls
+
+A call has exactly one context: a community voice channel or a direct-message conversation
+(`voice_call.channel_id` xor `voice_call.conversation_id`, migration 0039, one active call per
+context). Everything below the authorization check is the same code path: the same temporary
+Voice device, native SAS comparison, separate admission, full-audience consent, generation-room
+keys, StrictVoiceWorker, no plaintext fallback, heartbeat lease and SFU reconciliation. Channel
+calls keep their checks unchanged (Join voice/Speak/Video, community lock).
+
+**Authorization.** A person may join, heartbeat, exchange native control traffic and receive a
+media token for a conversation call exactly while they may send a message there now
+(`conversationFor(..., sending)`): an accepted 1:1 conversation with no block in either
+direction and an active (not suspended or unapproved) peer, or a current group member (not left,
+not removed) whose own account is active. As for every call, the caller's own session, anchor
+device and account must be valid, and no two live participants of the call may have a block in
+either direction. Every participant gets microphone, camera and screen grants (screen audio is
+still refused by the client). Strangers and removed members get `not_found`; pending requests,
+blocked pairs and suspended accounts get `forbidden`.
+
+**Revocation.** The check is repeated on every join, heartbeat (ten seconds), control request,
+token grant and SFU reconciliation, all under the Voice lifecycle lock. Leaving or being removed
+from a group ends that person's call membership in the same transaction that changes the group
+(the group change now takes the Voice lock first). A block ends every call both people are in.
+Suspension, revoked sessions and anchor revocation end calls as they do for channels. Ending a
+membership advances the generation, so the remaining people move to a fresh room and fresh media
+keys the removed device never receives; the removed browser's next heartbeat or token request is
+refused and its old generation room is retired and deleted by the SFU reconciler. A 1:1 call ends
+for both people when either side blocks, or when the peer is suspended (the same rule as sending).
+
+**Room names and metadata.** The SFU room name is `voice:<callId>:<callId>:<generation>` for
+direct-message calls (the room-scope segment is the call's own random ID), so LiveKit never sees
+a conversation ID. The application server sees which conversation has a call, who joined and when,
+like channel calls.
+
+**Ringing.** Starting a conversation call (the first join) sends a content-free `call` event on the
+personal event stream to every other current member who has no block with the caller: caller and
+conversation only. A Web Push says "Incoming call" with the caller's name (skipped for Do not
+disturb and blocks; at most one per caller and conversation every 30 seconds). A call holds at most
+eight devices, so in a group of up to ten people the ninth device's join is refused. When the call closes, members receive an `ended` event; a ring that was not
+answered becomes a missed call, as does a ring older than 45 seconds. Accepting a ring is the
+explicit Voice join consent (the ring card states what joining creates). Declining is local only:
+the caller is not told. Missed calls are shown in this browser until dismissed; they are not stored
+on the server, and answering on one device does not clear the ring on the person's other devices.
+The provider keeps one active call per browser: accepting or starting a call leaves any other call.
+
+Integration coverage: `tests/voice-dm-calls.integration.test.ts` (members, strangers, pending,
+blocks, group removal and leaving, suspension, ringing and block-filtered rings, maintenance
+sweep); `tests/dm-call-ring.test.ts` (ring/missed state); `e2e/dm-calls.spec.ts` in the Voice
+product job, Chromium and Firefox (missed call, accept from the ring, SAS and admission, decoded
+Opus and VP8, a block ending the call).

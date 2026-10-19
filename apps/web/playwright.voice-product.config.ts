@@ -20,6 +20,6 @@ export default defineConfig({
   // Separate output so a second browser run does not wipe the first run's evidence.
   outputDir: firefox ? "test-results/firefox" : undefined,
   use: { ...base.use, ...browser, trace: "off" },
-  projects: [{ name: firefox ? "voice-product-firefox" : "voice-product", testMatch: /voice-product\.spec/ }],
+  projects: [{ name: firefox ? "voice-product-firefox" : "voice-product", testMatch: /voice-product\.spec|dm-calls\.spec/ }],
   webServer: { ...server, reuseExistingServer: false },
 });
