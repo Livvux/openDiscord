@@ -67,7 +67,7 @@ export function MemberListProvider({ members, currentUserId, blockedIds, childre
       {inChannel && (
       <aside
         aria-label="Members"
-        className={`w-60 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-panel ${docked ? "lg:flex" : "lg:hidden"} ${overlay ? "max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:flex" : "max-lg:hidden"}`}
+        className={`w-60 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-panel ${docked ? "lg:flex" : "lg:hidden"} ${overlay ? "max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:flex max-lg:pt-[env(safe-area-inset-top)] max-lg:pb-[env(safe-area-inset-bottom)]" : "max-lg:hidden"}`}
       >
         <MemberGroups members={members} currentUserId={currentUserId} blockedIds={blockedIds} />
       </aside>

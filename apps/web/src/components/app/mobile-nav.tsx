@@ -48,7 +48,7 @@ export function MobilePanel({ className, children, label }: { className: string;
       aria-label={label}
       // Close the overlay once a link inside it is followed.
       onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}
-      className={`${className} ${open ? "max-md:fixed max-md:inset-y-0 max-md:z-40 max-md:flex" : "max-md:hidden"}`}
+      className={`${className} ${open ? "max-md:fixed max-md:inset-y-0 max-md:z-40 max-md:flex max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "max-md:hidden"}`}
     >
       {children}
     </nav>

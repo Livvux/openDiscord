@@ -198,3 +198,10 @@ html {
     @apply font-sans;
   }
 }
+
+/* iOS Safari zooms into any focused field below 16px. Unlayered, so it wins over text-sm utilities. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"]), textarea, select {
+    font-size: max(16px, 1em);
+  }
+}
