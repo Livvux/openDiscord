@@ -12,7 +12,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 url = "2"
 open = "5"
-tauri-plugin-updater = "2"
+# Without the default "zip" feature: only legacy v1 Windows .zip bundles need it, and zip 4 has RUSTSEC-2026-0367..0369.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 serde_json = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
