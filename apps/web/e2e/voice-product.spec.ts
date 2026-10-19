@@ -105,6 +105,8 @@ test.describe("genuine Next product encrypted Voice", () => {
         // A genuine generation transition can return409; detailed lower-layer conflict gates remain authoritative.
         if (message.text() === "Failed to load resource: the server responded with a status of 409 (Conflict)" && new URL(message.location().url || page.url()).pathname === "/api/voice/control") return;
         const diagnostic = classifyVoiceProductConsole(message.text(), message.location().url, page.url());
+        // Cloudflare's sign-up challenge runs in its own cross-origin frame; WebKit logs a blob it revokes there.
+        if (diagnostic.endpoint === "turnstile") return;
         // This test deliberately revokes Connect; the authenticated control endpoint must deny it.
         if (stage === "connect-revocation" && diagnostic.kind === "http-resource" && diagnostic.status === 403 && diagnostic.endpoint === "voice-control") { revocationDenials++; return; }
         const entry: (typeof consoleErrors)[number] = { page: index, revoking: stage === "connect-revocation", observed: "pending", transport: [], ...diagnostic, ...(diagnostic.code === "other" && diagnostic.kind === "other" ? { fingerprint: fingerprintVoiceProductConsole(message.text()) } : {}) };

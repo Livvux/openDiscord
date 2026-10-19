@@ -21,6 +21,7 @@ import { DmCallButton, DmCallPanel } from "../voice/dm-call";
 import { shortFilename } from "@/lib/filename";
 import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_TEXT, type DeviceView, type DirectConversation, type DirectEnvelope } from "@/lib/dm/contracts";
 import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
+import { iosBrowserTab, persistDmStorage, storageHint } from "@/lib/dm/storage-persistence";
 import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, type TrustedDevice, type VerificationView } from "@/lib/dm/client";
 
 const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring";
@@ -81,6 +82,8 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const [pendingIdentity, setPendingIdentity] = useState(false);
   const [backupList, setBackupList] = useState<{ id: string; createdAt: string }[]>([]);
   const [recoveryDownload, setRecoveryDownload] = useState<string | null>(null);
+  const [persistenceHint, setPersistenceHint] = useState<string | null>(null);
+  const [unverifiedBrowser, setUnverifiedBrowser] = useState(false);
   const [report, setReport] = useState<MessageView | null>(null);
   const reportTextarea = useRef<HTMLTextAreaElement>(null);
   const [reportReason, setReportReason] = useState("");
@@ -99,7 +102,11 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
 
   useEffect(() => {
     let alive = true;
-    privateMessaging(userId).then((value) => { if (alive) { setClient(value); setStatus("Encrypted messaging ready."); } }).catch((e: unknown) => { if (alive) { setError(errorText(e)); setStatus("Encryption is unavailable. No plaintext messages will be sent."); } });
+    privateMessaging(userId).then((value) => {
+      if (!alive) return;
+      setClient(value); setStatus("Encrypted messaging ready.");
+      void persistDmStorage().then((state) => { if (alive) setPersistenceHint(storageHint(state, iosBrowserTab())); });
+    }).catch((e: unknown) => { if (alive) { setError(errorText(e)); setStatus("Encryption is unavailable. No plaintext messages will be sent."); } });
     return () => { alive = false; };
   }, [userId]);
   useEffect(() => () => { if (recoveryDownload) URL.revokeObjectURL(recoveryDownload); }, [recoveryDownload]);
@@ -125,6 +132,8 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       const people = current ? recipientsOf(current) : [];
       await client.sync(people, current ? formerOf(current) : []);
       await client.acceptStartedVerifications();
+      const verifiedHere = await client.ownIdentityVerified();
+      setUnverifiedBrowser(!verifiedHere);
       const own = await client.devices(userId);
       const peer: TrustedDevice[] = [];
       for (const id of people) peer.push(...await client.devices(id));
@@ -138,9 +147,10 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
         const decoded = await client.decrypt(all, current.id, sendersOf(current));
         if (selection === selectedRef.current) {
           history.current = all; setMessages(decoded); setEnvelopes(all); if (all.length <= 50) setHasMore(timeline.hasMore);
-          // Seen only when it is on screen; the server keeps the marker monotonic.
+          // Seen only when it is on screen, and not by an unverified browser that gets no keys: it must not
+          // clear the unread marker for the person's trusted devices. The server keeps the marker monotonic.
           const latest = all.at(-1);
-          if (latest && latest.senderId !== userId && markedRead.current !== latest.id && document.visibilityState === "visible") {
+          if (latest && latest.senderId !== userId && verifiedHere && markedRead.current !== latest.id && document.visibilityState === "visible") {
             markedRead.current = latest.id;
             void dmFetch("/api/dm", { action: "read", id: current.id, message: latest.id }).catch(() => { markedRead.current = null; });
           }
@@ -156,9 +166,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
     // New messages arrive through the personal stream; the interval also drives crypto sync.
     // Our own read markers need no crypto refresh.
     const changed = (event: Event) => { if ((event as CustomEvent<DmNotice | undefined>).detail?.reason !== "read") void refresh(); };
+    // Only on becoming visible: the hidden transition also fires while the page unloads, and WebKit
+    // refuses a fetch started then ("cannot load … due to access control checks").
+    const shown = () => { if (document.visibilityState === "visible") void refresh(); };
     window.addEventListener(DM_CHANGED_EVENT, changed);
-    document.addEventListener("visibilitychange", changed);
-    return () => { window.clearTimeout(initial); window.clearInterval(timer); window.removeEventListener(DM_CHANGED_EVENT, changed); document.removeEventListener("visibilitychange", changed); };
+    document.addEventListener("visibilitychange", shown);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); window.removeEventListener(DM_CHANGED_EVENT, changed); document.removeEventListener("visibilitychange", shown); };
   }, [refresh, selected]);
 
   async function run(fn: () => Promise<void>) {
@@ -225,7 +238,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           {active && !group && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button>}
         </div>
       </header>
-      <div className="border-b px-4 py-1.5"><p className="text-xs text-muted-foreground" role="status">{status}</p>{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
+      <div className="border-b px-4 py-1.5"><p className="text-xs text-muted-foreground" role="status">{status}</p>{unverifiedBrowser && <p className="mt-1 text-sm" data-unverified-browser>This browser is a new device on your account. Until you verify it from your other signed-in device in Devices and recovery, it can’t send messages and others’ messages can’t be read here.</p>}{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
       {active && <DmCallPanel key={active.id} conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id && active.status === "accepted" && !active.blocked} />}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {creatingGroup && <NewGroupForm friends={friends} busy={busy} onCancel={() => setCreatingGroup(false)} onCreate={(members, name) => void run(() => createGroup(members, name))} />}
@@ -238,6 +251,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           <h2 className="font-semibold">Verified devices and recovery</h2>
           <p className="max-w-3xl text-sm text-muted-foreground">Message content is encrypted in your browser. New contacts are trusted on first use: their identity is pinned and a change blocks the conversation. Verify their device over another trusted channel to rule out a server in between. The server sees participants and timing. A compromised browser or modified web application can access messages. <Link href="https://github.com/Livvux/openDiscord/blob/main/docs/PRIVATE-MESSAGES.md" className="underline">Privacy details</Link></p>
           <p className="break-all text-xs">This device: <code>{client?.deviceId ?? "Opening…"}</code></p>
+          {persistenceHint && <p className="max-w-3xl rounded-lg border p-3 text-sm text-muted-foreground" data-storage-hint>{persistenceHint}</p>}
           <ul className="grid gap-2">{trusted.map((d) => <li key={`${d.userId}:${d.id}`} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border p-3"><div className="min-w-0 flex-1"><p className="text-sm">{d.userId === userId ? "Your device" : personName(d.userId)} · {d.id === client?.deviceId ? "This browser" : d.id.slice(0, 8)}</p><p className="break-all text-xs text-muted-foreground">{d.fingerprint}</p><p className="text-xs">{d.verified ? "Verified" : "Not verified"}</p></div>{!d.verified && <Button disabled={busy || !client} onClick={() => void run(() => client!.startVerification(d.userId, d.id))}>Verify device {d.id.slice(0, 8)}</Button>}{d.userId === userId && d.id !== client?.deviceId && d.verified && <Button variant="outline" disabled={busy} onClick={() => void run(async () => { await client!.shareHistory(d.id); setStatus("Recovery transfer queued; waiting for the other device to confirm storage."); })}>Share identity and history</Button>}{d.userId === userId && d.id !== client?.deviceId && <Button variant="destructive" disabled={busy} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "revoke", id: d.id }); })}>Revoke device {d.id.slice(0, 8)}</Button>}</li>)}</ul>
           {devices.filter((d) => d.revoked).map((d) => <p key={d.id} className="text-xs text-muted-foreground">Revoked device {d.id.slice(0, 8)}</p>)}
           <p className="text-xs" role="status">{transfers.length ? `${transfers.length} encrypted transfer(s) awaiting storage confirmation.` : "No pending encrypted transfers."}</p>

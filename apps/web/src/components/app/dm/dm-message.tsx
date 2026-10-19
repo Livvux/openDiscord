@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { PrivateMessaging } from "@/lib/dm/client";
 import type { DmAttachment } from "@/lib/dm/contracts";
+import { decryptionHint } from "@/lib/dm/decryption-diagnostics";
 import { DmAttachmentView } from "./dm-attachment";
 import { Avatar, nameColor } from "../avatar";
 import { EmojiText } from "../emoji-text";
@@ -34,6 +35,7 @@ export function PrivateMessageItem({ message, authorName, authorAvatar, onError,
     }
   }
   const created = new Date(message.createdAt);
+  const hint = message.diagnostic ? decryptionHint(message.diagnostic) : null;
   return (
     <ContextMenu onOpenChange={(open) => { if (open) handoffFocus.current = false; }}>
       {/* Direct <p> children (header, then body) are a contract with desktop/tests/native_app_flows.py. */}
@@ -46,6 +48,7 @@ export function PrivateMessageItem({ message, authorName, authorAvatar, onError,
         </p>
         {/* A GIF embed can't live inside <p>; text keeps <p>, which native acceptance reads. */}
         {message.body && gifSource(message.body) ? <div><GifEmbed url={message.body} /></div> : message.body === "" ? null : <p className={`break-words whitespace-pre-wrap ${message.body ? "text-zinc-300" : "text-sm text-destructive"}`} data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>}
+        {hint && <p className="text-xs text-muted-foreground" data-dm-failure-hint>{hint}</p>}
         {message.attachments?.map((file) => <div key={`${file.id}:${file.info}`}><DmAttachmentView file={file} open={openAttachment} /></div>)}
         {!message.own && message.body !== null && <button type="button" className="mt-0.5 min-h-6 w-fit rounded text-xs text-zinc-400 hover:text-zinc-100 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={onReport}>Report private message</button>}
         {notice && <p role="status" className="mt-1 text-xs text-muted-foreground">{notice}</p>}
