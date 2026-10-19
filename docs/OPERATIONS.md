@@ -82,6 +82,21 @@ existing attachments remains a separate acceptance case. The temporary database,
 credential, encrypted input copy and temporary user were removed and their absence checked.
 This is operational recovery evidence, not a security audit.
 
+### Hosted-instance restore evidence, 2026-10-19
+
+The newest scheduled bundle `daily/2026-10-19T03-11-46Z.tar.gz.age` (70,020 bytes) was downloaded with
+the read-only recovery credential, decrypted with the 1Password recovery identity on the operator's
+workstation and restored into a throwaway PostgreSQL 18 container started with `--network none`
+(`pg_restore --no-owner --no-privileges --exit-on-error`). Result: 36 migrations (matching the journal
+and production), and users 3, communities 1, messages 22, attachments 1, each equal to the live
+database for rows created before the snapshot. The single attachment row's object key was present
+in the bundle's media copy (manifest `attachment_references=1`). Avatars and community assets are
+rows in the same `attachment` table, so this check covers all stored media. The bucket lifecycle rule
+`daily-30-days` expires `daily/` after 30 days; `scanner-config/` has no expiry rule (two 12 KB objects).
+The container, decrypted files, recovery identity copy and credential file were removed afterwards.
+Not covered: booting the application against the restored database and re-uploading media to a
+fresh bucket.
+
 
 ### Hosted maintenance lifecycle
 
