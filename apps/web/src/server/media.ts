@@ -50,7 +50,7 @@ const storage = configuredAttachmentStorage();
 /** Uploads are offered when private local or S3 storage is configured. */
 export const mediaEnabled = storage !== null;
 
-function requireStorage() {
+export function requireStorage() {
   if (!storage) throw new AppError("forbidden", "Media uploads aren't enabled on this instance.");
   return storage;
 }
@@ -169,6 +169,26 @@ export async function uploadAttachment(
   }
 }
 
+/**
+ * Stores end-to-end encrypted DM ciphertext as is. It cannot be scanned or decoded: the server never has
+ * the key. The caller checks conversation membership; sending links it to a message.
+ */
+export async function uploadDmCiphertext(userId: string, contentLength: number, body: (limit: number) => Promise<Uint8Array>): Promise<AttachmentView> {
+  requireStorage();
+  await consume(`upload:${userId}`, UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) throw invalid("The upload needs a Content-Length.");
+  if (contentLength > MAX_FILE_BYTES) throw invalid(`Files can be at most ${mb(MAX_FILE_BYTES)}.`);
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    const data = await body(contentLength);
+    if (data.byteLength === 0) throw invalid("The file is empty.");
+    return await persistUpload(userId, null, { data, contentType: "application/octet-stream", width: 0, height: 0, filename: null, ext: "bin" });
+  } finally {
+    activeUploads -= 1;
+  }
+}
+
 /** Private staging for one bounded archive; no delivery is possible until the import links it. */
 export async function stageArchiveAttachment(userId: string, image: boolean, filename: string | null, raw: Uint8Array, signal: AbortSignal): Promise<AttachmentView> {
   signal.throwIfAborted();
@@ -205,9 +225,9 @@ export async function stageAvatarAttachment(userId: string, raw: Uint8Array, sig
 }
 
 async function storeUpload(userId: string, channelId: string | null, image: boolean, rawFilename: string | null, raw: Uint8Array, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal, imageOptions?: ImageProcessingOptions): Promise<AttachmentView> {
-  const storage = requireStorage();
+  requireStorage();
   await scanAttachment(raw);
-  let stored: { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
+  let stored: StoredUpload;
   if (image) {
     const processed = await processImage(raw, imageOptions);
     stored = { data: processed.data, contentType: "image/webp", width: processed.width, height: processed.height, filename: null, ext: "webp" };
@@ -217,13 +237,20 @@ async function storeUpload(userId: string, channelId: string | null, image: bool
     stored = { data: raw, contentType: "application/octet-stream", width: 0, height: 0, filename: cleanFilename(rawFilename), ext: "bin" };
   }
   signal?.throwIfAborted();
+  return persistUpload(userId, channelId, stored, maximumPending, signal);
+}
+
+type StoredUpload = { data: Uint8Array; contentType: string; width: number; height: number; filename: string | null; ext: string };
+/** Reserves quota and writes the object; shared by scanned community uploads and opaque DM ciphertext. */
+export async function persistUpload(userId: string, channelId: string | null, stored: StoredUpload, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal): Promise<AttachmentView> {
+  const storage = requireStorage();
   const key = `attachments/${randomUUID()}.${stored.ext}`;
   // Row first: if the upload fails afterwards, the unlinked row lets the sweeper clean up.
   // Checks and insert are serialised per person, so parallel uploads can't slip past the caps.
   const row = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
     const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
-      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId), isNull(attachment.assetId), isNull(attachment.avatarUserId)));
+      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId)));
     if (unlinked >= maximumPending) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
     const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
       .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
@@ -314,7 +341,7 @@ export function sweepAttachments(now = Date.now()): Promise<number> {
 async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
   const stale = await db.transaction(async (tx) => {
-    const eligible = and(isNull(attachment.messageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))));
+    const eligible = and(isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))));
     const rows = await tx.select({ id: attachment.id }).from(attachment).where(eligible).limit(200).for("update", { skipLocked: true });
     if (rows.length === 0) return [];
     // Claim before storage I/O so a concurrent sender cannot reattach an object being removed.
@@ -325,7 +352,7 @@ async function sweep(now: number): Promise<number> {
   await Promise.all(stale.map(async ({ id, key }) => {
     if (await storage.remove(key).catch(() => false)) removed.push(id);
   }));
-  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), isNotNull(attachment.linkedAt)));
+  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), isNotNull(attachment.linkedAt)));
   return removed.length;
 }
 

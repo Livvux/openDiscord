@@ -4,6 +4,8 @@ import { CopyIcon, FlagIcon, HashIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { PrivateMessaging } from "@/lib/dm/client";
+import type { DmAttachment } from "@/lib/dm/contracts";
+import { DmAttachmentView } from "./dm-attachment";
 import { Avatar, nameColor } from "../avatar";
 import { EmojiText } from "../emoji-text";
 import { GifEmbed } from "../gif-embed";
@@ -13,8 +15,9 @@ export type MessageView = Awaited<ReturnType<PrivateMessaging["decrypt"]>>[numbe
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
 
 /** A private message in the channel layout. These actions use only text already decrypted in this browser. Reporting keeps its explicit disclosure step. */
-export function PrivateMessageItem({ message, authorName, authorAvatar, onError, onReport }: {
+export function PrivateMessageItem({ message, authorName, authorAvatar, onError, onReport, openAttachment }: {
   message: MessageView;
+  openAttachment: (file: DmAttachment) => Promise<Blob>;
   authorName: string;
   authorAvatar: string | null;
   onError: (error: string) => void;
@@ -42,14 +45,15 @@ export function PrivateMessageItem({ message, authorName, authorAvatar, onError,
           <time dateTime={message.createdAt} className="text-[11px] whitespace-nowrap text-zinc-400" suppressHydrationWarning>{dateTimeFormat.format(created)}</time>
         </p>
         {/* A GIF embed can't live inside <p>; text keeps <p>, which native acceptance reads. */}
-        {message.body && gifSource(message.body) ? <div><GifEmbed url={message.body} /></div> : <p className={`break-words whitespace-pre-wrap ${message.body ? "text-zinc-300" : "text-sm text-destructive"}`} data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>}
-        {!message.own && message.body && <button type="button" className="mt-0.5 min-h-6 w-fit rounded text-xs text-zinc-400 hover:text-zinc-100 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={onReport}>Report private message</button>}
+        {message.body && gifSource(message.body) ? <div><GifEmbed url={message.body} /></div> : message.body === "" ? null : <p className={`break-words whitespace-pre-wrap ${message.body ? "text-zinc-300" : "text-sm text-destructive"}`} data-dm-failure-stage={message.diagnostic?.stage} data-dm-failure-code={message.diagnostic?.code} data-dm-shield-color={message.diagnostic?.shieldColor} data-dm-shield-code={message.diagnostic?.shieldCode}>{message.body ? <EmojiText text={message.body} /> : message.error}</p>}
+        {message.attachments?.map((file) => <div key={`${file.id}:${file.info}`}><DmAttachmentView file={file} open={openAttachment} /></div>)}
+        {!message.own && message.body !== null && <button type="button" className="mt-0.5 min-h-6 w-fit rounded text-xs text-zinc-400 hover:text-zinc-100 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={onReport}>Report private message</button>}
         {notice && <p role="status" className="mt-1 text-xs text-muted-foreground">{notice}</p>}
       </ContextMenuTrigger>
       <ContextMenuContent aria-label="Private message actions" finalFocus={() => handoffFocus.current ? false : true}>
         {message.body && <ContextMenuItem onClick={() => void copy(message.body!, "Message text copied.")}><CopyIcon aria-hidden />Copy text</ContextMenuItem>}
         <ContextMenuItem onClick={() => void copy(message.id, "Message ID copied.")}><HashIcon aria-hidden />Copy message ID</ContextMenuItem>
-        {!message.own && message.body && <><ContextMenuSeparator /><ContextMenuItem onClick={() => { handoffFocus.current = true; onReport(); }}><FlagIcon aria-hidden />Report private message</ContextMenuItem></>}
+        {!message.own && message.body !== null && <><ContextMenuSeparator /><ContextMenuItem onClick={() => { handoffFocus.current = true; onReport(); }}><FlagIcon aria-hidden />Report private message</ContextMenuItem></>}
       </ContextMenuContent>
     </ContextMenu>
   );

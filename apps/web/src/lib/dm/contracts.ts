@@ -16,12 +16,29 @@ export const encryptedMessageSchema = z.object({
   session_id: base64Schema.max(128),
   ciphertext: base64Schema.min(32).max(DM_MAX_CIPHERTEXT),
 }).strict();
+/** Same per-file cap as community file uploads. */
+export const DM_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+export const DM_MAX_ATTACHMENTS = 4;
+/** The SDK's Matrix attachment information (key, IV, SHA-256 hash); a missing hash is never accepted. */
+const mediaInfoSchema = z.string().max(4000).refine((value) => {
+  try { return z.object({ v: z.string(), key: z.object({ k: base64Schema }).passthrough(), iv: base64Schema, hashes: z.object({ sha256: base64Schema }).passthrough() }).passthrough().safeParse(JSON.parse(value)).success; } catch { return false; }
+}, "Attachment encryption information needs a SHA-256 hash.");
+/** Lives only inside the Megolm payload: the server sees an opaque ID and the ciphertext size. */
+export const dmAttachmentSchema = z.object({
+  id: z.uuid(),
+  info: mediaInfoSchema,
+  name: z.string().min(1).max(255),
+  mime: z.string().max(255),
+  size: z.number().int().nonnegative().max(DM_MAX_ATTACHMENT_BYTES),
+}).strict();
+export type DmAttachment = z.infer<typeof dmAttachmentSchema>;
 export const plainMessageSchema = z.object({
   msgtype: z.literal("m.text"),
-  body: z.string().trim().min(1).max(DM_MAX_TEXT),
+  body: z.string().trim().max(DM_MAX_TEXT),
   conversation: z.uuid(),
   transaction: z.uuid(),
-}).strict();
+  attachments: z.array(dmAttachmentSchema).min(1).max(DM_MAX_ATTACHMENTS).optional(),
+}).strict().refine((message) => message.body.length > 0 || !!message.attachments, "A message needs text or an attachment.");
 export type PlainDirectMessage = z.infer<typeof plainMessageSchema>;
 export type DmDeviceAuth = { userId: string; sessionId: string; deviceId: string; secret: string };
 export type DirectConversation = { id: string; peerId: string; peerName: string; peerAvatar: string | null; requestedBy: string; status: "pending" | "accepted" | "rejected"; blocked: boolean; ownBlocked: boolean; /** Messages from the peer after the read marker. */ unread: number };

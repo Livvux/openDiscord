@@ -7,8 +7,8 @@ import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { z } from "zod";
 import { db } from "@/db";
-import { dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReadState, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
-import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
+import { attachment, dmBackup, dmConversation, dmCryptoReceipt, dmDevice, dmIdentity, dmKey, dmMailbox, dmMessage, dmReadState, dmReport, dmSignature, instanceAuditLog, member, session, user, userBlock } from "@/db/schema";
+import { base64Schema, deviceIdSchema, deviceSecretSchema, DM_DOMAIN, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, encryptedMessageSchema, matrixUser, type DeviceView, type DirectConversation, type DmDeviceAuth } from "@/lib/dm/contracts";
 import { avatarOf } from "./avatars";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { consume } from "./limits";
@@ -70,6 +70,17 @@ async function conversationFor(tx: Tx | typeof db, actor: string, id: string, se
     await assertActiveUser(peer, tx);
   }
   return { ...row, peer };
+}
+/** Throws "not found" unless the person may post to this conversation now. */
+export async function assertCanSendDirect(actor: string, id: string): Promise<void> {
+  await conversationFor(db, actor, id, true);
+}
+/** The conversation of a sent DM file, for membership checks; unsent uploads are never readable. */
+export async function directAttachmentFor(actor: string, id: string): Promise<{ key: string }> {
+  const [row] = await db.select({ key: attachment.key, conversationId: dmMessage.conversationId }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).where(eq(attachment.id, parse(uuid, id)));
+  if (!row) throw notFound("Attachment not found.");
+  await conversationFor(db, actor, row.conversationId);
+  return { key: row.key };
 }
 async function activeSession(tx: Tx, actor: string, sessionId: string): Promise<void> {
   await assertActiveUser(actor, tx);
@@ -157,7 +168,7 @@ export async function listDirectMessages(actor: string, id: string, before?: str
   return { messages: rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), hasMore: rows.length === 50 };
 }
 export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input: unknown) {
-  const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema }).strict(), input);
+  const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema, attachments: z.array(uuid).max(DM_MAX_ATTACHMENTS).optional() }).strict(), input);
   await consume(`dm-send:${auth.userId}`, 5, 5000);
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
@@ -170,6 +181,14 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
       return { id: existing.id, peer: null };
     }
     const [created] = await tx.insert(dmMessage).values({ conversationId: id, senderId: auth.userId, deviceId: device.id, transactionId: data.transactionId, content: data.content }).returning({ id: dmMessage.id });
+    const files = [...new Set(data.attachments ?? [])];
+    if (files.length) {
+      // Only the sender's own unsent opaque uploads; community, avatar and asset files have other links or a channel.
+      const linked = await tx.update(attachment).set({ dmMessageId: created.id, linkedAt: new Date() })
+        .where(and(inArray(attachment.id, files), eq(attachment.uploaderId, auth.userId), isNull(attachment.channelId), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), isNull(attachment.linkedAt)))
+        .returning({ id: attachment.id });
+      if (linked.length !== files.length) throw invalid("An attachment is no longer available. Remove it and attach it again.");
+    }
     // Replying means the sender has seen everything before it (Discord semantics), even from a stale device.
     await advanceRead(tx, id, auth.userId, created.id);
     return { id: created.id, peer };
@@ -471,12 +490,14 @@ export async function resolveDirectReport(actor: AdminActor, rawId: unknown): Pr
 export async function exportDirectData(actor: string) {
   const conversations = await listDirectConversations(actor);
   const ids = conversations.map((c) => c.id);
-  const [devices, identity, backups, messages, reports, readMarkers] = await Promise.all([
+  const [devices, identity, backups, messages, reports, readMarkers, files] = await Promise.all([
     listDmDevices(actor), db.select().from(dmIdentity).where(eq(dmIdentity.userId, actor)),
     db.select().from(dmBackup).where(eq(dmBackup.userId, actor)),
     ids.length ? db.select().from(dmMessage).where(inArray(dmMessage.conversationId, ids)).orderBy(asc(dmMessage.id)) : [],
     db.select({ messageId: dmReport.messageId, reason: dmReport.reason, excerpt: dmReport.excerpt, createdAt: dmReport.createdAt, resolvedAt: dmReport.resolvedAt }).from(dmReport).where(eq(dmReport.reporterId, actor)),
     db.select({ conversationId: dmReadState.conversationId, lastReadId: dmReadState.lastReadId }).from(dmReadState).where(eq(dmReadState.userId, actor)),
+    // References only: the ciphertext is downloadable while the conversation exists; keys are in message ciphertext.
+    ids.length ? db.select({ id: attachment.id, messageId: attachment.dmMessageId, size: attachment.size, createdAt: attachment.createdAt }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).where(inArray(dmMessage.conversationId, ids)).orderBy(asc(attachment.id)) : [],
   ]);
-  return { conversations, devices, publicIdentity: identity[0]?.keys ?? null, encryptedBackups: backups.map((b) => ({ id: b.id, ciphertext: b.ciphertext, createdAt: b.createdAt })), encryptedMessages: messages, reports, readMarkers };
+  return { conversations, devices, publicIdentity: identity[0]?.keys ?? null, encryptedBackups: backups.map((b) => ({ id: b.id, ciphertext: b.ciphertext, createdAt: b.createdAt })), encryptedMessages: messages, encryptedAttachments: files.map((f) => ({ ...f, url: `/api/dm/attachments/${f.id}` })), reports, readMarkers };
 }

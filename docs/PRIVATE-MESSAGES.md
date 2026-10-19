@@ -38,6 +38,39 @@ may own an account's crypto store at a time. Reload retains state; clearing brow
 local keys. The IndexedDB store is encrypted, but its unlocking secret resides in the same browser
 origin. This protects neither against a compromised browser nor against code running in that origin.
 
+## Encrypted attachments
+
+Images and files are encrypted in the sender's browser with the SDK's Matrix attachment format
+(`Attachment.encrypt`: AES-256-CTR with a fresh random key and IV, plus a SHA-256 hash of the
+ciphertext), the same primitive the recovery backups use. Only ciphertext is uploaded, to the instance's
+existing private object storage. The key, IV, hash, original file name, MIME type and size travel inside
+the Megolm-encrypted message, so they are protected like message text. The server stores an opaque
+object with a random ID, uploader and ciphertext size (equal to the file size: AES-CTR adds no padding),
+and learns which message links which object IDs. It never receives a plaintext byte, name or type.
+
+The upload endpoint accepts at most 25 MB per file (the community file limit) from a member who may post
+to the conversation, at most four files per message, and shares the per-account upload rate, pending
+upload and daily byte quotas with community uploads. An upload becomes readable only after an encrypted
+message links it, and only to that conversation's participants; it is served as `application/octet-stream`
+download with `nosniff` and a sandbox CSP. The receiving browser downloads the ciphertext, requires its
+length to match the authenticated payload, verifies the hash and decrypts with the SDK; any mismatch shows
+an error and no content. Images in PNG, JPEG, WebP or GIF are displayed inline from a local object URL
+that is revoked when the message leaves the screen; every other type, including SVG, is only offered as a
+download. Decrypted bytes are not re-encoded: image metadata such as EXIF/GPS that the sender's file
+contains reaches the recipient unchanged.
+
+**Malware scanning cannot apply.** The optional ClamAV scanner (`CLAMAV_HOST`) inspects community
+uploads, but the server never has the key to DM attachments, so it cannot scan, re-encode or
+content-filter them. Recipients should treat files from others with the usual care.
+
+Deleting a conversation, including through either participant's account deletion, deletes its
+messages and unlinks their attachments; the media sweeper then removes the stored ciphertext. Unsent
+uploads are removed after an hour. Account export lists the encrypted attachment references (ID,
+message, ciphertext size, download path) for the caller's conversations; the keys remain inside the
+exported message ciphertext. Recovery backups and device transfers carry the attachment keys inside
+the archived message, not the files; an archive copy shows the text only, and the file stays
+retrievable only while its conversation exists on the server.
+
 ## Additional devices and recovery
 
 A new browser enrolls a distinct device. Verify it against an existing trusted device using SAS and
@@ -127,7 +160,7 @@ selected excerpt; excerpts are recipient statements and cannot be independently 
 server. Review is restricted to active instance administrators and is audited.
 
 Account export version 6 includes conversation metadata, device metadata, public identity, ciphertext
-messages, ciphertext backups and the caller's reports; version 11 adds the caller's read markers. It never includes device bearer secrets or
+messages, ciphertext backups and the caller's reports; version 11 adds the caller's read markers; version 12 adds encrypted attachment references. It never includes device bearer secrets or
 browser private keys. Account deletion cascades device keys, mailbox contents, backups, conversation
 ciphertext and related reports. Previously downloaded plaintext, private recovery files and other
 participants' local browser copies cannot be remotely erased.
@@ -135,7 +168,7 @@ participants' local browser copies cannot be remotely erased.
 ## Operational limits and evidence
 
 Limits: ten active devices, 500 conversations initiated within the account's checked conversation
-cap, 4,000-character messages, 24,000-character message ciphertext, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
+cap, 4,000-character messages, 24,000-character message ciphertext, four encrypted attachments of up to 25 MB each per message, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
 events),
 8 KB per peer device event, 40 device deliveries per crypto operation, 100 available one-time prekeys and 100,000 lifetime prekey
 or transaction entries per device. Enroll a replacement device when a lifetime limit is reached.
@@ -153,7 +186,8 @@ Dependency evidence and audit boundaries:
 - [vodozemac and its audit reference](https://github.com/matrix-org/vodozemac)
 - [Matrix client/server encryption and SAS specification](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption)
 
-Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-matrix.integration.test.ts`,
+Automated coverage is maintained in `tests/dm-crypto.test.ts`, `tests/dm-attachments.test.ts`,
+`tests/dm-attachments.integration.test.ts`, `e2e/dm-attachments.spec.ts`, `tests/dm-matrix.integration.test.ts`,
 `tests/direct-messages.integration.test.ts`, `tests/dm-reset.integration.test.ts` and
 `e2e/direct-messages.spec.ts`; passing results must be checked on the exact release commit. Tests and
 upstream library audits do not replace an independent review of this integration.

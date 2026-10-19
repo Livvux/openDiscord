@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { PrivateMessages } from "@/components/app/dm/private-messages";
 import { ownAvatar } from "@/server/avatars";
 import { homeFriends } from "@/server/home";
+import { mediaEnabled } from "@/server/media";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Private messages" };
@@ -15,5 +16,5 @@ async function Messages({ searchParams }: Pick<PageProps<"/app/messages">, "sear
   const target = typeof params.to === "string" && params.to.length <= 64 && params.to !== user.id ? params.to : undefined;
   const targetIsFriend = !!target && friends.some((f) => f.id === target && f.state === "friend");
   // Remount per target so a new ?to= selects its conversation (the encryption client is cached).
-  return <PrivateMessages key={target ?? ""} userId={user.id} userName={user.name} userAvatar={avatar} target={target} targetIsFriend={targetIsFriend} />;
+  return <PrivateMessages key={target ?? ""} userId={user.id} userName={user.name} userAvatar={avatar} target={target} targetIsFriend={targetIsFriend} attachmentsEnabled={mediaEnabled} />;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { SendHorizontalIcon, ShieldCheckIcon, SmilePlusIcon } from "lucide-react";
+import { FileIcon, PaperclipIcon, SendHorizontalIcon, ShieldCheckIcon, SmilePlusIcon, XIcon } from "lucide-react";
 import { EmojiSelector } from "../emoji-selector";
 import { GifSelector } from "../gif-selector";
 import { insertEmoji } from "@/lib/emoji";
@@ -16,7 +16,8 @@ import { UserContextMenu } from "../user-context-menu";
 import { PrivateMessageItem, type MessageView } from "./dm-message";
 import { IdentityReset } from "./identity-reset";
 import { PeerProfile } from "./peer-profile";
-import { DM_MAX_TEXT, type DeviceView, type DirectConversation, type DirectEnvelope } from "@/lib/dm/contracts";
+import { shortFilename } from "@/lib/filename";
+import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_TEXT, type DeviceView, type DirectConversation, type DirectEnvelope } from "@/lib/dm/contracts";
 import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
 import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, type TrustedDevice, type VerificationView } from "@/lib/dm/client";
 
@@ -31,9 +32,11 @@ interface PrivateMessagesProps {
   target?: string;
   /** Friends need no message request: opening ?to= starts the conversation. */
   targetIsFriend?: boolean;
+  /** Encrypted files need private object storage on this instance. */
+  attachmentsEnabled?: boolean;
 }
 
-export function PrivateMessages({ userId, userName, userAvatar, target, targetIsFriend = false }: PrivateMessagesProps) {
+export function PrivateMessages({ userId, userName, userAvatar, target, targetIsFriend = false, attachmentsEnabled = false }: PrivateMessagesProps) {
   const [client, setClient] = useState<PrivateMessaging | null>(null);
   const [conversations, setConversations] = useState<DirectConversation[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -44,6 +47,9 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const [envelopes, setEnvelopes] = useState<DirectEnvelope[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [text, setText] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const openAttachment = useCallback((file: Parameters<PrivateMessaging["openAttachment"]>[0]) => client ? client.openAttachment(file) : Promise.reject(new Error("Encryption is unavailable.")), [client]);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   useLayoutEffect(() => {
@@ -210,12 +216,23 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           {active.status === "pending" && <div className="grid gap-3 p-4"><p>{active.requestedBy === userId ? "Your message request is waiting for acceptance." : "Accept this request to begin an encrypted conversation."}</p>{active.requestedBy !== userId && <div className="flex gap-2">{(["accepted", "rejected"] as const).map((s) => <Button key={s} disabled={busy || active.blocked} variant={s === "accepted" ? "default" : "outline"} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "respond", id: active.id, status: s }); })}>{s === "accepted" ? "Accept message request" : "Decline request"}</Button>)}</div>}</div>}
           {hasMore && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void run(loadEarlier)}>Load earlier encrypted messages</Button>}
           {active.status === "accepted" && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="lg" status={null} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
-          <div role="log" aria-label={`Private conversation with ${active.peerName}`}><ol className="grid py-2">{messages.map((m) => <PrivateMessageItem key={m.id} message={m} authorName={m.own ? userName : active.peerName} authorAvatar={m.own ? userAvatar : active.peerAvatar} onError={setError} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
+          <div role="log" aria-label={`Private conversation with ${active.peerName}`}><ol className="grid py-2">{messages.map((m) => <PrivateMessageItem key={m.id} message={m} authorName={m.own ? userName : active.peerName} authorAvatar={m.own ? userAvatar : active.peerAvatar} onError={setError} openAttachment={openAttachment} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
         </>}
-        {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea ref={reportTextarea} autoFocus className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label><label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
+        {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea ref={reportTextarea} autoFocus className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label>{!!report.body && <label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>}{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose && report.body ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
       </div>
-      {active?.status === "accepted" && !active.blocked && <form className="px-4 pb-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && text.trim()) void run(async () => { await client.send(active.id, active.peerId, text); setText(""); refocus.current = true; }); }}>
+      {active?.status === "accepted" && !active.blocked && <form className="px-4 pb-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && (text.trim() || files.length)) void run(async () => { await client.send(active.id, active.peerId, text, files); setText(""); setFiles([]); refocus.current = true; }); }}>
+        {files.length > 0 && <ul aria-label="Encrypted attachments" className="flex flex-wrap gap-2 pb-2">{files.map((file, index) => <li key={`${file.name}:${index}`} className="flex max-w-60 items-center gap-1 rounded-md bg-white/5 py-1 pr-1 pl-2 text-xs"><FileIcon aria-hidden className="size-4 shrink-0" /><span className="min-w-0 break-all">{shortFilename(file.name, 32)}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${file.name}`} disabled={busy} onClick={() => setFiles((list) => list.filter((_, i) => i !== index))}><XIcon /></Button></li>)}</ul>}
         <div className="flex items-end gap-1 rounded-lg bg-white/5 px-2 py-1.5">
+          {attachmentsEnabled && <>
+            <input ref={fileInput} type="file" multiple hidden onChange={(e) => {
+              const picked = [...(e.target.files ?? [])];
+              e.target.value = "";
+              const rejected = picked.find((file) => file.size === 0 || file.size > DM_MAX_ATTACHMENT_BYTES);
+              if (rejected) { setError(`${rejected.name}: files must be between 1 byte and ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`); return; }
+              setFiles((list) => [...list, ...picked].slice(0, DM_MAX_ATTACHMENTS));
+            }} />
+            <Button type="button" variant="ghost" size="icon" aria-label={`Attach encrypted files (up to ${DM_MAX_ATTACHMENTS}, ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB each)`} disabled={!client || busy || files.length >= DM_MAX_ATTACHMENTS} onClick={() => fileInput.current?.click()}><PaperclipIcon /></Button>
+          </>}
           <EmojiSelector returnFocusTo={textarea}
             trigger={<Button type="button" variant="ghost" size="icon" aria-label="Choose emoji" disabled={!client || busy}><SmilePlusIcon /></Button>}
             onPick={(emoji) => {
@@ -231,7 +248,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           <textarea ref={textarea} id="private-message" rows={1} className="max-h-48 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-zinc-500" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
             disabled={!client || busy} placeholder={`Message @${active.peerName}`} />
-          <Button type="submit" variant="ghost" size="icon" disabled={!client || busy || !text.trim()}><SendHorizontalIcon aria-hidden /><span className="sr-only">Send encrypted message</span></Button>
+          <Button type="submit" variant="ghost" size="icon" disabled={!client || busy || (!text.trim() && !files.length)}><SendHorizontalIcon aria-hidden /><span className="sr-only">Send encrypted message</span></Button>
         </div>
       </form>}
     </section>

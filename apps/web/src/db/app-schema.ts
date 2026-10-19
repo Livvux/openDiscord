@@ -17,6 +17,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
+import { dmMessage } from "./dm-schema";
 
 const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
 
@@ -345,6 +346,8 @@ export const attachment = pgTable(
     uploaderId: text("uploader_id").references(() => user.id, { onDelete: "set null" }),
     /** The account whose profile picture this is; cleared on replace/removal/account deletion, then swept. */
     avatarUserId: text("avatar_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** End-to-end encrypted DM file: opaque ciphertext only; name, type and key live inside the Megolm payload. */
+    dmMessageId: uuid("dm_message_id").references(() => dmMessage.id, { onDelete: "set null" }),
     /** Set once when sent; a removed message's images can never be re-attached. */
     linkedAt: timestamp("linked_at", { withTimezone: true }),
     key: text("key").notNull().unique(),
@@ -362,6 +365,7 @@ export const attachment = pgTable(
     check("attachment_avatar_link_valid", sql`${t.avatarUserId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.assetId} is null and ${t.linkedAt} is not null)`),
     check("attachment_asset_link_valid", sql`${t.assetId} is null or (${t.messageId} is null and ${t.channelId} is null and ${t.linkedAt} is not null)`),
     index("attachment_message_idx").on(t.messageId),
+    index("attachment_dm_message_idx").on(t.dmMessageId),
     index("attachment_unlinked_idx").on(t.createdAt).where(sql`${t.messageId} is null and ${t.assetId} is null`),
     index("attachment_uploader_idx").on(t.uploaderId, t.createdAt),
   ],

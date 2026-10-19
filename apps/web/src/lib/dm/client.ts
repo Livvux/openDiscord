@@ -4,7 +4,7 @@ import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
 import { dmMetadataSchema as metadataSchema } from "./enrollment";
 import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
-import { DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type RecoveryFile } from "./contracts";
+import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type DmAttachment, type RecoveryFile } from "./contracts";
 import { decryptionDiagnostic, publicShieldCode, publicShieldColor, type DecryptionDiagnostic, type DecryptionStage, type ShieldDiagnostic } from "./decryption-diagnostics";
 
 type SDK = typeof Matrix;
@@ -12,7 +12,10 @@ type Outgoing = Matrix.KeysUploadRequest | Matrix.KeysQueryRequest | Matrix.Keys
 type Metadata = { id: string; secret: string; storeKey: string };
 export type TrustedDevice = { userId: string; id: string; verified: boolean; fingerprint: string };
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
-export type PrivateMessageView = { id: string; own: boolean; createdAt: string; senderId: string } & ({ body: string; error?: never; diagnostic?: never } | { body: null; error: string; diagnostic: DecryptionDiagnostic });
+export type PrivateMessageView = { id: string; own: boolean; createdAt: string; senderId: string } & ({ body: string; attachments: DmAttachment[]; error?: never; diagnostic?: never } | { body: null; attachments?: never; error: string; diagnostic: DecryptionDiagnostic });
+/** Shown inline from decrypted bytes; anything else (including SVG) is only offered as a download. */
+const INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+export const inlineImage = (file: DmAttachment) => INLINE_IMAGE_TYPES.has(file.mime);
 const recoverySchema = z.object({ format: z.literal("opendiscord.e2ee-recovery"), version: z.literal(2), origin: z.url(), userId: z.string(), backupId: z.uuid(), encryptionInfo: z.string().max(4000) }).strict();
 const receiptSchema = z.object({ id: z.uuid(), recipient: z.uuid() }).strict();
 const transferSchema = recoverySnapshotSchema.extend({ recipient: z.uuid(), transferId: z.uuid() }).strict();
@@ -264,7 +267,12 @@ export class PrivateMessaging {
       }
     });
   }
-  async send(conversation: string, peer: string, text: string): Promise<void> {
+  async send(conversation: string, peer: string, text: string, files: File[] = []): Promise<void> {
+    if (files.length > DM_MAX_ATTACHMENTS) throw new Error(`Attach at most ${DM_MAX_ATTACHMENTS} files.`);
+    if (files.some((file) => file.size === 0 || file.size > DM_MAX_ATTACHMENT_BYTES)) throw new Error(`Files must be between 1 byte and ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+    // Outside the crypto queue: large uploads must not stall sync and decryption. Unsent uploads expire after an hour.
+    const attachments: DmAttachment[] = [];
+    for (const file of files) attachments.push(await this.uploadEncrypted(conversation, file));
     return this.serial(async () => {
       await this.query([this.userId, peer]);
       // identityBasedStrategy also shares with own devices signed by our identity, so that identity must be the one we hold or verified.
@@ -288,10 +296,34 @@ export class PrivateMessaging {
       settings.sharingStrategy = this.C.CollectStrategy.identityBasedStrategy();
       for (const request of await this.machine.shareRoomKey(new this.C.RoomId(room), identities.map((id) => new this.C.UserId(matrixUser(id))), settings)) await this.outgoing(request);
       const transaction = crypto.randomUUID();
-      const plain = plainMessageSchema.parse({ msgtype: "m.text", body: text, conversation, transaction });
+      const plain = plainMessageSchema.parse({ msgtype: "m.text", body: text, conversation, transaction, ...(attachments.length ? { attachments } : {}) });
       const content: unknown = JSON.parse(await this.machine.encryptRoomEvent(new this.C.RoomId(room), "m.room.message", JSON.stringify(plain)));
-      await dmFetch("/api/dm", { action: "send", id: conversation, input: { transactionId: transaction, content } }, this.metadata);
+      await dmFetch("/api/dm", { action: "send", id: conversation, input: { transactionId: transaction, content, ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}) } }, this.metadata);
     });
+  }
+  /** SDK Matrix attachment encryption (AES-CTR + SHA-256); only ciphertext leaves the browser. Key, IV, hash, name and type go into the Megolm payload. */
+  private async uploadEncrypted(conversation: string, file: File): Promise<DmAttachment> {
+    const encrypted = this.C.Attachment.encrypt(new Uint8Array(await file.arrayBuffer()));
+    try {
+      const info = encrypted.mediaEncryptionInfo;
+      if (!info) throw new Error("Could not encrypt this file.");
+      const response = await fetch(`/api/dm/attachments?conversation=${encodeURIComponent(conversation)}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: encrypted.encryptedData as Uint8Array<ArrayBuffer>, cache: "no-store", credentials: "same-origin" });
+      const value: unknown = await response.json();
+      if (!response.ok) throw new Error(z.object({ error: z.string() }).safeParse(value).data?.error ?? "The encrypted file could not be uploaded.");
+      const { id } = z.object({ id: z.uuid() }).parse(value);
+      return { id, info, name: file.name.slice(0, 255) || "file", mime: file.type.slice(0, 255), size: file.size };
+    } finally { encrypted.free(); }
+  }
+  /** Downloads ciphertext and decrypts it with the authenticated message's key; the SDK rejects any hash mismatch. */
+  async openAttachment(file: DmAttachment): Promise<Blob> {
+    const response = await fetch(`/api/dm/attachments/${encodeURIComponent(file.id)}`, { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) throw new Error("The encrypted file is unavailable.");
+    const ciphertext = new Uint8Array(await response.arrayBuffer());
+    if (ciphertext.length !== file.size) throw new Error("The encrypted file does not match its message.");
+    const attachment = new this.C.EncryptedAttachment(ciphertext, file.info);
+    try {
+      return new Blob([this.C.Attachment.decrypt(attachment) as Uint8Array<ArrayBuffer>], { type: inlineImage(file) ? file.mime : "application/octet-stream" });
+    } finally { attachment.free(); }
   }
   async decrypt(envelopes: DirectEnvelope[], conversation: string, peer: string): Promise<PrivateMessageView[]> {
     return this.serial(async () => {
@@ -327,7 +359,7 @@ export class PrivateMessaging {
           const verified = historyEntrySchema.parse({ envelope, message: plain, verifiedAt: new Date().toISOString() });
           stage = "replay_storage";
           await this.historyStore.acceptEvent(verified.envelope);
-          result.push({ ...base, body: plain.body });
+          result.push({ ...base, body: plain.body, attachments: plain.attachments ?? [] });
           if (!this.verifiedHistory.has(envelope.id)) {
             this.verifiedHistory.set(envelope.id, verified);
             historyChanged = true;
