@@ -10,6 +10,7 @@ import { createCommunity } from "@/server/communities";
 import { mediaEnabled } from "@/server/media";
 import { pushEnabled } from "@/server/push";
 import { POST as upload } from "@/app/api/channels/[channelId]/attachments/route";
+import { POST as uploadDm } from "@/app/api/dm/attachments/route";
 import { DELETE as unsubscribe, POST as subscribe } from "@/app/api/me/push/route";
 import { REGISTRATION_HEADERS } from "./helpers";
 
@@ -39,6 +40,12 @@ describe("same-origin enforcement with a valid session", () => {
       { params: Promise.resolve({ channelId }) },
     );
     expect((await send("https://evil.example")).status).toBe(403);
+    expect(await db.select().from(attachment).where(eq(attachment.uploaderId, userId))).toHaveLength(0);
+  });
+
+  it.skipIf(!mediaEnabled)("refuses cross-origin encrypted DM attachment uploads", async () => {
+    const response = await uploadDm(request(`/api/dm/attachments?conversation=${randomUUID()}`, "POST", "https://evil.example", { "content-type": "application/octet-stream", "content-length": "5" }, "hello"));
+    expect(response.status).toBe(403);
     expect(await db.select().from(attachment).where(eq(attachment.uploaderId, userId))).toHaveLength(0);
   });
 
