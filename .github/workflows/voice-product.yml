@@ -8,7 +8,7 @@ permissions:
 jobs:
   voice-product:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:18-alpine
@@ -41,7 +41,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - name: Call and presentation regression checks
-        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-product-candidates.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
+        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-support.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
       - name: Build genuine Next product including worker assets
         run: pnpm build
       - name: Start pinned SFU with generation-only room creation
@@ -69,6 +69,11 @@ jobs:
       - run: pnpm --filter web exec playwright install --with-deps chromium
       - name: Three real UI accounts on the production Next server
         run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts
+      - run: pnpm --filter web exec playwright install --with-deps firefox
+      - name: Same acceptance in Firefox (RTCRtpScriptTransform)
+        run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts
+        env:
+          VOICE_PRODUCT_BROWSER: firefox
       - name: SFU listener startup only
         if: always()
         run: docker logs opendiscord-product-livekit 2>&1 | sed -n '/starting LiveKit server/p'
