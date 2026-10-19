@@ -75,7 +75,7 @@ describe("fixed public Voice phase and reason diagnostics", () => {
     ["Encrypted voice ready — microphone off", "ready"],
     ["Encrypted voice ready — microphone on", "ready"],
     ["Voice stopped. Join again to start a fresh call.", "stopped"],
-    ["Voice stopped: you no longer have permission to use this voice channel.", "stopped"],
+    ["Voice stopped: you no longer have permission to use this call.", "stopped"],
     ["Voice stopped (some-reason). Rejoin when ready.", "stopped"],
   ];
   it.each(phases)("maps exact public status %s only to %s", (text, phase) => {

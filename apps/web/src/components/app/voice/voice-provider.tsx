@@ -43,7 +43,7 @@ const endReasons: Record<string, string> = {
   "media-connect-failed": "couldn't connect to the voice server. Check your network, VPN or firewall (Voice needs WebRTC/TURN access), then rejoin.",
   "media-keying-expired": "setting up encrypted media took too long. Rejoin to try again.",
   "media-encryption-failed": "media encryption failed, so the call was stopped. Rejoin to try again.",
-  "media-permission-reduced": "you no longer have permission to use this voice channel.", forbidden: "you no longer have permission to use this voice channel.",
+  "media-permission-reduced": "you no longer have permission to use this call.", forbidden: "you no longer have permission to use this call.",
   unauthorized: "you were signed out. Sign in again, then rejoin.", "session-changed": "you were signed out or your session changed.",
   "lease-expired": "the call connection expired. Rejoin to continue.",
   rate_limited: "too many requests. Wait a moment, then rejoin.", "budget-exhausted": "too many requests. Wait a moment, then rejoin.",
