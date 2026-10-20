@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { authClient } from "@/lib/auth-client";
 import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
 import { VOICE_LIMITS } from "@/lib/voice/contracts";
+import { VoiceHttpError } from "@/lib/voice/http-client";
 import type { VoiceSource } from "@/lib/voice/media-session";
 import { voiceFrameTransform } from "@/lib/voice/support";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
@@ -47,6 +48,7 @@ const endReasons: Record<string, string> = {
   "media-permission-reduced": "you no longer have permission to use this call.", forbidden: "you no longer have permission to use this call.",
   unauthorized: "you were signed out. Sign in again, then rejoin.", "session-changed": "you were signed out or your session changed.",
   "lease-expired": "the call connection expired. Rejoin to continue.",
+  internal: "the voice server had a problem. Rejoin to try again.",
   rate_limited: "too many requests. Wait a moment, then rejoin.", "budget-exhausted": "too many requests. Wait a moment, then rejoin.",
 };
 function voiceEndedText(code: string): string {
@@ -58,6 +60,7 @@ export function voiceStatus(view: VoiceCallView | null, joining: boolean): strin
   if (joining) return "Connecting: creating a temporary Voice device…";
   if (!view) return "Join to review the current audience.";
   if (view.state === "ended") return view.error ? voiceEndedText(view.error) : "Voice stopped. Join again to start a fresh call.";
+  if (view.reconnecting) return "Reconnecting to the voice server… The call ends safely if the connection does not return.";
   if (view.media.mediaState === "ready") return view.media.microphone ? "Encrypted voice ready — microphone on" : "Encrypted voice ready — microphone off";
   if (view.media.mediaState === "keying" || view.state === "agreed") return "Preparing encrypted media…";
   if (view.state === "retry-required") return "Audience attempt expired. Review everyone and retry.";
@@ -77,6 +80,11 @@ export function voiceErrorText(error: unknown, source?: VoiceSource): string {
     if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
     if (error.code === "call-full") return `This call is full (${VOICE_LIMITS.members} devices). Leave on another device to join.`;
     return `Voice stopped (${error.code}). Join again when ready.`;
+  }
+  if (error instanceof VoiceHttpError) {
+    if (error.code === "network" || error.code === "timeout" || (error.status ?? 0) >= 500) return "Couldn't reach the voice server. Check your connection, then rejoin.";
+    if (error.code === "conflict") return "Your previous call is still closing on the server. Wait a few seconds, then rejoin.";
+    if (error.code === "rate_limited") return "Too many requests. Wait a moment, then rejoin.";
   }
   // Permission errors and browser picker cancellation must never claim capture succeeded.
   const name = error instanceof Error ? error.name : "";

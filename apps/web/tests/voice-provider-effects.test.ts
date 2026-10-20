@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
+import { VoiceHttpError } from "@/lib/voice/http-client";
 import { mountCurrentVoiceAudio, voiceErrorText, voiceStatus } from "@/components/app/voice/voice-provider";
 import { automaticVoiceVerificationSteps } from "@/components/app/voice/voice-verification";
 import { canPrepareVoiceAudience, prepareCurrentVoiceAudience } from "@/components/app/voice/voice-audience";
@@ -40,7 +41,7 @@ describe("Voice provider passive audio ownership", () => {
 
 function audienceView(state: VoiceCallView["state"] = "waiting"): VoiceCallView {
   const member = (memberId: string) => ({ memberId, userId: memberId, anchorDeviceId: memberId, voiceDeviceId: memberId, joinNonce: memberId, voiceUserId: memberId, participantIdentity: memberId, displayName: memberId, state: "active" as const });
-  return { state, keysPrepared: true, roster: [member("self"), member("peer")], selfMemberId: "self", admittedMemberIds: ["peer"], sas: [], generation: 1, fenceRevision: 0, localConsentPending: false,
+  return { state, keysPrepared: true, roster: [member("self"), member("peer")], selfMemberId: "self", admittedMemberIds: ["peer"], sas: [], generation: 1, fenceRevision: 0, localConsentPending: false, reconnecting: false,
     media: { mediaState: "none", sources: [], microphone: false, camera: false, screenShare: false, audioBlocked: false, tiles: [] } };
 }
 describe("Voice audience preparation presentation boundary", () => {
@@ -138,6 +139,8 @@ describe("Voice status and failure presentation", () => {
     expect(voiceStatus({ ...view, state: "ended", error: "media-reconnecting" }, false)).toMatch(/^Voice stopped: the connection to the voice server was interrupted/);
     expect(voiceStatus({ ...view, state: "ended", error: "media-connect-failed" }, false)).toMatch(/^Voice stopped: .*network/);
     expect(voiceStatus({ ...view, state: "ended", error: "something-new" }, false)).toBe("Voice stopped (something-new). Rejoin when ready.");
+    expect(voiceStatus({ ...view, reconnecting: true }, false)).toMatch(/^Reconnecting to the voice server…/);
+    expect(voiceStatus({ ...view, state: "ended", reconnecting: true, error: "network" }, false)).toMatch(/^Voice stopped: the connection to the voice server was interrupted/);
   });
   it("turns capture failures into actionable source-specific messages", () => {
     expect(voiceErrorText(new DOMException("x", "NotAllowedError"), "microphone")).toMatch(/Microphone access was blocked/);
@@ -146,5 +149,8 @@ describe("Voice status and failure presentation", () => {
     expect(voiceErrorText(new DOMException("x", "AbortError"), "screen_share")).toMatch(/Screen sharing was cancelled/);
     expect(voiceErrorText(new VoiceCallSessionError("unsupported-media"))).toMatch(/does not support encrypted Voice/);
     expect(voiceErrorText(new VoiceCallSessionError("call-full"))).toBe("This call is full (8 devices). Leave on another device to join.");
+    expect(voiceErrorText(new VoiceHttpError("network"))).toMatch(/Couldn't reach the voice server/);
+    expect(voiceErrorText(new VoiceHttpError("protocol", 503))).toMatch(/Couldn't reach the voice server/);
+    expect(voiceErrorText(new VoiceHttpError("conflict", 409))).toMatch(/previous call is still closing/);
   });
 });

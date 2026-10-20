@@ -7,6 +7,7 @@ import type { VoiceAgreementEventRef, VoiceOwnerAgreementReceived, VoiceOwnerTra
 import { VoiceContextRejected, sameVoiceProposal, type VoiceContextProposal } from "./epoch-agreement";
 import type { VoiceContextControl } from "./context-control";
 import type { VoiceMediaView, MediaSession, InstalledVoiceMediaContext } from "./media-session";
+import { isRetryableVoiceJoinError, retryVoiceRequest, transientVoiceReason, VOICE_JOIN_RETRY_DELAYS_MS, voiceKeyingBudgetMs } from "./retry";
 
 const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 60_000;
 // All HTTP actions share this budget. Optional work leaves 18 slots for heartbeat,
@@ -23,6 +24,8 @@ export type VoiceCallView = Readonly<{
   state: VoiceCallState; roster: readonly Readonly<VoiceSnapshot["members"][number]>[];
   keysPrepared: boolean; fenceRevision: number; generation: number; selfMemberId: string; admittedMemberIds: readonly string[]; sas: readonly VoiceSasView[];
   localConsentPending: boolean; media: VoiceMediaView; error?: string;
+  /** A transient control request failure is being retried within the current lease. */
+  reconnecting: boolean;
 }>;
 export type VoiceCallOptions = {
   /** Exactly one call context: a community voice channel or a direct-message conversation. */
@@ -71,8 +74,12 @@ export class CallSession {
   private transitionTarget?: VoiceSnapshot;
   private transitionFlight?: Promise<void>;
   private lastPollStart = -Infinity;
+  private retrying = 0;
+  // Retries exhausted on a network/5xx failure; the Owner then stops and names it in its fence.
+  private transportFailure?: string;
+  private readonly onRetry = (active: boolean) => { this.retrying += active ? 1 : -1; if (!this.stopped) this.emit(); };
   private actionFlight?: Promise<void>;
-  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], keysPrepared: false, fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false, media: this.mediaView });
+  private view: VoiceCallView = Object.freeze({ state: "verifying", roster: [], keysPrepared: false, fenceRevision: 0, generation: 0, selfMemberId: "", admittedMemberIds: [], sas: [], localConsentPending: false, media: this.mediaView, reconnecting: false });
   private readonly resume = () => { try { this.checkCurrent(); } catch { /* checkCurrent closes synchronously */ } };
   private constructor(private readonly options: VoiceCallOptions) { this.http = createVoiceHttpClient({ fetch: options.fetch }); }
 
@@ -87,8 +94,9 @@ export class CallSession {
       session.guard = await acquireVoiceOwnerGuard(options.accountId);
       session.assertAlive();
       session.secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
-      const start = session.issue("priority");
-      const snapshot = await session.http.join({ ...(options.conversationId ? { conversationId: options.conversationId } : { channelId: options.channelId }), joinNonce: crypto.randomUUID(), voiceDeviceId: crypto.randomUUID(), enrollmentSecret: session.secret, consent: true }, anchor, session.lifetime.signal);
+      const input = { ...(options.conversationId ? { conversationId: options.conversationId } : { channelId: options.channelId }), joinNonce: crypto.randomUUID(), voiceDeviceId: crypto.randomUUID(), enrollmentSecret: session.secret, consent: true as const };
+      let start = 0;
+      const snapshot = await retryVoiceRequest(() => { start = session.issue("priority"); return session.http.join(input, anchor!, session.lifetime.signal); }, session.lifetime.signal, undefined, VOICE_JOIN_RETRY_DELAYS_MS, isRetryableVoiceJoinError);
       anchor = null;
       session.acceptGrant(session.grant(snapshot, start));
       // WASM/native module evaluation happens only after explicit browser join consent.
@@ -111,7 +119,7 @@ export class CallSession {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private emit(): void {
     const snapshot = this.authority?.snapshot;
-    this.view = Object.freeze({ state: this.state, media: this.mediaView, keysPrepared: !!snapshot && this.preparedKeysGeneration === snapshot.generation, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), ...(value.emoji ? { emoji: Object.freeze(value.emoji.map(emoji => Object.freeze({ ...emoji }))) } : {}), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, ...(this.error ? { error: this.error } : {}) });
+    this.view = Object.freeze({ state: this.state, media: this.mediaView, keysPrepared: !!snapshot && this.preparedKeysGeneration === snapshot.generation, fenceRevision: this.fenceRevision, roster: Object.freeze((snapshot?.members ?? []).map(member => Object.freeze({ ...member }))), generation: snapshot?.generation ?? 0, selfMemberId: snapshot?.memberId ?? "", admittedMemberIds: Object.freeze([...this.admitted.keys()].sort()), sas: Object.freeze(this.sas.map(value => Object.freeze({ ...value, peer: Object.freeze({ ...value.peer }), ...(value.emoji ? { emoji: Object.freeze(value.emoji.map(emoji => Object.freeze({ ...emoji }))) } : {}), emojiIndices: value.emojiIndices ? Object.freeze([...value.emojiIndices]) : null }))), localConsentPending: this.localConsentPending, reconnecting: !this.stopped && this.retrying > 0, ...(this.error ? { error: this.error } : {}) });
     for (const listener of this.listeners) { try { listener(); } catch { /* Render observers cannot alter native control lifetime. */ } }
   }
   private assertAlive(): void {
@@ -181,7 +189,7 @@ export class CallSession {
       this.emit(); return;
     }
     if (reason === "generation-transition") { if (!this.stopped) this.state = "waiting"; this.emit(); return; }
-    if (!this.stopped) { this.error = "control-failed"; void this.close(reason); }
+    if (!this.stopped) { this.error = this.transportFailure ?? "control-failed"; void this.close(reason); }
   }
   private fence(): void { this.media?.fence(); this.media = undefined; this.fenceRevision++; this.attempt = undefined; clearTimeout(this.contextTimer); this.localConsentPending = false; if (!this.stopped) this.state = "waiting"; this.emit(); }
   private async reconcile(grant: Grant): Promise<void> {
@@ -212,18 +220,25 @@ export class CallSession {
   }
   private heartbeat(): Promise<Grant> {
     if (this.heartbeatFlight) return this.heartbeatFlight;
-    const start = this.issue("priority"), binding = this.binding();
-    const flight = this.http.heartbeat(binding, this.secret, this.lifetime.signal).then(snapshot => this.grant(snapshot, start));
+    const binding = this.binding(); let start = 0;
+    // Lease renewal is idempotent. Each retry re-checks the lease and charges the budget; the
+    // grant uses that retry's own start, so a late success never extends authority.
+    const flight = retryVoiceRequest(() => { start = this.issue("priority"); return this.http.heartbeat(binding, this.secret, this.lifetime.signal); }, this.lifetime.signal, this.onRetry).then(snapshot => this.grant(snapshot, start));
     this.heartbeatFlight = flight;
     void flight.finally(() => { if (this.heartbeatFlight === flight) this.heartbeatFlight = undefined; }).catch(() => {});
     return flight;
   }
   private readonly transport: VoiceOwnerTransport = async input => {
     this.checkCurrent();
-    let start: number;
-    try { start = this.issue("ordinary"); } catch (error) { void this.close("budget-exhausted"); throw error; }
+    let start = 0;
+    const issue = () => {
+      this.checkCurrent();
+      try { start = this.issue("ordinary"); } catch (error) { void this.close("budget-exhausted"); throw error; }
+    };
     try {
-      const value = await this.http.crypto(input.binding, input.request, this.secret, input.signal);
+      // Identical body and request ID: the server replays its receipt (sync/ACK/query are
+      // naturally idempotent). Every attempt re-checks lease/fence and charges the budget.
+      const value = await retryVoiceRequest(() => { issue(); return this.http.crypto(input.binding, input.request, this.secret, input.signal); }, input.signal, this.onRetry);
       this.checkCurrent();
       // Retirement/new-generation traffic MUST complete immediately, or the drain
       // would await its own transition. Only captured OLD binding responses gate.
@@ -234,6 +249,7 @@ export class CallSession {
       }
       this.checkCurrent(); return value;
     } catch (error) {
+      this.transportFailure = transientVoiceReason(error) ?? this.transportFailure;
       return this.conflict(error, input.binding, start);
     }
   };
@@ -352,7 +368,9 @@ export class CallSession {
       const drained = await this.owner!.installContext(attempt.ref);
       this.assertAttempt(attempt);
       const installedAt = performance.now(), revision = this.fenceRevision;
-      const deadline = Math.min(installedAt + ATTEMPT_MS, this.authority!.deadline);
+      // Fixed from installation and never reset; the live call lease still ends the call
+      // (and fences media) independently through checkCurrent/leaseTimer.
+      const deadline = installedAt + voiceKeyingBudgetMs(attempt.proposal!.audience.length - 1);
       attempt.installed = true; clearTimeout(this.contextTimer);
       const current = () => {
         this.checkCurrent();
@@ -493,7 +511,7 @@ export class CallSession {
     // Owner itself classifies obsolete completions only after an authoritative
     // transition. Current/unrecognized failures never become synthetic success.
     if (this.isInterrupted(error) && this.authority) { this.fence(); return; }
-    this.error = error instanceof VoiceHttpError || error instanceof VoiceCallSessionError ? error.code : "control-failed"; void this.close(this.error);
+    this.error = transientVoiceReason(error) ?? (error instanceof VoiceHttpError || error instanceof VoiceCallSessionError ? error.code : "control-failed"); void this.close(this.error);
   }
   close(reason = "left"): Promise<void> {
     if (this.cleanup) return this.cleanup;
