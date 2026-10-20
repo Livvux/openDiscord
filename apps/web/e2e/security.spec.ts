@@ -1,13 +1,13 @@
 import { authenticatorCode as totp } from "../tests/totp";
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoA11yViolations, newUserPage, PASSWORD, signUp } from "./helpers";
+import { expectNoA11yViolations, finishSignOut, newUserPage, PASSWORD, signUp } from "./helpers";
 
 test.skip(({ isMobile }) => isMobile, "desktop flow");
 
 async function signOut(page: Page) {
   await page.goto("/app/settings");
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await finishSignOut(page);
 }
 
 async function signInWithPassword(page: Page, email: string) {

@@ -60,6 +60,16 @@ export function forgetDmDevice(userId: string): void {
   if (client) void client.then((value) => value.close(), () => undefined);
 }
 
+/** Closes this tab's client so its IndexedDB connections no longer block deleting the stores. */
+export async function closeDmClient(userId: string): Promise<void> {
+  const client = clients.get(userId);
+  clients.delete(userId);
+  if (!client) return;
+  const closing = client.then((value) => value.close(), () => undefined);
+  // A stalled initialization still closes once it settles; the pending deletion completes then.
+  await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, 2000))]);
+}
+
 /** Explicit local re-enrollment: old keys are retained in IndexedDB but never silently reused. */
 export async function enrollNewDmDevice(userId: string): Promise<void> {
   const existing = clients.get(userId);

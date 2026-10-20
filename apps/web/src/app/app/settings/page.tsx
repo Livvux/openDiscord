@@ -88,7 +88,7 @@ async function Settings() {
       </Section>
       <Section title="Sessions" description="Devices currently signed in to your account.">
         <Sessions />
-        <SignOutButton />
+        <SignOutButton userId={user.id} />
       </Section>
       <Section title="Your data" description="Download your profile, sessions, security settings, memberships and messages as JSON.">
         <a

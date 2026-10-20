@@ -43,7 +43,11 @@ export class HistoryStore {
       const request = indexedDB.open(`opendiscord-dm-history-${userId}-${deviceId}`, 5);
       request.onupgradeneeded = () => { for (const name of ["encrypted", "seen", "imports", "outgoing", "identities"]) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" }); };
       request.onerror = () => reject(new Error("Encrypted history storage is unavailable."));
-      request.onsuccess = () => resolve(new HistoryStore(request.result, C));
+      request.onsuccess = () => {
+        // Yield to a sign-out wipe (deleteDatabase) or a newer schema in another tab instead of blocking it.
+        request.result.onversionchange = () => request.result.close();
+        resolve(new HistoryStore(request.result, C));
+      };
     });
   }
   close() { this.database.close(); }

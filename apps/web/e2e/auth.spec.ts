@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoA11yViolations, openAccountSettings } from "./helpers";
+import { expectNoA11yViolations, finishSignOut, openAccountSettings } from "./helpers";
 
 test("protected app redirects anonymous visitors to sign-in", async ({ page }) => {
   await page.goto("/app");
@@ -25,7 +25,7 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
 
   await openAccountSettings(page);
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await finishSignOut(page);
 
   // Next keeps the previously visited route mounted but hidden, so scope to the visible form.
   const form = page.locator("form:visible");

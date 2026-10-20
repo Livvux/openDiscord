@@ -161,3 +161,15 @@ export async function openAccountSettings(page: Page) {
   await page.getByRole("link", { name: "Account settings" }).click();
   await expect(page).toHaveURL(/\/app\/settings$/);
 }
+
+/**
+ * After clicking "Sign out": a browser holding the account's only encrypted-messaging device without a
+ * recovery backup asks first (dm-sign-out.tsx). Accepts that warning when it appears.
+ */
+export async function finishSignOut(page: Page) {
+  const anyway = page.getByRole("button", { name: "Sign out anyway" });
+  await expect.poll(async () => /\/sign-in$/.test(page.url()) || (await anyway.isVisible()), { timeout: 15_000 }).toBe(true);
+  if (await anyway.isVisible()) await anyway.click();
+  // The wipe waits briefly for a revoke and for stores still held open (dm/sign-out.ts).
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 15_000 });
+}
