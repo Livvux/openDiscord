@@ -318,6 +318,20 @@ class Native:
         wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
         self.command('POST', '/element/' + identifier + '/click', {})
 
+    def finish_sign_out(self):
+        # The only encrypted-messaging device without a recovery backup asks first (dm-sign-out.tsx).
+        def state():
+            if at_app_path(self.command('GET', '/url'), '/sign-in'):
+                return 'signed-out'
+            for item in self.command('POST', '/elements', {'using': 'xpath', 'value': '//button[normalize-space(.)="Sign out anyway"]'}):
+                if self.command('GET', '/element/' + item[ELEMENT] + '/displayed'):
+                    return item[ELEMENT]
+            return None
+        found = wait(state)
+        if found != 'signed-out':
+            self.command('POST', '/element/' + found + '/click', {})
+        wait(lambda: at_app_path(self.command('GET', '/url'), '/sign-in'))
+
     def prefix_click(self, prefix):
         identifier = self.element(f'//button[starts-with(normalize-space(.),{json.dumps(prefix)})]')
         wait(lambda: self.command('GET', '/element/' + identifier + '/enabled'))
@@ -1437,7 +1451,7 @@ def main():
                 auth_progress(alice.profile, 'sign_out')
                 alice.click('Sign out')
                 auth_progress(alice.profile, 'await_signout_navigation')
-                wait(lambda: at_app_path(alice.command('GET', '/url'), '/sign-in'))
+                alice.finish_sign_out()
                 alice.login(email)
             with stage('community_navigation'), diagnose_community(alice, bob):
                 community_progress('open_home')
@@ -1588,7 +1602,7 @@ def main():
                 dm_progress(bob.profile, 'sign_out')
                 bob.click('Sign out')
                 dm_progress(bob.profile, 'await_signout_navigation')
-                wait(lambda: at_app_path(bob.command('GET', '/url'), '/sign-in'))
+                bob.finish_sign_out()
                 dm_progress(bob.profile, 'open_protected_inbox')
                 bob.goto('/app/messages')
                 dm_progress(bob.profile, 'assert_logged_out')

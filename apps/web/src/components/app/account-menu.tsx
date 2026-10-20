@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { authClient } from "@/lib/auth-client";
 import { PRESENCE_DOT, PRESENCE_LABEL, type PresenceChoice } from "@/lib/presence";
 import { Avatar } from "./avatar";
+import { useDmSignOut } from "./dm-sign-out";
 import { useSetQuiet } from "./notifications-provider";
 
 const CHOICES: PresenceChoice[] = ["online", "idle", "dnd", "invisible"];
@@ -50,6 +51,12 @@ export function AccountMenu({ userId, name, avatar, presence, customStatus }: Ac
     setStatus(customStatus);
   }
   const close = () => setOpen(false);
+  const signOut = useDmSignOut(userId, async () => {
+    const { error: failed } = await authClient.signOut();
+    if (failed) return setError(failed.message ?? "Couldn't sign out. Try again.");
+    close();
+    router.push("/sign-in");
+  });
   useEffect(() => setQuiet?.(choice === "dnd"), [setQuiet, choice]);
 
   function choose(next: PresenceChoice) {
@@ -74,6 +81,7 @@ export function AccountMenu({ userId, name, avatar, presence, customStatus }: Ac
   }
 
   return (
+    <>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label={`Account menu for ${name}, ${PRESENCE_LABEL[choice]}`}
@@ -146,17 +154,15 @@ export function AccountMenu({ userId, name, avatar, presence, customStatus }: Ac
           <button
             type="button"
             className={`${item} text-red-300`}
-            onClick={async () => {
-              const { error: failed } = await authClient.signOut();
-              if (failed) return setError(failed.message ?? "Couldn't sign out. Try again.");
-              close();
-              router.push("/sign-in");
-            }}
+            disabled={signOut.busy}
+            onClick={() => void signOut.request()}
           >
             <LogOutIcon className="size-4" />Sign out
           </button>
         </div>
       </PopoverContent>
     </Popover>
+    {signOut.dialog}
+    </>
   );
 }

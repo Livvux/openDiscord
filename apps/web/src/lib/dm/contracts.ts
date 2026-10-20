@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeFilename } from "../filename";
 
 export const DM_DOMAIN = "opendiscord.local";
 export const matrixUser = (userId: string) => `@${userId}:${DM_DOMAIN}`;
@@ -27,7 +28,8 @@ const mediaInfoSchema = z.string().max(4000).refine((value) => {
 export const dmAttachmentSchema = z.object({
   id: z.uuid(),
   info: mediaInfoSchema,
-  name: z.string().min(1).max(255),
+  // Peer-controlled: strip paths, control and bidi characters before it reaches `download` or the UI.
+  name: z.string().min(1).max(255).transform(sanitizeFilename),
   mime: z.string().max(255),
   size: z.number().int().nonnegative().max(DM_MAX_ATTACHMENT_BYTES),
 }).strict();

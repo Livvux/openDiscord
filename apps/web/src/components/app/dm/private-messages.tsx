@@ -216,6 +216,13 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const peerVerified = !!active && !group && trusted.some((d) => d.userId === active.peerId) && trusted.filter((d) => d.userId === active.peerId).every((d) => d.verified);
   const missingRequest = target && !conversations.some((c) => c.peerId === target);
   const toggleSecurity = () => { setSecurity((v) => !v); void run(backups); };
+  // The sign-out warning links here so a recovery backup can be created before signing out.
+  useEffect(() => {
+    if (window.location.hash !== "#devices-and-recovery") return;
+    const timer = window.setTimeout(() => { setSecurity(true); void run(backups); }, 0);
+    return () => window.clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival from the sign-out warning
+  }, []);
   return <div className="flex min-h-0 flex-1">
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">

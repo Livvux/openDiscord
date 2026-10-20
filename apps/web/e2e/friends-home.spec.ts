@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, openAccountMenu, signUp } from "./helpers";
+import { createCommunity, createInviteLink, expectNoA11yViolations, finishSignOut, joinAsNewUser, newUserPage, openAccountMenu, signUp } from "./helpers";
 
 test.describe("home, friends and account menu", () => {
   test("Home stays put, friends connect, and the account menu sets status", async ({ browser, isMobile }) => {
@@ -62,7 +62,7 @@ test.describe("home, friends and account menu", () => {
     // Sign out from the account menu.
     await openAccountMenu(owner);
     await owner.getByRole("button", { name: "Sign out" }).click();
-    await expect(owner).toHaveURL(/\/sign-in$/);
+    await finishSignOut(owner);
   });
 
   test("a friend link prefills the code and the recipient can block the sender", async ({ browser }) => {
