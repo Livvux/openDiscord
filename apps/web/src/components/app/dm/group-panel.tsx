@@ -23,7 +23,7 @@ function FriendPicker({ friends, picked, onToggle, limit, label }: { friends: Fr
 }
 const toggle = (list: string[], id: string) => list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
 
-/** Group creation from the friends list: 2–9 friends plus you. */
+/** Group creation from the friends list: 2–7 friends plus you. */
 export function NewGroupForm({ friends, busy, onCreate, onCancel }: { friends: FriendOption[]; busy: boolean; onCreate: (members: string[], name: string) => void; onCancel: () => void }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [name, setName] = useState("");

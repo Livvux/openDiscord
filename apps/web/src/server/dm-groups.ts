@@ -1,4 +1,4 @@
-// Group conversations (3–10 people). Content stays end-to-end encrypted; membership and the name are server metadata.
+// Group conversations (3–8 people). Content stays end-to-end encrypted; membership and the name are server metadata.
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";

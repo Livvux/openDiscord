@@ -145,5 +145,6 @@ describe("Voice status and failure presentation", () => {
     expect(voiceErrorText(new DOMException("x", "NotReadableError"), "microphone")).toMatch(/in use by another app/);
     expect(voiceErrorText(new DOMException("x", "AbortError"), "screen_share")).toMatch(/Screen sharing was cancelled/);
     expect(voiceErrorText(new VoiceCallSessionError("unsupported-media"))).toMatch(/does not support encrypted Voice/);
+    expect(voiceErrorText(new VoiceCallSessionError("call-full"))).toBe("This call is full (8 devices). Leave on another device to join.");
   });
 });

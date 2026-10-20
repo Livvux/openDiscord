@@ -43,6 +43,8 @@ test("encrypted group: create from friends, members read, removal is immediate a
     await gina.goto("/app/messages");
     await gina.getByRole("button", { name: "New group" }).click();
     const form = gina.getByRole("form", { name: "New group" });
+    // Groups are capped at eight people so everyone fits in one eight-device encrypted call.
+    await expect(form.getByText(/^Pick 2–7 friends\./)).toBeVisible();
     await form.getByLabel("Group name (optional)").fill("Trip crew");
     await form.getByLabel("Hugo Group").check();
     await form.getByLabel("Ivy Group").check();

@@ -1,6 +1,6 @@
 import { unstable_rethrow } from "next/navigation";
 
-export type AppErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "rate_limited" | "conflict";
+export type AppErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "rate_limited" | "conflict" | "call_full";
 
 /** Expected failure with a message that is safe to show to the user. */
 export class AppError extends Error {
@@ -24,6 +24,7 @@ export const HTTP_STATUS: Record<AppErrorCode, number> = {
   invalid: 400,
   rate_limited: 429,
   conflict: 409,
+  call_full: 409,
 };
 
 export type ActionResult<T = void> = { ok: true; data: T } | { ok: false; error: string };

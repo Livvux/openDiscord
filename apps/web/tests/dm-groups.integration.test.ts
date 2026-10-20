@@ -5,6 +5,7 @@ import { attachment, dmConversation, dmMember, friendship, session, user, userSu
 import { and, eq, sql } from "drizzle-orm";
 import { blockUser } from "@/server/blocks";
 import { appendDirectMessage, createDirectConversation, directAttachmentFor, reportDirectMessage, exportDirectData, handleCryptoRequest, listDirectConversations, listDirectMessages, listDmDevices, markDirectConversationRead, registerDmDevice } from "@/server/direct-messages";
+import { DM_GROUP_MAX_MEMBERS } from "@/lib/dm/contracts";
 import { addGroupMembers, createGroupConversation, leaveGroup, removeGroupMember, renameGroup } from "@/server/dm-groups";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { testUsers } from "./helpers";
@@ -34,7 +35,7 @@ beforeAll(async () => {
 afterAll(() => users.cleanup());
 
 describe("encrypted group conversations", () => {
-  it("creates a group of 3–10 from the creator's friends only", async () => {
+  it("creates a group of 3–8 from the creator's friends only", async () => {
     const { Gina, Hugo, Ivy, Stranger } = people;
     await expect(createGroupConversation(Gina.id, { members: [Hugo.id] })).rejects.toThrow("at least");
     await expect(createGroupConversation(Gina.id, { members: [Hugo.id, Stranger.id] })).rejects.toThrow("friends");
@@ -185,5 +186,22 @@ describe("group hardening", () => {
     await addGroupMembers(p.Owner.id, g, [p.Dee.id]);
     await expect(directAttachmentFor(p.Dee.id, file.id)).rejects.toThrow("not found");
     await expect(reportDirectMessage(p.Dee.id, { id: old.id, reason: "Not mine to see", excerpt: null })).rejects.toThrow("not found");
+  });
+});
+
+describe("group size matches the eight-device call bound", () => {
+  it("creates a group of exactly eight, refuses nine, and refuses adding a ninth", async () => {
+    expect(DM_GROUP_MAX_MEMBERS).toBe(8);
+    const owner = await users.create("Cap owner");
+    const friends = await Promise.all(Array.from({ length: 8 }, (_, i) => users.create(`Cap friend ${i}`)));
+    for (const id of friends) await befriend(owner, id);
+    await expect(createGroupConversation(owner, { members: friends })).rejects.toThrow("at most 8 people");
+    const full = await createGroupConversation(owner, { members: friends.slice(0, 7) });
+    expect((await listDirectConversations(owner)).find((c) => c.id === full)!.members).toHaveLength(7);
+    await expect(addGroupMembers(owner, full, [friends[7]])).rejects.toThrow("at most 8 people");
+    const small = await createGroupConversation(owner, { members: friends.slice(0, 6) });
+    await addGroupMembers(owner, small, [friends[6]]);
+    await expect(addGroupMembers(owner, small, [friends[7]])).rejects.toThrow("at most 8 people");
+    expect(await db.$count(dmMember, and(eq(dmMember.conversationId, small), sql`${dmMember.leftAt} is null and ${dmMember.removedAt} is null`))).toBe(8);
   });
 });

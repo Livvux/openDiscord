@@ -339,7 +339,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       let total = 0;
       for (const [, raw] of entries) {
         const inner = data.kind === "query" ? parse(z.array(uuid).max(10), raw).length : Object.keys(record(raw)).length;
-        // A full group: up to ten people with up to ten devices each.
+        // A full group: up to eight people with up to ten devices each (100 leaves headroom).
         if (inner > 20 || (total += inner) > DM_MAX_DEVICE_DELIVERIES) throw invalid("Too many target keys or devices.");
       }
     }

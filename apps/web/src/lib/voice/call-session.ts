@@ -14,7 +14,7 @@ const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 6
 const HTTP_LIMIT = 180, PRIORITY_RESERVE = 18;
 type Priority = "ordinary" | "priority";
 export class VoiceCallSessionError extends Error {
-  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict" | "unsupported-media") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
+  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict" | "unsupported-media" | "call-full") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
 }
 export class VoiceRetirementConflict extends VoiceCallSessionError { constructor() { super("retirement-conflict"); this.name = "VoiceRetirementConflict"; } }
 export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" | "retry-required" | "ended";
@@ -102,7 +102,10 @@ export class CallSession {
       globalThis.document?.addEventListener("visibilitychange", session.resume);
       session.emit(); session.schedulePoll(); session.scheduleHeartbeat();
       return session;
-    } catch (error) { anchor = null; await session.close("bootstrap-failed"); throw error; }
+    } catch (error) {
+      anchor = null; await session.close("bootstrap-failed");
+      throw error instanceof VoiceHttpError && error.code === "call_full" ? new VoiceCallSessionError("call-full") : error;
+    }
   }
   getSnapshot = (): VoiceCallView => this.view;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };

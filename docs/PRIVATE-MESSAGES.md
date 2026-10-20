@@ -6,7 +6,7 @@ cross-account encryption traffic. Existing local history is not erased by blocki
 
 ## Groups
 
-A group has 3–10 people. Its creator picks two to nine of their friends; any member can add more of
+A group has 3–8 people, so every member can join a group call from one device. Its creator picks two to seven of their friends; any member can add more of
 their own friends and rename the group; the owner (the creator, or after they leave the
 longest-standing member) can remove people; anyone can leave. As on Discord, friends can add you
 without asking first; leaving is the remedy. Nobody can be added (or created into a group) together
@@ -232,9 +232,9 @@ participants' local browser copies cannot be remotely erased.
 ## Operational limits and evidence
 
 Limits: ten active devices, 500 conversations (1:1 conversations plus current group memberships)
-within the account's checked conversation cap, groups of 3–10 people with 100-character names, 4,000-character messages, 24,000-character message ciphertext, four encrypted attachments of up to 25 MB each per message, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
+within the account's checked conversation cap, groups of 3–8 people with 100-character names, 4,000-character messages, 24,000-character message ciphertext, four encrypted attachments of up to 25 MB each per message, 256 pending events per device (large encrypted own-device transfers require fewer than 16 pending
 events),
-8 KB per peer device event, 100 device deliveries per crypto operation (a full group of ten people with ten devices each), 100 available one-time prekeys and 100,000 lifetime prekey
+8 KB per peer device event, 100 device deliveries per crypto operation (a full group of eight people with ten devices each fits), 100 available one-time prekeys and 100,000 lifetime prekey
 or transaction entries per device. Enroll a replacement device when a lifetime limit is reached.
 Target account/device counts and signing payload sizes are checked before database locks. A short
 global database transaction lock serializes claims, receipts and mailbox sequence commits. This is a

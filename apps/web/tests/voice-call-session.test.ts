@@ -34,4 +34,11 @@ describe("control-only CallSession bootstrap boundary", () => {
     expect(join.mock.calls[0][0].voiceDeviceId).not.toBe(join.mock.calls[0][1].id);
     expect(VoiceCallSessionError).toBeDefined();
   });
+  it("turns the server's full-call refusal into a call-full session error", async () => {
+    vi.stubGlobal("navigator", { locks: { async request(_name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) { await callback({}); } } });
+    vi.stubGlobal("window", { localStorage: { getItem: () => JSON.stringify({ id: crypto.randomUUID(), secret: "a".repeat(64), storeKey: "never-export-this-store-key-value" }), setItem() {} } });
+    const { VoiceHttpError } = await import("@/lib/voice/http-client");
+    join.mockRejectedValue(new VoiceHttpError("call_full", 409));
+    await expect(CallSession.create(options)).rejects.toMatchObject({ name: "VoiceCallSessionError", code: "call-full" });
+  });
 });
