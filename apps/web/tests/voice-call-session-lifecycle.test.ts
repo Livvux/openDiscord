@@ -409,7 +409,7 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     let joins = 0;
     const failed = CallSession.create({ ...options, fetch: async () => { joins++; return Response.json({ code: "conflict" }, { status: 409 }); } }).catch(error => error);
     await vi.advanceTimersByTimeAsync(40_000);
-    expect(await failed).toMatchObject({ code: "conflict" }); expect(joins).toBe(7);
+    expect(await failed).toMatchObject({ code: "previous-call-closing" }); expect(joins).toBe(7);
     call = await CallSession.create({ ...options, fetch: fetcher() }); expect(call.getSnapshot().state).toBe("verifying");
   });
   it("join never retries a refusal", async () => {

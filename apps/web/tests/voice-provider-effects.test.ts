@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
-import { VoiceHttpError } from "@/lib/voice/http-client";
 import { mountCurrentVoiceAudio, voiceErrorText, voiceStatus } from "@/components/app/voice/voice-provider";
 import { automaticVoiceVerificationSteps } from "@/components/app/voice/voice-verification";
 import { canPrepareVoiceAudience, prepareCurrentVoiceAudience } from "@/components/app/voice/voice-audience";
@@ -149,8 +148,8 @@ describe("Voice status and failure presentation", () => {
     expect(voiceErrorText(new DOMException("x", "AbortError"), "screen_share")).toMatch(/Screen sharing was cancelled/);
     expect(voiceErrorText(new VoiceCallSessionError("unsupported-media"))).toMatch(/does not support encrypted Voice/);
     expect(voiceErrorText(new VoiceCallSessionError("call-full"))).toBe("This call is full (8 devices). Leave on another device to join.");
-    expect(voiceErrorText(new VoiceHttpError("network"))).toMatch(/Couldn't reach the voice server/);
-    expect(voiceErrorText(new VoiceHttpError("protocol", 503))).toMatch(/Couldn't reach the voice server/);
-    expect(voiceErrorText(new VoiceHttpError("conflict", 409))).toMatch(/previous call is still closing/);
+    expect(voiceErrorText(new VoiceCallSessionError("server-unreachable"))).toMatch(/Couldn't reach the voice server/);
+    expect(voiceErrorText(new VoiceCallSessionError("rate-limited"))).toMatch(/Too many requests/);
+    expect(voiceErrorText(new VoiceCallSessionError("previous-call-closing"))).toMatch(/previous call is still closing/);
   });
 });

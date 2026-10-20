@@ -4,7 +4,6 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import { authClient } from "@/lib/auth-client";
 import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
 import { VOICE_LIMITS } from "@/lib/voice/contracts";
-import { VoiceHttpError } from "@/lib/voice/http-client";
 import type { VoiceSource } from "@/lib/voice/media-session";
 import { voiceFrameTransform } from "@/lib/voice/support";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
@@ -78,13 +77,11 @@ export function voiceErrorText(error: unknown, source?: VoiceSource): string {
     if (error.code === "messaging-setup-required") return "Set up encrypted messaging in Devices and recovery first, then return and join Voice.";
     if (error.code === "not-ready") return "The other participant is not ready yet. Wait, then explicitly retry this action.";
     if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
+    if (error.code === "server-unreachable") return "Couldn't reach the voice server. Check your connection, then rejoin.";
+    if (error.code === "previous-call-closing") return "Your previous call is still closing on the server. Wait a few seconds, then rejoin.";
+    if (error.code === "rate-limited") return "Too many requests. Wait a moment, then rejoin.";
     if (error.code === "call-full") return `This call is full (${VOICE_LIMITS.members} devices). Leave on another device to join.`;
     return `Voice stopped (${error.code}). Join again when ready.`;
-  }
-  if (error instanceof VoiceHttpError) {
-    if (error.code === "network" || error.code === "timeout" || (error.status ?? 0) >= 500) return "Couldn't reach the voice server. Check your connection, then rejoin.";
-    if (error.code === "conflict") return "Your previous call is still closing on the server. Wait a few seconds, then rejoin.";
-    if (error.code === "rate_limited") return "Too many requests. Wait a moment, then rejoin.";
   }
   // Permission errors and browser picker cancellation must never claim capture succeeded.
   const name = error instanceof Error ? error.name : "";

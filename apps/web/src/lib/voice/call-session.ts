@@ -15,7 +15,17 @@ const POLL_MS = 1_000, HEARTBEAT_MS = 10_000, ATTEMPT_MS = 10_000, WINDOW_MS = 6
 const HTTP_LIMIT = 180, PRIORITY_RESERVE = 18;
 type Priority = "ordinary" | "priority";
 export class VoiceCallSessionError extends Error {
-  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict" | "unsupported-media" | "call-full") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
+  constructor(readonly code: "browser-unavailable" | "messaging-setup-required" | "ended" | "lease-expired" | "context-expired" | "budget-exhausted" | "not-ready" | "binding-changed" | "generation-conflict" | "retirement-conflict" | "unsupported-media" | "call-full" | "server-unreachable" | "previous-call-closing" | "rate-limited") { super(`Voice call ${code}.`); this.name = "VoiceCallSessionError"; }
+}
+
+/** Join failures as session codes, so the UI never imports the HTTP client. */
+export function joinFailure(error: unknown): unknown {
+  if (!(error instanceof VoiceHttpError)) return error;
+  if (error.code === "call_full") return new VoiceCallSessionError("call-full");
+  if (error.code === "network" || error.code === "timeout" || (error.status ?? 0) >= 500) return new VoiceCallSessionError("server-unreachable");
+  if (error.code === "conflict") return new VoiceCallSessionError("previous-call-closing");
+  if (error.code === "rate_limited") return new VoiceCallSessionError("rate-limited");
+  return error;
 }
 export class VoiceRetirementConflict extends VoiceCallSessionError { constructor() { super("retirement-conflict"); this.name = "VoiceRetirementConflict"; } }
 export type VoiceCallState = "verifying" | "waiting" | "negotiating" | "agreed" | "retry-required" | "ended";
@@ -112,7 +122,7 @@ export class CallSession {
       return session;
     } catch (error) {
       anchor = null; await session.close("bootstrap-failed");
-      throw error instanceof VoiceHttpError && error.code === "call_full" ? new VoiceCallSessionError("call-full") : error;
+      throw joinFailure(error);
     }
   }
   getSnapshot = (): VoiceCallView => this.view;
