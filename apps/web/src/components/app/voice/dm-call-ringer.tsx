@@ -8,6 +8,9 @@ import { applyCallNotice, dismissRing, DM_CALL_EVENT, expireRings, type DmCallNo
 import { useVoice } from "./voice-provider";
 
 const conversationHref = (id: string) => `/app/messages?c=${encodeURIComponent(id)}`;
+// Tells the caller and this person's other sessions; the ring is already gone here, so a failure only costs that feedback.
+const declineCall = (conversationId: string) => fetch("/api/dm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "call-decline", id: conversationId }) })
+  .then((response) => { if (!response.ok) console.warn("[call] decline was not delivered", response.status); }, (error: unknown) => console.warn("[call] decline was not delivered", error));
 
 /** Incoming and missed direct-message calls. Accepting is the explicit Voice join consent. */
 export function DmCallRinger() {
@@ -31,7 +34,7 @@ export function DmCallRinger() {
     const timer = window.setInterval(() => setRings((current) => expireRings(current, Date.now())), 5000);
     return () => { window.removeEventListener(DM_CALL_EVENT, onCall); window.clearInterval(timer); };
   }, [router]);
-  const visible = rings.filter((ring) => ring.conversationId !== activeId);
+  const visible = rings.filter((ring) => ring.conversationId !== activeId || ring.state === "declined");
   if (!visible.length) return null;
   return <section aria-label="Calls" className="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 grid w-80 max-w-[calc(100vw-2rem)] gap-2">
     {visible.map((ring) => ring.state === "ringing"
@@ -40,8 +43,13 @@ export function DmCallRinger() {
         <p className="text-xs text-muted-foreground">Accepting creates a temporary encrypted Voice device for this browser session. You then compare symbols with each participant and admit them. Your microphone stays off until you turn it on.</p>
         <div className="flex gap-2">
           <Button disabled={!voice.authenticated} onClick={() => { setRings((current) => dismissRing(current, ring.conversationId)); router.push(conversationHref(ring.conversationId)); void voice.join({ id: ring.conversationId, name: ring.callerName, href: conversationHref(ring.conversationId), dm: true }); }}>Accept call</Button>
-          <Button variant="outline" onClick={() => setRings((current) => dismissRing(current, ring.conversationId))}>Decline</Button>
+          <Button variant="outline" onClick={() => { setRings((current) => dismissRing(current, ring.conversationId)); void declineCall(ring.conversationId); }}>Decline</Button>
         </div>
+      </div>
+      : ring.state === "declined"
+      ? <div key={ring.conversationId} role="status" className="flex items-center justify-between gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg">
+        <p className="font-semibold">{ring.callerName} declined the call</p>
+        <Button variant="ghost" onClick={() => setRings((current) => dismissRing(current, ring.conversationId))}>Dismiss</Button>
       </div>
       : <div key={ring.conversationId} role="group" aria-label={`Missed call from ${ring.callerName}`} className="grid gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg">
         <p className="font-semibold">Missed call from {ring.callerName}</p>

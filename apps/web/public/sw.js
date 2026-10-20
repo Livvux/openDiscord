@@ -44,6 +44,12 @@ self.addEventListener("push", (event) => {
   } catch {
     return;
   }
+  // An answered or declined call: overwrite a still-ringing notification silently, never show a new one.
+  if (data.replace === "ringing") {
+    event.waitUntil(self.registration.getNotifications({ tag: data.tag }).then((open) => Promise.all(open.filter((n) => n.data?.ringing).map((n) =>
+      self.registration.showNotification(n.title, { body: data.body || "", tag: data.tag, icon: "/icon.svg", silent: true, data: { url: n.data.url } })))));
+    return;
+  }
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((tabs) => {
       if (tabs.some((tab) => tab.focused && tab.visibilityState === "visible")) return;
@@ -51,7 +57,7 @@ self.addEventListener("push", (event) => {
         body: data.body || "",
         tag: data.tag,
         icon: "/icon.svg",
-        data: { url: typeof data.url === "string" && data.url.startsWith("/app/") ? data.url : "/app" },
+        data: { url: typeof data.url === "string" && data.url.startsWith("/app/") ? data.url : "/app", ringing: data.ringing === true },
       });
     }),
   );
