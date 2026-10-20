@@ -3,7 +3,7 @@ import { installVoiceProductObserver } from "./fixtures/voice-product-observer";
 import { observeVoiceProductResult } from "./fixtures/voice-product-results";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, sendMessage, signUp } from "./helpers";
 
-// Two accounts in a 1:1 conversation: ringing, a missed call, accepting, native SAS and admission,
+// Two accounts in a 1:1 conversation: ringing, a missed call, a decline seen by the caller and Bob's other tab, accepting, native SAS and admission,
 // decoded encrypted media, and a block ending the call. Runs in the Voice product job (strict SFU).
 const participant = (page: Page, name: string) => page.getByRole("listitem", { name: `Voice participant ${name}`, exact: true });
 const audience = (page: Page) => page.getByRole("region", { name: "Full Voice audience", exact: true });
@@ -74,6 +74,27 @@ test.describe("encrypted direct-message calls", () => {
       await expect(missed).toBeVisible({ timeout: 20_000 });
       await missed.getByRole("button", { name: "Dismiss" }).click();
       await expect(missed).toHaveCount(0);
+
+      stage = "decline";
+      // Bob declines in one tab: his other tab stops ringing without a missed call, and Alice learns he declined.
+      const bobOther = await bob.context().newPage();
+      // The tab can only ring once its personal event stream is subscribed.
+      const otherStream = bobOther.waitForResponse((response) => new URL(response.url()).pathname === "/api/me/events" && response.ok());
+      await bobOther.goto("/app");
+      await otherStream;
+      await alice.getByRole("button", { name: "Join voice", exact: true }).click();
+      await alice.getByRole("button", { name: "Create temporary device and join" }).click();
+      await expect(audience(alice)).toBeVisible({ timeout: 20_000 });
+      const otherRing = bobOther.getByRole("group", { name: `Incoming call from ${names[0]}` });
+      await expect(ring).toBeVisible({ timeout: 20_000 });
+      await expect(otherRing).toBeVisible({ timeout: 20_000 });
+      await ring.getByRole("button", { name: "Decline" }).click();
+      await expect(alice.getByRole("status").filter({ hasText: `${names[1]} declined the call` })).toBeVisible({ timeout: 20_000 });
+      await expect(otherRing).toHaveCount(0);
+      await alice.getByRole("button", { name: "Leave Voice", exact: true }).click();
+      await expect(alice.getByRole("button", { name: "Join voice", exact: true })).toBeVisible({ timeout: 20_000 });
+      for (const page of [bob, bobOther]) await expect(page.getByRole("group", { name: `Missed call from ${names[0]}` })).toHaveCount(0);
+      await bobOther.close();
 
       stage = "accept";
       // Bob accepts the next call from wherever he is; accepting is his join consent.

@@ -149,8 +149,8 @@ describe("direct message call authorization", () => {
       await expect.poll(() => eve.calls().length).toBe(1);
       const benCall = await join(Ben, group);
       await new Promise((r) => setTimeout(r, 200));
-      // Joining an existing call does not ring again.
-      expect(ben.calls()).toHaveLength(1);
+      // Joining an existing call does not ring again; it only clears Ben's other sessions.
+      expect(ben.calls().map((e) => e.type === "dm.call" && e.state)).toEqual(["ringing", "cleared"]);
       await leaveAll(benCall, ada);
       await expect.poll(() => eve.calls().map((e) => e.type === "dm.call" && e.state)).toEqual(["ringing", "ended"]);
       expect(dee.calls()).toEqual([]);

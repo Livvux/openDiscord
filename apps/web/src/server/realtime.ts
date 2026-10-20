@@ -21,8 +21,9 @@ const eventSchema = z.discriminatedUnion("type", [
   // Metadata only: a conversation of this person changed (new message, request, read marker). No content.
   z.object({ type: z.literal("dm.changed"), userId: z.string(), conversationId: z.string(), reason: z.enum(["message", "request", "read"]), senderId: z.string().optional() }),
   z.object({ type: z.literal("friends.changed"), userId: z.string() }),
-  // A conversation's encrypted call started ringing (with the caller) or ended. Who and which conversation only.
-  z.object({ type: z.literal("dm.call"), userId: z.string(), conversationId: z.string(), state: z.enum(["ringing", "ended"]), callerId: z.string().optional() }),
+  // A conversation's encrypted call started ringing (with the caller) or ended; "cleared" tells the person's other sessions
+  // they answered or declined it, "declined" tells people in the call who declined (in `callerId`). Who and which conversation only.
+  z.object({ type: z.literal("dm.call"), userId: z.string(), conversationId: z.string(), state: z.enum(["ringing", "ended", "cleared", "declined"]), callerId: z.string().optional() }),
 ]);
 
 export type RealtimeEvent = z.infer<typeof eventSchema>;

@@ -7,7 +7,7 @@ import { acceptInvite, createChannel, createCommunity, createInvite, setChannelO
 import { listRoles } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
 import { setNotificationLevel, setPresenceStatus } from "@/server/presence";
-import { isAllowedEndpoint, pushDirectMessage, pushEnabled, pushMention, savePushSubscription, type PushSender } from "@/server/push";
+import { isAllowedEndpoint, pushCallCleared, pushDirectMessage, pushEnabled, pushMention, savePushSubscription, type PushSender } from "@/server/push";
 import { testUsers } from "./helpers";
 
 const users = testUsers();
@@ -70,6 +70,17 @@ describe.runIf(pushEnabled)("mention pushes", () => {
     expect(JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "))).toEqual({ title: "Owner", body: "New encrypted message", url: `/app/messages?c=${group}`, tag: `dm:${group}` });
     await setPresenceStatus(member, "dnd");
     expect(await pushDirectMessage(member, owner, ok)).toBe(0);
+    await setPresenceStatus(member, "online");
+  });
+
+  it("marks a call push as ringing and overwrites only that ringing notification once answered or declined", async () => {
+    const call = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+    expect(await pushDirectMessage(member, owner, ok, call, "call")).toBe(1);
+    expect(JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "))).toEqual({ title: "Owner", body: "Incoming call", url: `/app/messages?c=${call}`, tag: `call:${call}`, ringing: true });
+    expect(await pushCallCleared(member, call, "declined", ok)).toBe(1);
+    expect(JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "))).toEqual({ title: "Private call", body: "Declined", url: `/app/messages?c=${call}`, tag: `call:${call}`, replace: "ringing" });
+    await setPresenceStatus(member, "dnd");
+    expect(await pushCallCleared(member, call, "answered", ok)).toBe(0);
     await setPresenceStatus(member, "online");
   });
 

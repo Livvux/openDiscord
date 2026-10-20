@@ -70,6 +70,10 @@ export interface PushPayload {
   body: string;
   url: string;
   tag: string;
+  /** A ringing call notification that a later `replace: "ringing"` push may overwrite. */
+  ringing?: true;
+  /** Only overwrite an open ringing notification with the same tag; never shows a new one. */
+  replace?: "ringing";
 }
 
 /** The transport, replaceable in tests. Resolves the HTTP status code. */
@@ -128,6 +132,23 @@ export async function pushDirectMessage(userId: string, senderId: string, send: 
     body: kind === "call" ? "Incoming call" : "New encrypted message",
     url: groupId ? `/app/messages?c=${encodeURIComponent(groupId)}` : `/app/messages?to=${encodeURIComponent(senderId)}`,
     tag: `${kind === "call" ? "call" : "dm"}:${groupId ?? senderId}`,
+    ...(kind === "call" ? { ringing: true as const } : {}),
+  };
+  return deliver(subs, JSON.stringify(payload), send);
+}
+
+/** The person answered or declined a call on one device: their other devices stop showing "Incoming call". */
+export async function pushCallCleared(userId: string, conversationId: string, outcome: "answered" | "declined", send: PushSender = sendWithWebPush): Promise<number> {
+  if (!pushEnabled && send === sendWithWebPush) return 0;
+  const subs = await db.select().from(pushSubscription).where(eq(pushSubscription.userId, userId));
+  // Do not disturb never received the ring.
+  if (subs.length === 0 || (await presenceChoice(userId)) === "dnd") return 0;
+  const payload: PushPayload = {
+    title: "Private call",
+    body: outcome === "answered" ? "Answered on another device" : "Declined",
+    url: `/app/messages?c=${encodeURIComponent(conversationId)}`,
+    tag: `call:${conversationId}`,
+    replace: "ringing",
   };
   return deliver(subs, JSON.stringify(payload), send);
 }

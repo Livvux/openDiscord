@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCallNotice, dismissRing, expireRings, RING_TIMEOUT_MS, type Ring } from "@/components/app/voice/dm-call-ring";
+import { applyCallNotice, DECLINED_NOTICE_MS, dismissRing, expireRings, RING_TIMEOUT_MS, type Ring } from "@/components/app/voice/dm-call-ring";
 
 const ringing = { conversationId: "c1", state: "ringing" as const, callerId: "u1", callerName: "Ada" };
 const ended = { conversationId: "c1", state: "ended" as const, callerId: null, callerName: null };
@@ -26,6 +26,27 @@ describe("direct-message call ringing state", () => {
     expect(expireRings(rings, 1000 + RING_TIMEOUT_MS)[0].state).toBe("missed");
     expect(dismissRing(rings, "c1")).toEqual([]);
     expect(rings).toHaveLength(1);
+  });
+  it("stops ringing and never records a missed call once answered or declined on another session", () => {
+    const cleared = { ...ended, state: "cleared" as const };
+    const gone = applyCallNotice(applyCallNotice([], ringing, 1000), cleared, 2000);
+    expect(gone).toEqual([]);
+    // The call's later end adds nothing on that other session.
+    expect(applyCallNotice(gone, ended, 3000)).toEqual([]);
+    // A missed call already shown there clears as well; other conversations stay.
+    const missedAndOther = applyCallNotice(applyCallNotice(applyCallNotice([], ringing, 1000), ended, 2000), { ...ringing, conversationId: "c2" }, 2500);
+    expect(applyCallNotice(missedAndOther, cleared, 3000).map((ring) => ring.conversationId)).toEqual(["c2"]);
+  });
+  it("tells people in the call who declined, collecting each person once, and expires the notice", () => {
+    const declined = (name: string) => ({ conversationId: "c1", state: "declined" as const, callerId: name, callerName: name });
+    const one = applyCallNotice([], declined("Ben"), 1000, "c1");
+    expect(one).toEqual([{ conversationId: "c1", callerName: "Ben", state: "declined", since: 1000 }]);
+    const two = applyCallNotice(applyCallNotice(one, declined("Cy"), 2000, "c1"), declined("Ben"), 2500, "c1");
+    expect(two).toEqual([{ conversationId: "c1", callerName: "Ben, Cy", state: "declined", since: 2500 }]);
+    // "cleared" belongs to the callee's sessions and never removes a decline notice.
+    expect(applyCallNotice(two, { ...ended, state: "cleared" }, 2600)).toEqual(two);
+    expect(expireRings(two, 2500 + DECLINED_NOTICE_MS - 1)).toBe(two);
+    expect(expireRings(two, 2500 + DECLINED_NOTICE_MS)).toEqual([]);
   });
   it("ignores malformed notices", () => {
     expect(applyCallNotice([], { conversationId: "", state: "ringing", callerId: null, callerName: null }, 1)).toEqual([]);

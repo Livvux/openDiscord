@@ -5,6 +5,7 @@ import { invalid } from "@/server/errors";
 import { errorResponse, PRIVATE_NO_STORE, readJsonBody } from "@/server/http";
 import { consume } from "@/server/limits";
 import { requireUser } from "@/server/session";
+import { declineDmCall } from "@/server/voice-control";
 import { parse, uuid } from "@/server/validation";
 
 export async function GET(request: Request) {
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
       case "send": result = await appendDirectMessage(await requireDmDevice(request), parse(uuid, body.id), body.input); break;
       case "read": await markDirectConversationRead(user.id, parse(uuid, body.id), body.message); break;
       case "report": await reportDirectMessage(user.id, { id: body.id, reason: body.reason, excerpt: body.excerpt }); break;
+      case "call-decline": await declineDmCall(user.id, body.id); break;
       case "revoke": await revokeDmDevice(user.id, parse(uuid, body.id)); break;
       default: throw invalid("Unknown private messaging operation.");
     }

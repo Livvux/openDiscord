@@ -12,7 +12,8 @@ import { AppError, forbidden, invalid, notFound } from "./errors";
 import { assertActiveUser } from "./instance-policy";
 import { consume } from "./limits";
 import { has, Permission } from "./permissions";
-import { parse } from "./validation";
+import { publish } from "./realtime";
+import { parse, uuid } from "./validation";
 import { lockVoiceLifecycle as lockVoice } from "./voice-locks";
 import { announceDmCallEnded, dmCallAllowed, DM_CALL_SOURCES, requireDmCall, ringDmCall } from "./voice-dm";
 
@@ -130,7 +131,7 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
   const auth = parse(voiceJoinAuthSchema, rawAuth), data = parse(voiceJoinSchema, input);
   await consume(`voice-control-join:${auth.userId}`, 30, 60_000);
   const conversationId = data.conversationId;
-  let rung: string[] = [];
+  let rung: string[] = [], answered = false;
   const result = await voiceTransaction(async (tx): Promise<VoiceSnapshot | AppError> => {
     await lockVoice(tx);
     let now = new Date();
@@ -183,6 +184,8 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
     if (ownSession.expiresAt <= now || own.leaseExpiresAt <= now) throw forbidden("This voice enrollment has ended.");
     // Content-free ring for a newly started conversation call; NOTIFY is delivered only on commit.
     if (starting && conversationId) rung = await ringDmCall(tx, conversationId, auth.userId);
+    // Answered here: the person's other sessions stop ringing.
+    else if (conversationId) { answered = true; await publish({ type: "dm.call", userId: auth.userId, conversationId, state: "cleared" }, tx); }
     return { ...result, serverTime: now.toISOString() };
     }); } catch (error) { if (error instanceof AppError) return error; throw error; }
   });
@@ -191,7 +194,29 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
   // At most one push per caller and conversation every 30 seconds, so restarting a call cannot spam closed apps.
   if (rung.length) void consume(`voice-ring:${auth.userId}:${conversationId}`, 1, 30_000).then(() => import("./push"))
     .then(({ pushDirectMessage }) => Promise.all(rung.map((userId) => pushDirectMessage(userId, auth.userId, undefined, conversationId, "call")))).catch(() => {});
+  if (answered) void import("./push").then(({ pushCallCleared }) => pushCallCleared(auth.userId, conversationId!, "answered")).catch(() => {});
   return result;
+}
+
+/**
+ * A rung person turns down a conversation call. Rung means: a current member allowed to call (`requireDmCall`), not in the
+ * active call, and without a block toward anyone in it — the same people `ringDmCall` reaches.
+ * shortcut: who was rung is not stored, so a member who joined the group after the ring may decline too; store it if that matters.
+ * Their other sessions stop ringing; everyone in the call learns who declined (name only). Delivered on commit.
+ */
+export async function declineDmCall(userId: string, rawConversationId: unknown): Promise<void> {
+  const conversationId = parse(uuid, rawConversationId);
+  await consume(`dm-call-decline:${userId}`, 20, 60_000);
+  await db.transaction(async (tx) => {
+    await requireDmCall(tx, conversationId, userId);
+    const [call] = await tx.select().from(voiceCall).where(and(eq(voiceCall.conversationId, conversationId), eq(voiceCall.status, "active")));
+    const members = call ? await liveMembers(tx, call.id) : [];
+    if (!members.length || members.some((m) => m.userId === userId)) throw notFound("There is no incoming call to decline.");
+    await noBlockedPairs(tx, members, userId);
+    await publish({ type: "dm.call", userId, conversationId, state: "cleared" }, tx);
+    for (const caller of new Set(members.map((m) => m.userId))) await publish({ type: "dm.call", userId: caller, conversationId, state: "declined", callerId: userId }, tx);
+  });
+  void import("./push").then(({ pushCallCleared }) => pushCallCleared(userId, conversationId, "declined")).catch(() => {});
 }
 
 // A denial after terminal cleanup is returned through the transaction, then thrown after commit.
