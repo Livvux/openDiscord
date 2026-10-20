@@ -45,6 +45,50 @@ A concurrent attachment deletion makes the run fail rather than accepting an inc
 
 The dedicated bucket retains daily recovery bundles for 30 days. The 1 GiB aggregate budget fails
 closed and needs an operator capacity review if reached; there is no automatic unlimited growth.
+
+#### Backup capacity budgets and early warning
+
+The budgets live in `scripts/backup-capacity.py`, a sibling of the backup script like
+`capture-scanner-recovery.py`. Each run records every measurement (byte counts and limits, never
+content) in `/var/backups/opendiscord/capacity.json` before checking it, so a run that fails at a
+budget still leaves the numbers behind:
+
+| Metric | Limit | Enforced |
+| --- | --- | --- |
+| `database` (`pg_database_size`) | 512 MiB, and at most 1/4 of free `/dev/shm` | yes |
+| `media` (whole media bucket) | 512 MiB, and at most 1/3 of free `/dev/shm` | yes |
+| `dm_ciphertext` (E2EE DM attachments in this dump, part of `media`) | same as `media` | no, shown separately |
+| `encrypted_total` (bucket contents + this bundle) | 1 GiB | yes |
+| `retention_projection` (this bundle × 31 retained dailies) | 1 GiB | no, early warning |
+
+Media must sit in RAM because community attachments are plaintext and are copied, checked against
+the dump's attachment references and tarred into the age stream without touching disk. E2EE DM
+attachments are already ciphertext (up to 4 × 25 MB per message, counted against the existing 500 MB
+per-user daily upload quota). They are still copied into each bundle, so the bundle is complete
+without depending on another copy. The server never decrypts them. Ciphertext does not compress.
+Because every daily bundle holds all media, the aggregate budget reaches a steady state of about
+31 × bundle size. One maximum-size DM message (~100 MB) is enough to exhaust 1 GiB within about ten
+days. `retention_projection` reports that on the first day.
+
+The `backup` monitor mode reads the record after the job checks. It raises
+`backup-capacity-warning` once any metric reaches 80% of its limit (the backups keep succeeding),
+`backup-capacity-exceeded` when a failed run had reached an enforced budget, and
+`backup-capacity-unavailable` if the record is missing, invalid or older than 30 hours. When warned,
+review capacity before the job starts to fail: raise the budgets together with the backup bucket
+quota and host RAM, shorten retention, or move media to incremental off-host copies. Never exclude
+media from the bundle without a verified replacement copy.
+
+Operator install (manual, both files must be updated together, or the monitor reports
+`backup-capacity-unavailable`):
+
+```sh
+install -o root -g root -m 700 scripts/production-backup.sh scripts/backup-capacity.py /etc/opendiscord-backup/
+install -o root -g root -m 755 scripts/operator-monitor.py /usr/local/sbin/opendiscord-operator-monitor
+systemctl start opendiscord-backup.service   # writes the first capacity.json
+cat /var/backups/opendiscord/capacity.json
+# Run the installed backup-mode monitor once (same user and config as its timer); expect "healthy".
+python3 /usr/local/sbin/opendiscord-operator-monitor --config /etc/opendiscord-monitor/<backup-config>.json
+```
 Monitor both failed jobs and backup freshness. A verified ciphertext upload is not yet an isolated
 production-data restore; record the recovery rehearsal separately. Never restore a recovery bundle
 into the live database as a test. Local-volume attachments require extending this S3-oriented job

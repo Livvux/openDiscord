@@ -224,6 +224,29 @@ def check(config: MonitorConfig, now: float) -> str | None:
         if result.returncode or result.stdout.strip() != "success":
             return "voice-job-failed"
         return None
+    problem, ratios = backup_job_problem(now), backup_capacity_ratios(now)
+    if problem:
+        # A run that failed because an enforced budget was reached says so instead of a generic failure.
+        return "backup-capacity-exceeded" if ratios and ratios[1] > 1 else problem
+    if ratios is None:
+        return "backup-capacity-unavailable"
+    return "backup-capacity-warning" if ratios[0] >= 0.8 else None
+
+
+def backup_capacity_ratios(now: float) -> tuple[float, float] | None:
+    """Highest used/limit over all budgets recorded by backup-capacity.py, and over the enforced ones."""
+    try:
+        record = json.loads(Path("/var/backups/opendiscord/capacity.json").read_text())
+        age = now - dt.datetime.fromisoformat(record["at"]).timestamp()
+        metrics = [(m["bytes"] / m["limit"], m["enforced"] is True) for m in record["metrics"].values()]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ZeroDivisionError):
+        return None
+    if age < -300 or age > 30 * 3600 or not metrics:
+        return None
+    return max(r for r, _ in metrics), max((r for r, enforced in metrics if enforced), default=0.0)
+
+
+def backup_job_problem(now: float) -> str | None:
     try:
         marker = Path("/var/backups/opendiscord/last-success").read_text().split()[0]
         age = now - dt.datetime.fromisoformat(marker).timestamp()

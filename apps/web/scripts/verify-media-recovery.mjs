@@ -244,7 +244,12 @@ try {
   assert.deepEqual([...members].sort(), expected.sort());
   const extracted = join(work, 'extracted'); mkdirSync(extracted, { mode: 0o700 });
   run('tar', ['-xzf', '-', '-C', extracted], { input: decrypted });
-  assert.equal(readFileSync(join(extracted, 'manifest.txt'), 'utf8'), 'format=opendiscord-recovery-v1\nattachment_references=1\n');
+  assert.equal(readFileSync(join(extracted, 'manifest.txt'), 'utf8'), 'format=opendiscord-recovery-v1\nattachment_references=1\ndm_ciphertext_bytes=0\n');
+  // Every budget is recorded for the operator monitor's early capacity warning.
+  const { metrics } = JSON.parse(readFileSync('/var/backups/opendiscord/capacity.json', 'utf8'));
+  assert.deepEqual(Object.keys(metrics).sort(), ['database', 'dm_ciphertext', 'encrypted_total', 'media', 'retention_projection']);
+  assert.equal(metrics.media.bytes, fixture.length); assert.equal(metrics.dm_ciphertext.bytes, 0);
+  assert.equal(metrics.retention_projection.bytes, 31 * encrypted.length);
   assert.deepEqual(readFileSync(join(extracted, 'config/app.env')), readFileSync(envFile));
   assert.equal(hash(readFileSync(join(extracted, 'media', refs[0].key))), hash(fixture));
   phase = 'restoration';
@@ -321,7 +326,7 @@ try {
     }
     // These mutable outputs are generated only by our unchanged backup invocation.
     if (path === '/var/backups/opendiscord') {
-      for (const name of ['backup.lock', 'last-success']) {
+      for (const name of ['backup.lock', 'last-success', 'capacity.json', 'capacity.tmp']) {
         const file = join(path, name);
         if (existsSync(file)) rmSync(file);
       }
