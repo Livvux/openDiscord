@@ -28,7 +28,7 @@ export function AdminPanel({ data, tab, search, status }: AdminPanelProps) {
           Closed Alpha {data.settings.closedAlpha ? "on" : "off"}
         </Badge>
       </div>
-      <nav aria-label="Administration sections" className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+      <nav aria-label="Administration sections" className="relative -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
         <ul className="flex min-w-max gap-1 border-b">
           {ADMIN_TABS.map((t) => (
             <li key={t}>

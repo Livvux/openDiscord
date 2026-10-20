@@ -234,7 +234,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           {friends.length >= 2 && <Button variant="ghost" size="sm" aria-expanded={creatingGroup} onClick={() => setCreatingGroup((v) => !v)}>New group</Button>}
           {active?.status === "accepted" && !active.blocked && <DmCallButton conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id} onToggle={() => setCallFor((id) => (id === active.id ? null : active.id))} />}
           {active && group && <Button variant="ghost" size="sm" aria-expanded={groupSettings} onClick={() => setGroupSettings((v) => !v)}>Group settings</Button>}
-          <Button variant="ghost" size="sm" aria-expanded={security} onClick={toggleSecurity}><ShieldCheckIcon aria-hidden />Devices and recovery</Button>
+          <Button variant="ghost" size="sm" aria-expanded={security} onClick={toggleSecurity}><ShieldCheckIcon aria-hidden /><span className="max-sm:sr-only">Devices and recovery</span></Button>
           {active && !group && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button>}
         </div>
       </header>
