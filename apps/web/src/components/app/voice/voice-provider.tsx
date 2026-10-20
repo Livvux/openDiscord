@@ -47,6 +47,7 @@ const endReasons: Record<string, string> = {
   "media-permission-reduced": "you no longer have permission to use this call.", forbidden: "you no longer have permission to use this call.",
   unauthorized: "you were signed out. Sign in again, then rejoin.", "session-changed": "you were signed out or your session changed.",
   "lease-expired": "the call connection expired. Rejoin to continue.",
+  internal: "the voice server had a problem. Rejoin to try again.",
   rate_limited: "too many requests. Wait a moment, then rejoin.", "budget-exhausted": "too many requests. Wait a moment, then rejoin.",
 };
 function voiceEndedText(code: string): string {
@@ -58,6 +59,7 @@ export function voiceStatus(view: VoiceCallView | null, joining: boolean): strin
   if (joining) return "Connecting: creating a temporary Voice device…";
   if (!view) return "Join to review the current audience.";
   if (view.state === "ended") return view.error ? voiceEndedText(view.error) : "Voice stopped. Join again to start a fresh call.";
+  if (view.reconnecting) return "Reconnecting to the voice server… The call ends safely if the connection does not return.";
   if (view.media.mediaState === "ready") return view.media.microphone ? "Encrypted voice ready — microphone on" : "Encrypted voice ready — microphone off";
   if (view.media.mediaState === "keying" || view.state === "agreed") return "Preparing encrypted media…";
   if (view.state === "retry-required") return "Audience attempt expired. Review everyone and retry.";
@@ -75,6 +77,9 @@ export function voiceErrorText(error: unknown, source?: VoiceSource): string {
     if (error.code === "messaging-setup-required") return "Set up encrypted messaging in Devices and recovery first, then return and join Voice.";
     if (error.code === "not-ready") return "The other participant is not ready yet. Wait, then explicitly retry this action.";
     if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
+    if (error.code === "server-unreachable") return "Couldn't reach the voice server. Check your connection, then rejoin.";
+    if (error.code === "previous-call-closing") return "Your previous call is still closing on the server. Wait a few seconds, then rejoin.";
+    if (error.code === "rate-limited") return "Too many requests. Wait a moment, then rejoin.";
     if (error.code === "call-full") return `This call is full (${VOICE_LIMITS.members} devices). Leave on another device to join.`;
     return `Voice stopped (${error.code}). Join again when ready.`;
   }

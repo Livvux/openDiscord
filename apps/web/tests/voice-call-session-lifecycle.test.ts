@@ -113,7 +113,7 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     expect(Object.isFrozen(rendered.tiles)).toBe(true); expect(Object.isFrozen(rendered.tiles[0])).toBe(true);
     expect(JSON.stringify(rendered)).not.toMatch(/owner|secret|token|CryptoKey|material|keyId|reference|participantIdentity/);
     expect(context).not.toHaveProperty("owner"); expect(context).not.toHaveProperty("secret"); expect(context).not.toHaveProperty("ref");
-    expect(context).toMatchObject({ epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, deadline: 10000 });
+    expect(context).toMatchObject({ epochId: proposal.epochId, proposalSequence: proposal.sequence, reference: proposal.reference, deadline: 20000 });
     expect(Object.isFrozen(context)).toBe(true); expect(Object.isFrozen(context.snapshot.members)).toBe(true);
     const seen: { fenced: boolean; media: VoiceMediaView }[] = [];
     const unsubscribe = call.subscribe(() => {
@@ -327,6 +327,95 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     await vi.advanceTimersByTimeAsync(1_000);
     expect(native.port!.query).toHaveBeenCalledTimes(2); expect(call.getSnapshot().keysPrepared).toBe(true);
     expect(native.port!.receiveAgreement).toHaveBeenCalledTimes(1);
+  });
+  it("retries a transient crypto failure with the identical request, charging every attempt to the shared budget", async () => {
+    const bodies: string[] = []; let failures = 2;
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.action === "crypto") {
+        bodies.push(String(init?.body));
+        if (failures-- > 0) { if (failures === 1) return new Response("<html>bad gateway</html>", { status: 503, headers: { "content-type": "text/html" } }); throw new TypeError("Failed to fetch"); }
+      }
+      return fetcher()(path, init);
+    } });
+    const pending = dispatch(1);
+    await vi.advanceTimersByTimeAsync(0); expect(call.getSnapshot().reconnecting).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toMatchObject({ cursor: "0" });
+    expect(bodies).toHaveLength(3); expect(new Set(bodies).size).toBe(1);
+    expect(call.getSnapshot()).toMatchObject({ reconnecting: false, state: "verifying" });
+    // Join + 3 attempts already used ordinary capacity; 158 more fill it to the 162 cap.
+    for (let i = 0; i < 158; i++) await dispatch(1);
+    await expect(dispatch(1)).rejects.toMatchObject({ code: "budget-exhausted" });
+  });
+  it.each([[429, "rate_limited"], [409, "conflict"], [403, "forbidden"]] as const)("never retries an HTTP %i crypto answer", async (status, code) => {
+    let attempts = 0;
+    call = await CallSession.create({ ...options, fetch: fetcher(action => { if (action === "crypto") { attempts++; return Response.json({ code }, { status }); } return Response.json(action === "heartbeat" ? snapshot() : { removals: [] }); }) });
+    const failure = await dispatch(1).catch(error => error);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(attempts).toBe(1); expect(failure).toBeInstanceOf(Error); expect(call.getSnapshot().reconnecting).toBe(false);
+  });
+  it("heartbeat rides out a short outage inside the lease and shows reconnecting meanwhile", async () => {
+    let offline = false, heartbeats = 0;
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      if (JSON.parse(String(init?.body)).action === "heartbeat") { heartbeats++; if (offline) throw new TypeError("Failed to fetch"); }
+      return fetcher()(path, init);
+    } });
+    offline = true; await vi.advanceTimersByTimeAsync(10_000);
+    expect(heartbeats).toBe(1); expect(call.getSnapshot()).toMatchObject({ reconnecting: true, state: "verifying" });
+    await vi.advanceTimersByTimeAsync(500); expect(heartbeats).toBe(2);
+    offline = false; await vi.advanceTimersByTimeAsync(1_000);
+    expect(heartbeats).toBe(3); expect(call.getSnapshot()).toMatchObject({ reconnecting: false, state: "verifying" });
+    expect(call.getSnapshot().error).toBeUndefined();
+  });
+  it("a network that stays down still ends the call no later than the lease", async () => {
+    let offline = false;
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      if (offline && JSON.parse(String(init?.body)).action !== "join") throw new TypeError("Failed to fetch");
+      return fetcher()(path, init);
+    } });
+    offline = true;
+    await vi.advanceTimersByTimeAsync(20_000); expect(call.getSnapshot()).toMatchObject({ state: "verifying", reconnecting: true });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(call.getSnapshot()).toMatchObject({ state: "ended", reconnecting: false }); expect(call.getSnapshot().error).toMatch(/^(network|lease-expired)$/);
+    expect(native.port!.close).toHaveBeenCalledOnce();
+  });
+  it("an exhausted transient crypto failure ends the call naming the network, not a generic control failure", async () => {
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      if (JSON.parse(String(init?.body)).action === "crypto") return new Response("<html>gateway</html>", { status: 502, headers: { "content-type": "text/html" } });
+      return fetcher()(path, init);
+    } });
+    const failure = dispatch(1).catch(error => error);
+    await vi.advanceTimersByTimeAsync(19_500);
+    expect(await failure).toMatchObject({ code: "protocol", status: 502 });
+    // The real Owner stops on any transport failure and reports it through its fence.
+    native.options!.onFence("transport-or-schema-failure");
+    expect(call.getSnapshot()).toMatchObject({ state: "ended", error: "internal", reconnecting: false });
+  });
+  it("join waits out this browser's stale enrollment (409) with the same nonce/device, then joins", async () => {
+    const joins: { joinNonce: string; voiceDeviceId: string }[] = [];
+    const base = fetcher();
+    const pending = CallSession.create({ ...options, fetch: async (path, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.action === "join") { joins.push({ joinNonce: body.input.joinNonce, voiceDeviceId: body.input.voiceDeviceId }); if (joins.length <= 2) return Response.json({ code: "conflict" }, { status: 409 }); }
+      return base(path, init);
+    } });
+    await vi.advanceTimersByTimeAsync(3_000);
+    call = await pending;
+    expect(joins).toHaveLength(3); expect(new Set(joins.map(join => JSON.stringify(join))).size).toBe(1);
+    expect(call.getSnapshot().state).toBe("verifying");
+  });
+  it("join gives up after its bounded retries and releases the account lock", async () => {
+    let joins = 0;
+    const failed = CallSession.create({ ...options, fetch: async () => { joins++; return Response.json({ code: "conflict" }, { status: 409 }); } }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(await failed).toMatchObject({ code: "previous-call-closing" }); expect(joins).toBe(7);
+    call = await CallSession.create({ ...options, fetch: fetcher() }); expect(call.getSnapshot().state).toBe("verifying");
+  });
+  it("join never retries a refusal", async () => {
+    let joins = 0;
+    const failed = await CallSession.create({ ...options, fetch: async () => { joins++; return Response.json({ code: "forbidden" }, { status: 403 }); } }).catch(error => error);
+    expect(failed).toMatchObject({ code: "forbidden" }); expect(joins).toBe(1);
   });
   it("a delayed lease grant uses request start and resume checks cannot extend it", async () => {
     const join = gate<Response>();
