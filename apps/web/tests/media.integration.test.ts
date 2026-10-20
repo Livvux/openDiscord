@@ -49,6 +49,16 @@ describe("image processing", () => {
     expect((await readLimited(new Blob([new Uint8Array(1024)]).stream(), 1024)).byteLength).toBe(1024);
   });
 
+  it("gives up on a body that stalls or trickles past the deadline, and cancels it", async () => {
+    let cancelled = 0;
+    const stalled = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(8)); }, cancel() { cancelled += 1; } });
+    await expect(readLimited(stalled(), 1024, { stallMs: 50 })).rejects.toThrow(/too slow/);
+    let timer: ReturnType<typeof setInterval>;
+    const trickle = new ReadableStream<Uint8Array>({ start(c) { timer = setInterval(() => c.enqueue(new Uint8Array(1)), 10); }, cancel() { clearInterval(timer); cancelled += 1; } });
+    await expect(readLimited(trickle, 1024, { deadlineMs: 100, stallMs: 50 })).rejects.toThrow(/too slow/);
+    expect(cancelled).toBe(2);
+  });
+
   it("shrinks very large images", async () => {
     const big = await sharp({ create: { width: 6000, height: 1000, channels: 3, background: "#000" } }).png().toBuffer();
     const out = await processImage(big);
@@ -155,6 +165,17 @@ describe.skipIf(!mediaEnabled)("attachments in private storage", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(html);
     await expect(readAttachment(outsider, view.id)).rejects.toThrow(/not found/);
+  });
+
+  it("releases every upload slot when slow bodies time out", async () => {
+    const slow = await fixtures.create("Slow uploader");
+    await acceptInvite(slow, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));
+    const stalled = (limit: number) => readLimited(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(1)); } }), limit, { stallMs: 50 });
+    // As many as there are slots (4): all fail clearly, then the next upload still gets one.
+    const results = await Promise.allSettled(Array.from({ length: 4 }, () => uploadAttachment(slow, channelId, "application/zip", 16, stalled, "a.zip")));
+    expect(results.map((r) => r.status === "rejected" && String(r.reason))).toEqual(Array(4).fill(expect.stringMatching(/too slow/)));
+    const view = await upload(slow);
+    ids.push(view.id);
   });
 
   it("enforces the daily upload quota atomically", async () => {

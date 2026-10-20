@@ -2,7 +2,7 @@ import { voiceTransaction } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { invalidateVoiceMembership } from "./voice-control";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { and, asc, count, desc, eq, exists, gt, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, getTableColumns, gt, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { z } from "zod";
@@ -20,6 +20,10 @@ import { publish } from "./realtime";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const DM_MAX_DEVICE_DELIVERIES = 100;
+/** Pending events per device mailbox; `DM_MAX_PENDING_PER_SENDER` keeps one contact from filling it for everyone else. */
+const DM_MAX_MAILBOX = 256, DM_MAX_PENDING_PER_SENDER = 32;
+/** One-time-key claims per (claimer, target device): sessions are reused, so honest clients rarely claim twice. */
+const DM_CLAIMS_PER_DEVICE = { max: 10, windowMs: 3_600_000 };
 const object = z.record(z.string(), z.unknown());
 const record = (value: unknown): Record<string, unknown> => parse(object, value);
 const conflict = (message: string) => new AppError("conflict", message);
@@ -325,7 +329,7 @@ const cryptoRequest = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ack"), cursor: z.string().regex(/^\d{1,15}$/) }),
 ]);
 
-/** Exact Matrix wire shapes at the boundary; the application never processes private keys. */
+/** Exact Matrix wire shapes at the boundary; the application never processes private keys. The route rate-limits before reading the body. */
 export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): Promise<Record<string, unknown>> {
   const data = parse(cryptoRequest, input);
   // Bound attacker-controlled fan-out before acquiring the shared transaction lock.
@@ -344,7 +348,6 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
       }
     }
   }
-  await consume(`dm-crypto:${auth.userId}`, 240, 60_000);
   return db.transaction(async (tx) => {
     // Short DB-only critical section: atomic claims, receipt replay and mailbox commit/cursor ordering.
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
@@ -462,6 +465,7 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
           if (algorithm !== "signed_curve25519") throw invalid("Unsupported prekey algorithm.");
           const [device] = await tx.select().from(dmDevice).where(and(eq(dmDevice.id, parse(uuid, id)), eq(dmDevice.userId, target), isNull(dmDevice.revokedAt)));
           if (!device) continue;
+          await consume(`dm-claim:${auth.userId}:${id}`, DM_CLAIMS_PER_DEVICE.max, DM_CLAIMS_PER_DEVICE.windowMs);
           const [key] = await tx.select().from(dmKey).where(and(eq(dmKey.deviceId, id), or(eq(dmKey.fallback, true), eq(dmKey.used, false)))).orderBy(asc(dmKey.fallback), asc(dmKey.keyId)).limit(1);
           if (key) {
             response[id] = { [key.keyId]: key.content };
@@ -489,7 +493,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
           } else if ((content.from_device !== undefined && content.from_device !== own.id) || (content.requesting_device_id !== undefined && content.requesting_device_id !== own.id)) throw invalid("Verification sender mismatch.");
           for (const device of devices.filter((d) => d.id === id || id === "*")) {
             if (++deliveries > DM_MAX_DEVICE_DELIVERIES) throw invalid("Too many device deliveries.");
-            if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= (largeOwnTransfer ? 16 : 256)) throw invalid("The recipient's device mailbox is full.");
+            if (await tx.$count(dmMailbox, eq(dmMailbox.deviceId, device.id)) >= (largeOwnTransfer ? 16 : DM_MAX_MAILBOX)) throw invalid("The recipient's device mailbox is full.");
+            // Stays fatal: a silently dropped room-key share would leave that device unable to decrypt, with no re-share.
+            if (target !== auth.userId && await tx.$count(dmMailbox, and(eq(dmMailbox.deviceId, device.id), eq(dmMailbox.senderId, auth.userId))) >= DM_MAX_PENDING_PER_SENDER) throw invalid("This device has too many undelivered events from you. Try again after it comes online.");
             await tx.insert(dmMailbox).values({ deviceId: device.id, senderId: auth.userId, event: { sender: ownUser, type: data.eventType, content } });
           }
         }
@@ -500,9 +506,9 @@ export async function handleCryptoRequest(auth: DmDeviceAuth, input: unknown): P
     return result;
   });
 }
+/** The route rate-limits before reading the body. */
 export async function saveDmBackup(auth: DmDeviceAuth, input: unknown): Promise<void> {
   const data = parse(z.object({ id: uuid, ciphertext: base64Schema.max(Math.ceil(DM_MAX_BACKUP_BYTES * 4 / 3)) }).strict(), input);
-  await consume(`dm-backup:${auth.userId}`, 10, 3_600_000);
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     await deviceFor(tx, auth);
@@ -549,14 +555,17 @@ export async function resolveDirectReport(actor: AdminActor, rawId: unknown): Pr
 export async function exportDirectData(actor: string) {
   const conversations = await listDirectConversations(actor);
   const ids = conversations.map((c) => c.id);
+  // Group members only get messages from after they joined (as listDirectMessages / directAttachmentFor).
+  const ownMembership = and(eq(dmMember.conversationId, dmMessage.conversationId), eq(dmMember.userId, actor), isNull(dmMember.leftAt));
+  const sinceJoined = or(isNull(dmMember.joinedAt), gte(dmMessage.createdAt, dmMember.joinedAt));
   const [devices, identity, backups, messages, reports, readMarkers, files] = await Promise.all([
     listDmDevices(actor), db.select().from(dmIdentity).where(eq(dmIdentity.userId, actor)),
     db.select().from(dmBackup).where(eq(dmBackup.userId, actor)),
-    ids.length ? db.select().from(dmMessage).where(inArray(dmMessage.conversationId, ids)).orderBy(asc(dmMessage.id)) : [],
+    ids.length ? db.select(getTableColumns(dmMessage)).from(dmMessage).leftJoin(dmMember, ownMembership).where(and(inArray(dmMessage.conversationId, ids), sinceJoined)).orderBy(asc(dmMessage.id)) : [],
     db.select({ messageId: dmReport.messageId, reason: dmReport.reason, excerpt: dmReport.excerpt, createdAt: dmReport.createdAt, resolvedAt: dmReport.resolvedAt }).from(dmReport).where(eq(dmReport.reporterId, actor)),
     db.select({ conversationId: dmReadState.conversationId, lastReadId: dmReadState.lastReadId }).from(dmReadState).where(eq(dmReadState.userId, actor)),
     // References only: the ciphertext is downloadable while the conversation exists; keys are in message ciphertext.
-    ids.length ? db.select({ id: attachment.id, messageId: attachment.dmMessageId, size: attachment.size, createdAt: attachment.createdAt }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).where(inArray(dmMessage.conversationId, ids)).orderBy(asc(attachment.id)) : [],
+    ids.length ? db.select({ id: attachment.id, messageId: attachment.dmMessageId, size: attachment.size, createdAt: attachment.createdAt }).from(attachment).innerJoin(dmMessage, eq(dmMessage.id, attachment.dmMessageId)).leftJoin(dmMember, ownMembership).where(and(inArray(dmMessage.conversationId, ids), sinceJoined)).orderBy(asc(attachment.id)) : [],
   ]);
   return { conversations, devices, publicIdentity: identity[0]?.keys ?? null, encryptedBackups: backups.map((b) => ({ id: b.id, ciphertext: b.ciphertext, createdAt: b.createdAt })), encryptedMessages: messages, encryptedAttachments: files.map((f) => ({ ...f, url: `/api/dm/attachments/${f.id}` })), reports, readMarkers };
 }

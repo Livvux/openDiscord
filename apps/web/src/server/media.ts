@@ -92,19 +92,31 @@ export async function processImage(input: Uint8Array, { maximumDimension = MAX_D
 const mb = (bytes: number) => `${bytes / 1024 / 1024} MB`;
 
 /** Reads at most `limit` bytes; a body longer than it announced is cut off instead of buffered. */
-export async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array> {
+/** A slow-trickle body would hold an upload slot: the whole body must arrive within the deadline, without long stalls. */
+export const UPLOAD_READ_DEADLINE_MS = 60_000;
+export const UPLOAD_READ_STALL_MS = 15_000;
+
+export async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number, { deadlineMs = UPLOAD_READ_DEADLINE_MS, stallMs = UPLOAD_READ_STALL_MS } = {}): Promise<Uint8Array> {
   if (!body) throw invalid("The upload is empty.");
   const chunks: Uint8Array[] = [];
   let size = 0;
+  const deadline = Date.now() + deadlineMs;
   const reader = body.getReader();
-  for (let r = await reader.read(); !r.done; r = await reader.read()) {
-    const chunk = r.value;
-    size += chunk.byteLength;
-    if (size > limit) {
-      await reader.cancel();
-      throw invalid(`The upload is larger than it announced.`);
+  const read = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(invalid("The upload was too slow. Check your connection and try again.")), Math.max(0, Math.min(stallMs, deadline - Date.now()))); });
+    return Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer));
+  };
+  try {
+    for (let r = await read(); !r.done; r = await read()) {
+      const chunk = r.value;
+      size += chunk.byteLength;
+      if (size > limit) throw invalid(`The upload is larger than it announced.`);
+      chunks.push(chunk);
     }
-    chunks.push(chunk);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   }
   return Buffer.concat(chunks);
 }
