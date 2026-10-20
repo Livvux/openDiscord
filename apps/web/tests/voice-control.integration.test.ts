@@ -342,6 +342,8 @@ describe("leases, generation and mailbox transaction order", () => {
     for (const a of anchors) await db.insert(member).values({ communityId: f.communityId, userId: a.userId });
     const results = await Promise.allSettled(anchors.map((a) => joinVoiceControl(a, { channelId: f.channelId, joinNonce: randomUUID(), voiceDeviceId: randomUUID(), enrollmentSecret: randomBytes(32).toString("hex"), consent: true })));
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(7);
+    // A distinct code lets the joining client say "call is full" instead of a generic failure.
+    expect(results.flatMap((r) => r.status === "rejected" ? [r.reason.code] : [])).toEqual(["call_full", "call_full"]);
     expect(await db.$count(voiceCallMember, and(eq(voiceCallMember.callId, f.endpoints[0].snapshot.callId), neLeft()))).toBe(8);
   });
   it("never renews expired membership; expiry commits generation/cleanup before denial and releases capacity", async () => {

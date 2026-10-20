@@ -13,7 +13,7 @@ export const voiceHttpSnapshotSchema = z.object({ callId: id, channelId: id.opti
 const tokenSchema = z.object({ url: z.url(), token: z.string().min(1).max(16_384), snapshot: voiceHttpSnapshotSchema, roomName: z.string().max(256), participantIdentity: text, sources: z.array(z.enum(["microphone", "camera", "screen_share", "screen_share_audio"])).max(4), canPublishData: z.literal(false), expiresAt: timestamp }).strict().superRefine((grant, ctx) => {
   if (grant.roomName !== voiceRoomName({ channelId: voiceRoomScope(grant.snapshot), callId: grant.snapshot.callId, generation: grant.snapshot.generation }) || grant.participantIdentity !== grant.snapshot.participantIdentity || Date.parse(grant.expiresAt) > Date.parse(grant.snapshot.leaseExpiresAt) || new Set(grant.sources).size !== grant.sources.length) ctx.addIssue({ code: "custom", message: "Invalid voice media binding." });
 });
-const errorCodeSchema = z.enum(["unauthorized", "forbidden", "not_found", "invalid", "rate_limited", "conflict", "internal", "method_not_allowed"]);
+const errorCodeSchema = z.enum(["unauthorized", "forbidden", "not_found", "invalid", "rate_limited", "conflict", "call_full", "internal", "method_not_allowed"]);
 export type VoiceHttpErrorCode = z.infer<typeof errorCodeSchema> | "protocol" | "network" | "aborted" | "timeout";
 export class VoiceHttpError extends Error {
   constructor(readonly code: VoiceHttpErrorCode, readonly status?: number) { super(`Voice HTTP ${code}.`); this.name = "VoiceHttpError"; }
@@ -91,7 +91,7 @@ export function createVoiceHttpClient(options: { fetch?: typeof fetch; timeoutMs
       if (controller.signal.aborted) throw new VoiceHttpError(timedOut ? "timeout" : "aborted");
       if (!response.ok) {
         const failure = z.object({ code: errorCodeSchema }).strict().safeParse(raw);
-        const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, invalid: 400, rate_limited: 429, conflict: 409, internal: 500, method_not_allowed: 405 };
+        const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, invalid: 400, rate_limited: 429, conflict: 409, call_full: 409, internal: 500, method_not_allowed: 405 };
         if (!failure.success || statuses[failure.data.code] !== response.status) throw new VoiceHttpError("protocol", response.status);
         throw new VoiceHttpError(failure.data.code, response.status);
       }

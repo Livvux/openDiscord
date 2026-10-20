@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { authClient } from "@/lib/auth-client";
 import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/voice/call-session";
+import { VOICE_LIMITS } from "@/lib/voice/contracts";
 import type { VoiceSource } from "@/lib/voice/media-session";
 import { voiceFrameTransform } from "@/lib/voice/support";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
@@ -74,6 +75,7 @@ export function voiceErrorText(error: unknown, source?: VoiceSource): string {
     if (error.code === "messaging-setup-required") return "Set up encrypted messaging in Devices and recovery first, then return and join Voice.";
     if (error.code === "not-ready") return "The other participant is not ready yet. Wait, then explicitly retry this action.";
     if (error.code === "budget-exhausted") return "Voice is busy. Wait a moment before retrying.";
+    if (error.code === "call-full") return `This call is full (${VOICE_LIMITS.members} devices). Leave on another device to join.`;
     return `Voice stopped (${error.code}). Join again when ready.`;
   }
   // Permission errors and browser picker cancellation must never claim capture succeeded.

@@ -18,6 +18,11 @@ describe("bounded voice HTTP transport", () => {
     await expect(client.heartbeat({ callId: crypto.randomUUID(), memberId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), expectedGeneration: 1 }, "a".repeat(64), new AbortController().signal)).rejects.toMatchObject({ code: "conflict", status: 409 });
     expect(request).toHaveBeenCalledOnce();
   });
+  it("surfaces a full call as its own code on join", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ code: "call_full" }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    const client = createVoiceHttpClient({ fetch: request });
+    await expect(client.join({ conversationId: crypto.randomUUID(), joinNonce: crypto.randomUUID(), voiceDeviceId: crypto.randomUUID(), enrollmentSecret: "a".repeat(64), consent: true }, { id: crypto.randomUUID(), secret: "b".repeat(64) }, new AbortController().signal)).rejects.toMatchObject({ code: "call_full", status: 409 });
+  });
   it("does not start a request after cancellation", async () => {
     const request = vi.fn<typeof fetch>(); const abort = new AbortController(); abort.abort();
     const client = createVoiceHttpClient({ fetch: request });

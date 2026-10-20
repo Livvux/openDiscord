@@ -152,7 +152,7 @@ like channel calls.
 personal event stream to every other current member who has no block with the caller: caller and
 conversation only. A Web Push says "Incoming call" with the caller's name (skipped for Do not
 disturb and blocks; at most one per caller and conversation every 30 seconds). A call holds at most
-eight devices, so in a group of up to ten people the ninth device's join is refused. When the call closes, members receive an `ended` event; a ring that was not
+eight devices; groups are capped at eight people, so the ninth device (someone's second device) is refused with "This call is full (8 devices). Leave on another device to join." When the call closes, members receive an `ended` event; a ring that was not
 answered becomes a missed call, as does a ring older than 45 seconds. Accepting a ring is the
 explicit Voice join consent (the ring card states what joining creates). Declining is local only:
 the caller is not told. Missed calls are shown in this browser until dismissed; they are not stored

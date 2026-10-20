@@ -41,7 +41,8 @@ export const plainMessageSchema = z.object({
 }).strict().refine((message) => message.body.length > 0 || !!message.attachments, "A message needs text or an attachment.");
 export type PlainDirectMessage = z.infer<typeof plainMessageSchema>;
 export type DmDeviceAuth = { userId: string; sessionId: string; deviceId: string; secret: string };
-export const DM_GROUP_MAX_MEMBERS = 10;
+// Matches the eight-device E2EE call bound (VOICE_LIMITS.members) so every member can join a call.
+export const DM_GROUP_MAX_MEMBERS = 8;
 export const DM_GROUP_NAME_MAX = 100;
 export type DmMemberView = { id: string; name: string; avatar: string | null; /** A former group member, still shown as the sender of earlier messages. */ left: boolean; /** Either of you blocked the other: no keys are exchanged. */ blocked: boolean };
 export type DirectConversation = {

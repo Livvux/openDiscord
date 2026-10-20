@@ -163,7 +163,7 @@ export async function joinVoiceControl(rawAuth: unknown, input: unknown): Promis
     }
     const current = call?.status === "active" ? await liveMembers(tx, call.id) : [];
     try { await noBlockedPairs(tx, current, auth.userId); } catch (error) { if (error instanceof AppError) return error; throw error; }
-    if (current.length >= L.members) return invalid("This call has reached its eight-device limit.");
+    if (current.length >= L.members) return new AppError("call_full", "This call has reached its eight-device limit.");
     if (current.some((m) => m.anchorDeviceId === auth.anchorDeviceId)) return conflict("This anchor already has a live voice enrollment.");
     if (call && (await tx.select({ id: voiceCallMember.id }).from(voiceCallMember).where(and(eq(voiceCallMember.callId, call.id), eq(voiceCallMember.voiceDeviceId, data.voiceDeviceId)))).length) return conflict("This voice device ID has already been used in this call.");
     try { return await tx.transaction(async tx => {
