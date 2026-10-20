@@ -38,20 +38,44 @@ macOS notarization/Developer ID, Windows signing, store publication, security re
 
 `.github/workflows/desktop-release.yml` runs on tags `desktop-vX.Y.Z`; the tag must equal `version` in tauri.conf.json (bump it, and Cargo.toml, first). It builds a universal macOS app/DMG, Windows NSIS/MSI and Linux AppImage/deb/rpm on Ubuntu 22.04 and attaches them to a **draft** GitHub Release. Nothing reaches users until an operator reviews the job summaries (which state per platform what was signed) and publishes the draft. Pull requests that change the workflow run the same builds without publishing.
 
-Every secret is optional. Missing secrets produce a warning and a weaker build, never a failed one:
+Before anything is built, `release_preflight.py` checks the signing configuration and fails the run with a named error when it is inconsistent: a placeholder or malformed `plugins.updater.pubkey`, `createUpdaterArtifacts` without a public key, a private key without a public key (or one that does not match it, or a wrong password), a public key without the private key secret (pull requests only warn, so fork builds still work), partial macOS signing/notarization secrets or a team ID that differs from the signing identity, and a Windows certificate without its password. Releases without signing secrets are still allowed: the draft is then titled "(unsigned preview)" and its notes list what was not signed. Run it locally with `python3 desktop/release_preflight.py` (it reads the same variable names from the environment, reports only their presence and never prints values); its tests are `python3 -m unittest discover -s desktop/tests -p 'test_release_preflight.py'`.
 
-| Secret (Settings → Secrets → Actions) | Effect when absent |
-|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | No `.sig` files and no `latest.json`; installed apps never see the release. |
-| `APPLE_CERTIFICATE` (base64 Developer ID Application .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (e.g. `Developer ID Application: Name (TEAMID)`) | macOS stays ad-hoc signed; Gatekeeper blocks it. |
-| `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), `APPLE_TEAM_ID` | Signed but not notarized; Gatekeeper still blocks it. |
-| `WINDOWS_CERTIFICATE` (base64 .pfx), `WINDOWS_CERTIFICATE_PASSWORD` | Unsigned installers; SmartScreen warns. HSM-only certificates (e.g. Azure Trusted Signing) need a `bundle.windows.signCommand` instead, which is not wired up. |
+### Operator runbook: secrets
 
-Updater setup, once, on the operator's machine (never in CI or this repository):
+Create these under Settings → Secrets and variables → Actions. Each row is all-or-nothing; a partial row fails the preflight.
 
-1. `cargo tauri signer generate -w ~/.tauri/opendiscord.key` and store the key and its password offline. Losing the key means installed apps can never be updated again; leaking it lets anyone with release access ship code to every installation.
-2. Add the key file's content as `TAURI_SIGNING_PRIVATE_KEY` and the password as `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-3. Commit the content of `~/.tauri/opendiscord.key.pub` as `plugins.updater.pubkey` in tauri.conf.json (public by design). A release fails if the private key is present but the public key is empty.
+| Secret | Content | Effect when the row is absent |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Content of `~/.tauri/opendiscord.key` (one base64 line) and its password. Requires the matching `plugins.updater.pubkey` to be committed. | No `.sig` files and no `latest.json`; installed apps never see the release. |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Base64 Developer ID Application .p12 and its export password; identity string such as `Developer ID Application: Name (TEAMID)`; Apple ID, an app-specific password and the 10-character team ID. | macOS stays ad-hoc signed and is not notarized; Gatekeeper blocks it. |
+| `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Base64 code-signing .pfx and its password (`base64 -i cert.pfx`). HSM-only certificates (e.g. Azure Trusted Signing) need a `bundle.windows.signCommand` instead, which is not wired up. | Unsigned installers; SmartScreen warns. |
+
+### Operator runbook: updater keypair
+
+Generate once, on the operator's machine (never in CI or this repository):
+
+1. `cargo tauri signer generate -w ~/.tauri/opendiscord.key` and store the key and its password offline (password manager plus an offline backup). Losing the key means installed apps can never be updated again; leaking it lets anyone with release access ship code to every installation.
+2. Add the key file's content as `TAURI_SIGNING_PRIVATE_KEY` (`gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/opendiscord.key`) and the password as `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Commit the content of `~/.tauri/opendiscord.key.pub` as `plugins.updater.pubkey` in tauri.conf.json (public by design). Builds with a public key register the updater.
+4. Check the pair before tagging: `TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/opendiscord.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(read -rs p; echo "$p")" python3 desktop/release_preflight.py` (type the password; it is not echoed or stored in shell history).
+
+Rotation (planned, old key still available): installed apps trust only the public key compiled into them. Commit the new public key, bump the version, and release that version while the secrets still hold the **old** private key, so existing installations accept it. Leave that release live until most installations have updated. Then replace both secrets with the new key and pass the preflight before the next tag. If the old key is lost or leaked, no update can switch the trusted key safely: commit a new keypair, publish a release and tell users to reinstall from the release page. After a leak, also delete the old secrets and review recent releases.
+
+### Operator runbook: verifying a published release
+
+Download the assets of the release (or the draft, before publishing) into an empty directory and check:
+
+- macOS (app from the DMG): `codesign --verify --deep --strict --verbose=2 OpenDiscord.app` passes, `spctl -a -vv -t exec OpenDiscord.app` reports `accepted` with `source=Notarized Developer ID` and the expected team, and `xcrun stapler validate OpenDiscord.app` succeeds. An unsigned preview reports `rejected` here.
+- Windows: `signtool verify /pa /v OpenDiscord_<version>_x64-setup.exe` (and the `.msi`) reports the publisher certificate and a timestamp.
+- Updater manifest: each `signature` in `latest.json` must verify against the committed public key and name the release version. With [minisign](https://jedisct1.github.io/minisign/):
+
+  ```sh
+  jq -r .plugins.updater.pubkey desktop/tauri.conf.json | base64 -d > updater.pub
+  jq -r '.platforms["darwin-aarch64"].signature' latest.json | base64 -d > bundle.sig  # repeat per platform
+  minisign -V -p updater.pub -m OpenDiscord.app.tar.gz -x bundle.sig  # file named by that platform's url
+  ```
+
+  `minisign` prints `Signature and comment signature verified` and a trusted comment containing the release version. Any other result means the release must not be published. `cargo test` in this directory proves the plugin rejects tampered bytes, a foreign key and a mismatched version with throwaway keys generated at test time.
 
 Behaviour: once per launch the app fetches `https://github.com/Livvux/openDiscord/releases/latest/download/latest.json` over TLS, then asks before installing a newer version. The plugin verifies the minisign signature against the compiled-in public key, and `requireSignedVersion` rejects a manifest whose version differs from the version inside the signature (prevents downgrade by manifest tampering). Windows exits into the passive installer; macOS and Linux restart. Builds with an empty public key, and every build with `OPENDISCORD_INSTANCE_URL` set, never register or run the updater, so a self-hosted client never installs upstream releases compiled for opendiscord.app. `releases/latest` must remain a desktop release: publishing any other GitHub Release as "latest" breaks update discovery.
 
