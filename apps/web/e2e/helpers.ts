@@ -118,7 +118,8 @@ export async function expectNoA11yViolations(page: Page) {
   await expect(page).toHaveTitle(/\S/);
   // Measure the settled UI: entrance animations would make contrast checks nondeterministic.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  // Base UI focus guards take role="button" in WebKit on purpose so VoiceOver's cursor hits the focus trap.
+  const results = await new AxeBuilder({ page }).exclude("[data-base-ui-focus-guard]").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
   const summary = results.violations.map((v) => `${v.id}: ${v.help} → ${v.nodes.map((n) => `${n.target.join(" ")} ${n.failureSummary ?? ""}`).join(" | ")}`);
   expect(summary).toEqual([]);
 }
