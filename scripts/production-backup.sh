@@ -17,13 +17,12 @@ work=$(mktemp -d /dev/shm/opendiscord-backup.XXXXXXXX)
 trap 'rm -rf "$work"' EXIT
 key="daily/$(date -u +%Y-%m-%dT%H-%M-%SZ).tar.gz.age"
 mkdir "$work/media" "$work/config"
+# Every budget measurement is recorded for the operator monitor (80% warning) before it fails closed.
+capacity() { python3 "$(dirname "$0")/backup-capacity.py" "$state/capacity.json" "$@"; }
+capacity reset
 # Prevent oversized dumps from filling the production host's tmpfs.
 db_bytes=$(docker exec "$OPENDISCORD_DB_CONTAINER" sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select pg_database_size(current_database())"')
-python3 - "$db_bytes" <<'PY'
-import shutil,sys
-size=int(sys.argv[1]); free=shutil.disk_usage('/dev/shm').free
-if size*4 > free or size > 536870912: raise SystemExit('Database exceeds safe in-memory backup budget')
-PY
+capacity database "$db_bytes"
 docker exec "$OPENDISCORD_DB_CONTAINER" sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --lock-wait-timeout=30s' > "$work/database.dump"
 test -s "$work/database.dump"
 docker exec -i "$OPENDISCORD_DB_CONTAINER" pg_restore --list < "$work/database.dump" > /dev/null
@@ -45,28 +44,30 @@ if any('\n' in env[k] or '\r' in env[k] for k in keys): raise SystemExit('Invali
 PY
 source=$(cat "$work/media-source")
 rclone --config "$work/media-rclone.conf" size "$source" --json > "$work/media-size.json"
-python3 - "$work/media-size.json" <<'PY'
-import json,shutil,sys
-size=json.load(open(sys.argv[1]))['bytes']; free=shutil.disk_usage('/dev/shm').free
-if size*3 > free or size > 536870912: raise SystemExit('Media exceeds safe in-memory backup budget')
-PY
+capacity media "$(python3 -c 'import json,sys;print(int(json.load(open(sys.argv[1]))["bytes"]))' "$work/media-size.json")"
 rclone --config "$work/media-rclone.conf" copy "$source" "$work/media" --quiet
 python3 - "$work" <<'PY'
 import pathlib,re,sys
-p=pathlib.Path(sys.argv[1]);data=False;index=None;checked=0
+p=pathlib.Path(sys.argv[1]);data=False;index=None;checked=0;dm_bytes=0
 for line in (p/'attachments.sql').read_text().splitlines():
  if line.startswith('COPY ') and 'attachment ' in line:
-  columns=line.split('(',1)[1].split(')',1)[0].split(', ');index=columns.index('key');data=True;continue
+  columns=line.split('(',1)[1].split(')',1)[0].split(', ');index=columns.index('key');size_index=columns.index('size');dm_index=columns.index('dm_message_id');data=True;continue
  if data and line=='\\.': data=False;continue
  if not data:continue
- key=line.split('\t')[index]
+ fields=line.split('\t');key=fields[index]
  # App-generated storage keys use only this alphabet; do not interpret arbitrary COPY escapes.
  if not re.fullmatch(r'[A-Za-z0-9_./-]+',key):raise SystemExit('Invalid attachment key in archive')
  target=(p/'media'/key).resolve()
  if not target.is_relative_to((p/'media').resolve()) or not target.is_file():raise SystemExit('Referenced attachment missing from backup')
  checked+=1
-(p/'manifest.txt').write_text('format=opendiscord-recovery-v1\nattachment_references='+str(checked)+'\n')
+ if fields[dm_index]!='\\N':
+  if not fields[size_index].isdigit():raise SystemExit('Invalid attachment size in archive')
+  dm_bytes+=int(fields[size_index])
+(p/'manifest.txt').write_text('format=opendiscord-recovery-v1\nattachment_references='+str(checked)+'\ndm_ciphertext_bytes='+str(dm_bytes)+'\n')
+(p/'dm-bytes').write_text(str(dm_bytes))
 PY
+capacity dm_ciphertext "$(cat "$work/dm-bytes")"
+rm "$work/dm-bytes"
 # These files contain secrets; they are included only inside the encrypted recovery archive.
 cp "$OPENDISCORD_COMPOSE_DIR/.env" "$work/config/app.env"
 cp "$OPENDISCORD_COMPOSE_DIR/docker-compose.dokploy.yml" "$work/config/app-compose.yml"
@@ -101,10 +102,8 @@ fi
 tar -C "$work" -czf - database.dump media config manifest.txt | age -R "$recipient" -o "$work/recovery.tar.gz.age"
 bytes=$(stat -c %s "$work/recovery.tar.gz.age")
 rclone --config "$config" size "$remote" --json > "$work/backup-size.json"
-python3 - "$work/backup-size.json" "$bytes" <<'PY'
-import json,sys
-if json.load(open(sys.argv[1]))['bytes']+int(sys.argv[2])>1073741824:raise SystemExit('1 GiB encrypted backup budget reached')
-PY
+capacity retention_projection "$bytes"
+capacity encrypted_total "$(python3 -c 'import json,sys;print(int(json.load(open(sys.argv[1]))["bytes"])+int(sys.argv[2]))' "$work/backup-size.json" "$bytes")"
 rclone --config "$config" copyto --immutable "$work/recovery.tar.gz.age" "$remote/$key" --quiet
 # Read back the complete encrypted bytes and compare, not just an object listing or ETag.
 rclone --config "$config" cat "$remote/$key" | sha256sum > "$work/remote-sha256"
