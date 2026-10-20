@@ -18,7 +18,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     assertDmOrigin(request);
-    await saveDmBackup(await requireDmDevice(request), await readJsonBody(request, Math.ceil(DM_MAX_BACKUP_BYTES * 4 / 3) + 1024));
+    const auth = await requireDmDevice(request);
+    // Before the (up to several MB) body is read and parsed.
+    await consume(`dm-backup:${auth.userId}`, 10, 3_600_000);
+    await saveDmBackup(auth, await readJsonBody(request, Math.ceil(DM_MAX_BACKUP_BYTES * 4 / 3) + 1024));
     return Response.json({}, { headers: PRIVATE_NO_STORE });
   } catch (error) { return errorResponse(error); }
 }

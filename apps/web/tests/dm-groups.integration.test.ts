@@ -185,5 +185,13 @@ describe("group hardening", () => {
     await addGroupMembers(p.Owner.id, g, [p.Dee.id]);
     await expect(directAttachmentFor(p.Dee.id, file.id)).rejects.toThrow("not found");
     await expect(reportDirectMessage(p.Dee.id, { id: old.id, reason: "Not mine to see", excerpt: null })).rejects.toThrow("not found");
+    // The personal data export applies the same cutoff.
+    const later = await appendDirectMessage(auth(p.Owner), g, { transactionId: randomUUID(), content: envelope(p.Owner) });
+    const [ann, dee] = await Promise.all([exportDirectData(p.Ann.id), exportDirectData(p.Dee.id)]);
+    expect(ann.encryptedMessages.map((m) => m.id)).toEqual(expect.arrayContaining([old.id, later.id]));
+    expect(ann.encryptedAttachments.map((f) => f.id)).toContain(file.id);
+    expect(dee.encryptedMessages.map((m) => m.id)).toContain(later.id);
+    expect(dee.encryptedMessages.map((m) => m.id)).not.toContain(old.id);
+    expect(dee.encryptedAttachments.map((f) => f.id)).not.toContain(file.id);
   });
 });
