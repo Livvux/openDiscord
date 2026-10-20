@@ -78,16 +78,19 @@ review capacity before the job starts to fail: raise the budgets together with t
 quota and host RAM, shorten retention, or move media to incremental off-host copies. Never exclude
 media from the bundle without a verified replacement copy.
 
-Operator install (manual, both files must be updated together, or the monitor reports
-`backup-capacity-unavailable`):
+Operator install (manual; update the backup script, helper and monitor together, or the monitor
+reports `backup-capacity-unavailable`). The backup monitor is `opendiscord-monitor.service` (timer
+`opendiscord-monitor.timer`, every five minutes) running `/etc/opendiscord-monitor/monitor.py` with
+`/etc/opendiscord-monitor/config.json`. The scanner and voice monitor units run the same script from
+`/usr/local/sbin/opendiscord-operator-monitor`, so install it to both paths to keep them identical:
 
 ```sh
 install -o root -g root -m 700 scripts/production-backup.sh scripts/backup-capacity.py /etc/opendiscord-backup/
+install -o root -g root -m 700 scripts/operator-monitor.py /etc/opendiscord-monitor/monitor.py
 install -o root -g root -m 755 scripts/operator-monitor.py /usr/local/sbin/opendiscord-operator-monitor
 systemctl start opendiscord-backup.service   # writes the first capacity.json
 cat /var/backups/opendiscord/capacity.json
-# Run the installed backup-mode monitor once (same user and config as its timer); expect "healthy".
-python3 /usr/local/sbin/opendiscord-operator-monitor --config /etc/opendiscord-monitor/<backup-config>.json
+systemctl start opendiscord-monitor.service && journalctl -u opendiscord-monitor.service -n 3   # expect "status": "healthy"
 ```
 Monitor both failed jobs and backup freshness. A verified ciphertext upload is not yet an isolated
 production-data restore; record the recovery rehearsal separately. Never restore a recovery bundle
