@@ -5,6 +5,10 @@ edition = "2021"
 license = "AGPL-3.0-only"
 publish = false
 
+[dev-dependencies]
+# Mock runtime for the updater signature test; no extra crates.
+tauri = { version = "2", features = ["test"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
