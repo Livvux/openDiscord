@@ -14,6 +14,8 @@ Pending reviewed readiness changes:
   encryption claims with 1:1/group DM files, supported Voice E2EE and readable community content.
 - Bind web/migrate images to the reviewed source revision, compare ordered production migration
   hashes, run a read-only public deployment smoke and detect failed/stale scheduled maintenance.
+- Disable implicit room creation in the standalone LiveKit default; the hosted SFU requires its
+  separate coherent issuer/configuration activation before release.
 - Record isolated recovery of the current production backup with authenticated media readback.
 
 Release commit/deployment: **not established**. See the

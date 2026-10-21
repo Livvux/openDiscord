@@ -35,6 +35,9 @@ turning off Closed Alpha, publishing an Open Beta announcement or exposing nativ
 3. Apply only reviewed backward-compatible migrations, using the pinned migrate image. Compare
    the complete ordered journal hashes with that checkout, not just the newest migration name.
    Start only compatible app/operator images; keep the migrate image available to scheduled jobs.
+   Product Voice also requires explicit `room.auto_create: false` in the actual SFU configuration,
+   not just the repository's standalone template. Follow the coherent issuer/SFU rollout in OPERATIONS;
+   the hosted inline configuration currently differs and must not be switched under old issuers.
 4. From the clean deployed repository, run the read-only gate with the recorded SHA and the actual
    serving web/database container names:
 

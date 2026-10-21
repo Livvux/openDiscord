@@ -187,6 +187,14 @@ Production accounts, policy and data were unchanged.
   retention apply. Do not silently build/pull from inside the maintenance job or delete data to test it.
 - No installed Voice maintenance/monitor timer was observed. Source and CI Voice tests do not prove
   production cleanup/alert activation; follow the coherent Voice activation gates below.
+- Read-only inspection found running LiveKit 1.13.10 at immutable image
+  `sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a`.
+  Its effective inline configuration does not set `room.auto_create: false`; LiveKit defaults it
+  to true. Product activation requires false alongside the compatible explicit room issuer and
+  recurring cleanup. The repository default now sets false, but the independent hosted inline
+  configuration is not changed by this file or a source merge. Do not toggle a live legacy issuer
+  independently of the coherent rollout below. TURN is enabled with internal TLS port 5349;
+  that observation alone does not prove public TCP443 traversal.
 - The current 1 GiB aggregate full-snapshot budget remains inadequate for increased media traffic.
   The warning/projection is diagnostic, not a capacity solution. Before opening admissions, the
   operator must approve either an encrypted incremental off-host media design with retention and
