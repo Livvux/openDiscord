@@ -1,6 +1,6 @@
 # Roadmap and gap analysis
 
-Status as of 2026-10-17, reconciled against `main` at `4c1cf37` plus the DM unread/realtime change (migration `0035`).
+Readiness reconciliation: 2026-10-21 against baseline `f4bb1f3` and the pending readiness PRs.
 Implementation, automated acceptance, deployment and external review are separate evidence states.
 A checkmark describes the stated implementation/test scope; it does not establish production readiness
 or an external audit. See the [evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md#main-acceptance-checkpoint-2026-10-16).
@@ -21,12 +21,13 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-The production revision verified on 2026-10-17 is `847ecee` (profile pictures, PR #103) with 35 applied
-migrations (`0000`–`0034`, matching the journal); `/api/health` returns `ok` and `/api/ready` `ready`.
-`main` `4c1cf37` adds only test fixes (#104). DM unread markers, live social updates and DM push add
-migration `0035` and are not deployed at this checkpoint. Production deployment stays a manual operator step.
-Discover currently lists no public channels on the official instance: not a defect, but newcomers now get
-a Home "Get started" panel (invite link, create community, add friend) instead.
+**Open Beta is NO-GO.** The current production checkout equals baseline `f4bb1f3`, and all 40 ordered
+migration hashes match its SQL journal through `0039_dm_calls`. The running immutable web image
+has no source-revision label, so checkout equality does not prove which commit serves traffic.
+Public health/readiness respond successfully. The current off-host backup was restored in isolation
+with app login and authenticated avatar readback. Capacity, failed retention (missing migrate image),
+Voice scheduling, actual alert delivery and external/device gates remain open in
+[OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md). No beta release is published or authorized.
 
 Encrypted DMs, private complete archives, custom emoji/stickers, explicit public channels/discovery,
 operator policies, 16-year signup self-attestation, funding disclosure and auth-key rotation support
@@ -53,7 +54,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | --- | --- | --- |
 | Collect only necessary data | ✅ | Email, display name, password hash and sessions; coarse browser/platform labels, no raw session user-agent or IP. Legacy metadata minimized by maintenance |
 | No analytics, ads or trackers | ✅ | No application analytics. Cloudflare RUM injection disabled for the official hostname and browser-verified; optional Turnstile and configured media services still make external requests |
-| Retention and deletion policies | ✅ | Bounded dry-run/apply maintenance; expired credentials and shared limits purged, resolved moderation/audit retention 180 days; hourly official-instance job |
+| Retention and deletion policies | 🟡 production failure | Bounded dry-run/apply policy exists; expired credentials/limits and resolved moderation/audit retention 180 days. Hourly production job currently fails because its migrate image is missing; repair and completion proof required |
 | GDPR access/export | ✅ | `/api/me/export`, JSON, tested |
 | GDPR correction | ✅ | Display name editable; SMTP-gated email change confirms current address and verifies new address; recent-session guard. Real inbox acceptance remains separate |
 | GDPR deletion | ✅ | Deletes account, sessions, messages; blocked while owning a community |
@@ -115,8 +116,8 @@ remain gates in [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 | Rate limiting, anti-spam | ✅ | PostgreSQL-backed auth/mutation counters and expiring SSE leases; per-user, per-scope 8-stream caps, community caps and shared anti-raid controls; concurrent integration tests |
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
-| IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | ✅ | Tests cover non-member access, role escalation and HTML injection; no server-side fetches (no SSRF surface yet) |
-| Upload security | 🟡 | Images re-encoded server-side, private storage, membership-checked delivery; optional fail-closed ClamAV tested with real clean/EICAR/unavailable upload/import cases (#68). Official scanner daemon deployed and healthy, app integration not yet switched on (THREAT-MODEL T23) |
+| IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | 🟡 release review | Tests cover non-member access, role escalation and HTML injection. User push endpoints are allowlisted; storage/SFU fetches use operator configuration. Confirmed mutation-authorization races have a tested fix in #126 pending merge/deploy; external pentest remains open |
+| Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Production web namespace passed clean/EICAR with fresh loaded signatures on 2026-10-21; authenticated production upload acceptance remains separate (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |

@@ -19,6 +19,11 @@ test("registration requires age attestation and public policies stay accessible"
   for (const [path, title] of [["terms", "Terms of use"], ["privacy", "Privacy notice"], ["guidelines", "Community Guidelines"], ["imprint", "Imprint / Anbieterkennzeichnung"]]) {
     await page.goto(`/${path}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
+    if (path === "privacy") {
+      await expect(page.getByRole("main")).toContainText("1:1 and group DM content and DM attachments are encrypted in the browser");
+      await expect(page.getByRole("main")).toContainText("No independent cryptographic integration audit has been completed");
+      await expect(page.getByRole("main")).toContainText("Actual cleanup requires scheduled operator maintenance");
+    }
     await expectNoA11yViolations(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
