@@ -78,7 +78,9 @@ test.describe("home, friends and account menu", () => {
     await expect(sender.getByRole("status").filter({ hasText: "Friend request sent." })).toBeVisible();
 
     recipient.on("dialog", (dialog) => dialog.accept());
-    await recipient.goto("/app/friends");
+    // The recipient is already on Home. Exercise the live request without racing
+    // the compatibility route's streamed redirect against another navigation.
+    await recipient.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: /^Pending/ }).click();
     await recipient.getByRole("button", { name: "Block Sam Sender" }).click();
     await expect(recipient.getByText("No pending requests.")).toBeVisible();
 
