@@ -146,10 +146,20 @@ it.each([
 
 it("retains only public RTC cause enums and bounded numeric codes from console arguments", () => {
   const result = readVoiceProductConsoleArgument({ error: { name: "OperationError", errorDetail: "sctp-failure", sctpCauseCode: 12, message: "private", token: "private" }, identity: "private" });
-  expect(result).toEqual({ name: "OperationError", detail: "sctp-failure", cause: 12 });
+  expect(result).toEqual({ name: "OperationError", detail: "sctp-failure", cause: 12, connectionReason: null });
   expect(JSON.stringify(result)).not.toContain("private");
-  expect(readVoiceProductConsoleArgument({ errorDetail: "private", sctpCauseCode: Infinity, name: "private" })).toEqual({ name: "other", detail: "other", cause: null });
-  expect(readVoiceProductConsoleArgument("private")).toEqual({ name: "none", detail: "none", cause: null });
+  expect(readVoiceProductConsoleArgument({ errorDetail: "private", sctpCauseCode: Infinity, name: "private" })).toEqual({ name: "other", detail: "other", cause: null, connectionReason: null });
+  expect(readVoiceProductConsoleArgument("private")).toEqual({ name: "none", detail: "none", cause: null, connectionReason: null });
+});
+
+it("keeps bounded SDK connection reasons without exporting messages, URLs or private context", () => {
+  const result = readVoiceProductConsoleArgument({ error: { name: "ConnectionError", reason: 6, message: "private", context: "wss://private.test?token=private" } });
+  expect(result).toEqual({ name: "ConnectionError", detail: "none", cause: null, connectionReason: "websocket" });
+  expect(JSON.stringify(result)).not.toMatch(/private|token/);
+  for (const reason of [-1, 8, 1.5, Infinity, "private"]) {
+    expect(readVoiceProductConsoleArgument({ name: "ConnectionError", reason }).connectionReason).toBeNull();
+  }
+  expect(readVoiceProductConsoleArgument({ name: "Error", reason: 6 }).connectionReason).toBeNull();
 });
 
 it("fingerprints unknown console text by leading words with identifiers masked", () => {

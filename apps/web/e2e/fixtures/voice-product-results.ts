@@ -45,10 +45,14 @@ export function readVoiceProductConsoleArgument(value: unknown) {
   const detail = "errorDetail" in inner ? inner.errorDetail : undefined;
   const cause = "sctpCauseCode" in inner ? inner.sctpCauseCode : undefined;
   const name = "name" in inner ? inner.name : undefined;
+  // Pinned LiveKit ConnectionErrorReason values. Diagnostics only: no new error exemption.
+  const reasons = ["not-allowed", "server-unreachable", "internal", "cancelled", "leave-request", "timeout", "websocket", "service-not-found"];
+  const reason = "reason" in inner ? inner.reason : undefined;
   return {
     detail: detail === "sctp-failure" || detail === "data-channel-failure" || detail === "dtls-failure" ? detail : detail === undefined ? "none" : "other",
     cause: typeof cause === "number" && Number.isInteger(cause) && cause >= 0 && cause <= 65535 ? cause : null,
-    name: typeof name === "string" && ["Error", "RTCError", "TypeError", "InvalidStateError", "NotFoundError", "OperationError", "AbortError"].includes(name) ? name : name === undefined ? "none" : "other",
+    name: typeof name === "string" && ["Error", "RTCError", "TypeError", "InvalidStateError", "NotFoundError", "OperationError", "AbortError", "ConnectionError"].includes(name) ? name : name === undefined ? "none" : "other",
+    connectionReason: name === "ConnectionError" && typeof reason === "number" && Number.isInteger(reason) && reason >= 0 && reason < reasons.length ? reasons[reason] : null,
   };
 }
 
