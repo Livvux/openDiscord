@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   createCommunity,
+  createChannel,
   createInviteLink,
   expectNoA11yViolations,
   newUserPage,
@@ -9,6 +10,7 @@ import {
   signUp,
   openAccountSettings,
 } from "./helpers";
+import { collectRuntimeErrors } from "./runtime-errors";
 
 // Multi-user flows run on desktop only; the mobile project covers navigation separately.
 test.describe("communities", () => {
@@ -87,6 +89,55 @@ test.describe("communities", () => {
     await member.context().setOffline(false);
     await expect(member.getByRole("log").getByText("sent while you were away")).toBeVisible({ timeout: 15_000 });
     await expect(member.getByText("Connection lost. Reconnecting…")).toBeHidden();
+  });
+
+  test("an interrupted read receipt retries without an unhandled rejection", async ({ browser }, info) => {
+    const owner = await newUserPage(browser);
+    const member = await newUserPage(browser);
+    const errors: string[] = [], diagnostics: string[] = [];
+    await collectRuntimeErrors(member, errors, diagnostics);
+    try {
+      await signUp(owner, "Receipt owner");
+      await createCommunity(owner, "Receipt recovery");
+      const channelUrl = owner.url();
+      const invitePath = await createInviteLink(owner);
+      await createChannel(owner, "other");
+      await owner.getByRole("link", { name: "general", exact: true }).click();
+      await signUp(member, "Receipt reader");
+      await member.goto(invitePath);
+      await member.getByRole("button", { name: "Accept invite" }).click();
+      await expect(member.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
+      let attempts = 0;
+      await member.route(channelUrl, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        attempts++;
+        if (attempts === 1) return route.abort("aborted");
+        return route.continue();
+      });
+      const aborted = member.waitForEvent("requestfailed", (request) => request.url() === channelUrl && request.method() === "POST");
+      await sendMessage(owner, "Read receipt survives a transport failure");
+      await expect(member.getByRole("log")).toContainText("Read receipt survives a transport failure");
+      await aborted;
+      const retried = member.waitForResponse((response) => response.url() === channelUrl && response.request().method() === "POST");
+      await expect.poll(async () => {
+        await member.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        return attempts;
+      }).toBe(2);
+      const response = await retried;
+      expect(response.status()).toBe(200);
+      await response.finished();
+      await member.getByRole("link", { name: "other", exact: true }).click();
+      await expect(member.getByRole("heading", { level: 1, name: "other", exact: true })).toBeVisible();
+      await expect(member).not.toHaveURL(channelUrl);
+      await member.reload();
+      await expect(member.getByRole("heading", { level: 1, name: "other", exact: true })).toBeVisible();
+      await expect(member.getByRole("link", { name: /^general/ })).not.toHaveAttribute("aria-current", "page");
+      await expect(member.getByRole("link", { name: /^general/ })).not.toHaveAccessibleName(/unread|mention/);
+      expect(errors).toEqual([]);
+    } finally {
+      await info.attach("read-receipt-runtime", { body: JSON.stringify({ errors, diagnostics }), contentType: "application/json" });
+      await Promise.all([owner.context().close(), member.context().close()]);
+    }
   });
 
   test("message editing, channels and keyboard use", async ({ browser }) => {

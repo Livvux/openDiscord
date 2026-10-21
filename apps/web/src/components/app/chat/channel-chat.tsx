@@ -65,18 +65,30 @@ export function ChannelChat(props: ChannelChatProps) {
   // Reading the newest message while the tab is visible marks the channel read (threads don't move the marker).
   useEffect(() => {
     if (!newest || threadId) return;
-    const mark = () => {
-      if (document.visibilityState !== "visible") return;
-      clearUnread?.(channel.id);
-      void markChannelRead(channel.id, newest);
+    let stopped = false, inFlight = false, marked = false;
+    const mark = async () => {
+      if (stopped || inFlight || marked || document.visibilityState !== "visible") return;
+      inFlight = true;
+      // Navigation/offline can reject the transport before the action returns a result.
+      // Leave the marker pending for a later visibility/online/reconnect attempt.
+      const result = await markChannelRead(channel.id, newest).catch(() => null);
+      inFlight = false;
+      if (!stopped && result?.ok) {
+        marked = true;
+        clearUnread?.(channel.id);
+      }
     };
-    const timer = setTimeout(mark, 500);
-    document.addEventListener("visibilitychange", mark);
+    const request = () => { void mark(); };
+    const timer = setTimeout(request, 500);
+    document.addEventListener("visibilitychange", request);
+    window.addEventListener("online", request);
     return () => {
+      stopped = true;
       clearTimeout(timer);
-      document.removeEventListener("visibilitychange", mark);
+      document.removeEventListener("visibilitychange", request);
+      window.removeEventListener("online", request);
     };
-  }, [newest, threadId, channel.id, clearUnread]);
+  }, [newest, threadId, channel.id, clearUnread, state]);
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
