@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createInviteLink, expectNoA11yViolations, newUserPage, PASSWORD, sendMessage, signUp } from "./helpers";
+import { collectRuntimeErrors } from "./runtime-errors";
 
 async function showNavigationFor(page: Page, name: string) {
   const button = page.getByRole("button", { name, exact: true }).first();
@@ -42,11 +43,14 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   let bob = await newUserPage(browser);
   for (const context of [alice.context(), bob.context()]) { context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(30_000); }
   const errors: string[] = [];
+  const diagnostics: string[] = [];
+  const contexts = new Set([alice.context(), bob.context()]);
   const wire: string[] = [];
   for (const page of [alice, bob]) {
-    page.on("pageerror", (e) => errors.push(e.message));
+    await collectRuntimeErrors(page, errors, diagnostics);
     page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/dm") && request.method() === "POST") wire.push(request.postData() ?? ""); });
   }
+  try {
   const email = await signUp(alice, "Private Alice");
   await showNavigationFor(alice, "Create a community");
   await alice.getByRole("button", { name: "Create a community", exact: true }).first().click();
@@ -104,7 +108,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await alice.getByRole("button", { name: "Send encrypted message", exact: true }).click();
   await expect(alice.getByRole("log").getByText(offline, { exact: true })).toBeVisible();
   bob = await bobContext.newPage();
-  bob.on("pageerror", (e) => errors.push(e.message));
+  await collectRuntimeErrors(bob, errors, diagnostics);
   await bob.goto("/app/messages");
   await openConversation(bob, "Private Alice");
   await expect(bob.getByRole("log").getByText(offline, { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -115,8 +119,9 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   const recoveryFile = await (await download).path();
   expect(recoveryFile).toBeTruthy();
   const restored = await newUserPage(browser);
+  contexts.add(restored.context());
   restored.context().setDefaultTimeout(15_000); restored.context().setDefaultNavigationTimeout(30_000);
-  restored.on("pageerror", (e) => errors.push(e.message));
+  await collectRuntimeErrors(restored, errors, diagnostics);
   await restored.goto("/sign-in?next=/app/messages");
   await restored.getByLabel("Email", { exact: true }).fill(email);
   await restored.getByLabel("Password", { exact: true }).fill(PASSWORD);
@@ -218,7 +223,10 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await expect(bob.getByRole("button", { name: "Unblock person", exact: true })).toBeVisible();
   await expect(alice.getByRole("button", { name: "Send encrypted message", exact: true })).toHaveCount(0, { timeout: 30_000 });
   expect(errors).toEqual([]);
-  await Promise.all([alice.context().close(), bobContext.close(), restored.context().close()]);
+  } finally {
+    await info.attach("runtime-errors", { body: JSON.stringify({ errors, diagnostics }), contentType: "application/json" });
+    await Promise.all([...contexts].map((context) => context.close()));
+  }
 });
 
 
@@ -226,7 +234,8 @@ test("explicit identity reset revokes devices and backups after password confirm
   const page = await newUserPage(browser);
   page.context().setDefaultTimeout(15_000);
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
+  const diagnostics: string[] = [];
+  await collectRuntimeErrors(page, errors, diagnostics);
   try {
     const email = await signUp(page, "Reset identity");
     await page.goto("/app/messages");
@@ -260,5 +269,8 @@ test("explicit identity reset revokes devices and backups after password confirm
     expect(after.devices.find((device: { id: string }) => device.id === oldDevice).revoked).toBe(true);
     expect((await page.request.get("/api/dm/backups").then((response) => response.json())).backups).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await page.context().close(); }
+  } finally {
+    await test.info().attach("runtime-errors", { body: JSON.stringify({ errors, diagnostics }), contentType: "application/json" });
+    await page.context().close();
+  }
 });

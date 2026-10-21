@@ -193,7 +193,9 @@ Production accounts, policy and data were unchanged.
   isolated recovery proof, or a funded full-bundle budget covering at least 31 worst-case bundles
   plus database growth and RAM headroom. Keep the 30-day recovery policy unless explicitly changed
   with privacy/legal review. Keep uploads/admissions bounded while this remains unresolved.
-- A test alert was accepted by SMTP on this date. Recipient inbox delivery remains UNVERIFIED.
+- A test alert was accepted by SMTP on this date. The operator explicitly confirmed receipt in the
+  designated inbox on 2026-10-21. This proves this test-mail delivery, not user verification/reset
+  email, Web Push or safe failure/recovery notification acceptance.
 
 See [RELEASE-RUNBOOK.md](RELEASE-RUNBOOK.md) for exact revision, migration, public smoke and
 rollback gates. Historical successful checks above do not override these current failures.
