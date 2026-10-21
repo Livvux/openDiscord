@@ -3,9 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '*.md']
   pull_request:
-    paths-ignore: ['docs/**', '*.md']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +16,7 @@ jobs:
   check:
     # Superseded runs should cancel, while genuine failures must still fail this gate.
     if: ${{ !cancelled() }}
-    needs: [backend, browser, docker]
+    needs: [backend, browser, cross-browser, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -27,10 +25,12 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           DOCKER_RESULT: ${{ needs.docker.result }}
+          CROSS_BROWSER_RESULT: ${{ needs.cross-browser.result }}
         run: |
           test "$BACKEND_RESULT" = success
           test "$BROWSER_RESULT" = success
           test "$DOCKER_RESULT" = success
+          test "$CROSS_BROWSER_RESULT" = success
 
   backend:
     strategy:
@@ -232,6 +232,59 @@ jobs:
           path: apps/web/test-results/**/*.png
           retention-days: 7
           if-no-files-found: ignore
+
+  cross-browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: firefox
+            projects: --project=firefox
+          - engine: webkit
+            projects: --project=webkit --project=iphone
+          - engine: msedge
+            projects: --project=edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: opendiscord
+          POSTGRES_PASSWORD: opendiscord
+          POSTGRES_DB: opendiscord
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U opendiscord" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://opendiscord:opendiscord@localhost:5432/opendiscord
+      BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+      BETTER_AUTH_URL: http://localhost:3200
+      ATTACHMENT_DIR: /tmp/opendiscord-beta-attachments
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm build
+      - name: Install the tested browser
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: pnpm --filter web exec playwright install --with-deps "$ENGINE"
+      - name: Repeatable beta journeys (one worker per database)
+        env:
+          PROJECTS: ${{ matrix.projects }}
+        run: pnpm --filter web exec playwright test --config playwright.beta.config.ts $PROJECTS --workers=1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: beta-browser-${{ matrix.engine }}
+          path: |
+            apps/web/beta-browser-results.json
+            apps/web/test-results/beta/**
+          retention-days: 3
+          if-no-files-found: warn
 
   docker:
     # Recovery acceptance builds and exercises the same production web target.
