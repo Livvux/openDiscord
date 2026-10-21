@@ -193,12 +193,12 @@ export async function sendMessage(
     if (!parent) throw notFound("The message you replied to was deleted.");
   }
   const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
-  await consume(`message:${userId}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000);
   const { row, mentioned } = await db.transaction(async (tx) => {
     await lockCommunity(tx, ch.communityId);
     await requireChannel(tx, channelId, userId, Permission.SendMessages);
     const publication = await checkPublicPost(tx, channelId, publicGeneration, content, ids, replyToId, threadId);
     await validateCommunityAssetRefs(tx, ch.communityId, content);
+    await consume(`message:${userId}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000, Date.now(), tx);
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
     if (publication) await snapshotPublicPost(tx, created);
     await linkAttachments(tx, userId, channelId, created.id, ids);
