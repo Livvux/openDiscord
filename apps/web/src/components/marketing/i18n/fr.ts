@@ -59,9 +59,9 @@ export const fr: Messages = {
     },
     encryption: {
       title: "Honnêtes sur le chiffrement",
-      body: "Les messages privés sont chiffrés de bout en bout entre appareils vérifiés. Le texte et la voix des communautés ne le sont pas. L’intégration n’a pas encore fait l’objet d’un audit de sécurité indépendant.",
+      body: "Les messages privés individuels et de groupe, pièces jointes comprises, sont chiffrés de bout en bout entre appareils vérifiés. Les médias des appels sont chiffrés de bout en bout dans les navigateurs compatibles. Le texte des communautés et ses pièces jointes restent lisibles par l’opérateur. L’intégration n’a pas encore fait l’objet d’un audit de sécurité indépendant.",
       dms: "Messages privés",
-      community: "Salons de communauté",
+      community: "Texte de communauté",
       yes: "De bout en bout",
       no: "Côté serveur",
     },
@@ -103,17 +103,17 @@ export const fr: Messages = {
       {
         label: "Maintenant",
         title: "Alpha fermée",
-        items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP chiffrés avec vérification des appareils", "Recours, règles et durées de conservation", "Emojis et stickers personnalisés", "Salons publics et découverte"],
+        items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP individuels et de groupe chiffrés et appels en MP", "Recours, règles et durées de conservation", "Emojis et stickers personnalisés", "Salons publics et découverte"],
       },
       {
         label: "Ensuite",
         title: "Plus proches",
-        items: ["Chiffrement de la voix et TURN", "Audit de sécurité indépendant", "Validation sur appareils physiques", "Peaufiner l’auto-hébergement"],
+        items: ["Validation voix et TURN sur appareils réels", "Audit de sécurité indépendant", "Validation sur appareils physiques", "Peaufiner l’auto-hébergement"],
       },
       {
         label: "Plus tard",
-        title: "Applis et groupes",
-        items: ["Applications natives", "MP de groupe et appels en MP"],
+        title: "Applications natives",
+        items: ["Applications natives"],
       },
     ],
   },

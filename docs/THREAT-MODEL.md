@@ -1,6 +1,8 @@
 # Threat model
 
-Scope: the text-chat MVP (web app, Postgres, Caddy) as deployed by `docker-compose.yml`.
+Scope: hosted web/PWA, PostgreSQL, private media, Matrix DM integration and optional LiveKit Voice.
+Default Compose uses Caddy; Dokploy uses its operator-managed reverse proxy. Configuration examples
+do not prove current production activation; see [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 Method: assets → actors → trust boundaries → threats (STRIDE) with mitigation and status.
 Review this document whenever a feature crosses a trust boundary (uploads, DMs, voice, bots, federation).
 
@@ -22,8 +24,9 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 - **Community member / moderator / owner**: increasing authority inside one community.
 - **Malicious member**: spam, harassment, attempts to escalate or read other communities.
 - **Instance operator**: full access to the database and logs. Users must trust the operator of the
-  instance they use. This is why E2EE for private conversations is on the roadmap and why we say
-  clearly that community messages are readable by the operator today.
+  instance they use. Private 1:1/group messages and attachments use browser E2EE; community content
+  remains operator-readable. A malicious operator can replace delivered JavaScript and defeat
+  browser confidentiality; independent integration review remains required.
 - **Network attacker**: on-path between browser and server.
 
 ## Trust boundaries
@@ -35,6 +38,12 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
    must strip `X-Forwarded-For` at their own proxy.**
 3. web ↔ Postgres (Docker network, password auth, not exposed).
 4. Service layer ↔ UI: every server action and route handler calls a service that authorises.
+5. Browser Matrix device ↔ ciphertext store: current account/session/device and conversation
+   authority are separate from native key trust, browser recovery state and identity verification.
+6. Browser Voice crypto/media ↔ app control ↔ SFU: current membership, admitted peers, generation
+   and worker key installation must agree before capture/publication. A short JWT alone is not
+   revocation of an established SFU session. Private storage, scanner, SMTP and push each have
+   their own operator configuration and authorization boundaries.
 
 ## Threats and mitigations
 
@@ -52,9 +61,9 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T10 | Info disclosure: emails exposed to members | Member lists and messages carry display names only | ✅ |
 | T11 | Info disclosure: private content indexed | `robots.txt` + `noindex` for `/app`, `/invite`, `/api` | ✅ |
 | T12 | Info disclosure: secrets in data export | Export excludes password hash, tokens, TOTP secrets and passkey keys | ✅ tested |
-| T13 | XSS through messages or names | React escapes all text; no `dangerouslySetInnerHTML` with user data; Markdown is a small subset parsed into React elements, links only for http(s) with `noopener noreferrer nofollow`; CSP restricts sources to self | ✅ tested (CSP allows inline scripts, see D-notes) |
+| T13 | XSS through messages or names | React escapes all text; no `dangerouslySetInnerHTML` with user data; Markdown is a small subset parsed into React elements, links only for http(s) with `noopener noreferrer nofollow`; CSP restricts sources to self and named configured providers; inline event attributes denied | ✅ tested (inline bootstrap still allowed; see residual risks) |
 | T14 | Clickjacking | `frame-ancestors 'none'` | ✅ |
-| T15 | DoS: message spam | 5 messages / 5 s per user (Postgres-counted), 4000-character limit | ✅ |
+| T15 | DoS: message spam | 5 messages / 5 s per user, 4000-character limit; atomic shared counter correction in #126 | 🟡 baseline count/insert race; fix requires merge/deploy |
 | T16 | DoS: resource creation loops | Burst limit of 30 mutations per 10 s per user; caps on owned communities, channels, roles, active invites | ✅ (atomic PostgreSQL counter shared across web processes) |
 | T17 | DoS: SSE connection flood | PostgreSQL-backed expiring leases enforce 8 streams per user per scope across processes; bounded stream lifetime, heartbeats and cancellation cleanup; one message load per event | ✅ |
 | T18 | DoS: raids (mass joins via a leaked invite) | Expiring and limited-use invites; bans block rejoin; per-community raid protection auto-pauses invites after N joins in 10 minutes (joins serialised per community); manual invite pause; minimum account age | ✅ |
@@ -62,18 +71,19 @@ Review this document whenever a feature crosses a trust boundary (uploads, DMs, 
 | T20 | Info disclosure: operator or database compromise | TLS, DB not exposed, TOTP secrets encrypted; community/public message content is plaintext in the DB. DMs store Matrix-encrypted envelopes, with no plaintext fallback between verified devices; a recipient can disclose plaintext in a report | 🟡 DM integration is not independently audited; malicious operator-delivered JavaScript or compromised clients can expose plaintext. Disk encryption is the operator's job |
 | T21 | Supply chain: vulnerable dependency | Lockfile-frozen builds, `pnpm audit` in CI, Dependabot | ✅ |
 | T22 | SSRF | No link previews or outgoing webhooks. The only user-supplied URLs fetched are Web Push endpoints, restricted to known push services over HTTPS on the default port | ✅ n/a; required review before link previews/webhooks |
-| T23 | Malicious uploads | Images: type decided by the decoder, not the client; re-encoded to WebP (no EXIF/GPS, no polyglots, no SVG); size checked before the body is read; pixel and frame caps; per-user upload rate and pending-upload caps; private bucket; served with `nosniff`, `Content-Security-Policy: sandbox` and membership checks Other files: stored unchanged but always served as `application/octet-stream` with `Content-Disposition: attachment` (RFC 5987 name), `nosniff` and `sandbox`, so uploaded HTML/SVG never renders on the app origin; file names stripped of paths, control and bidi characters | 🟡 Optional fail-closed ClamAV INSTREAM scanning implemented and tested with a real engine (clean/EICAR/unavailable upload and archive import). Official production scanner remains unconfigured; scanning is not universal malware detection. End-to-end encrypted DM attachments cannot be scanned or re-encoded (server has no key); they are served only as opaque `octet-stream` downloads and decrypted in the recipient's browser |
+| T23 | Malicious uploads | Images: type decided by the decoder, not the client; re-encoded to WebP (no EXIF/GPS, no polyglots, no SVG); size checked before the body is read; pixel and frame caps; per-user upload rate and pending-upload caps; private bucket; served with `nosniff`, `Content-Security-Policy: sandbox` and membership checks Other files: stored unchanged but always served as `application/octet-stream` with `Content-Disposition: attachment` (RFC 5987 name), `nosniff` and `sandbox`, so uploaded HTML/SVG never renders on the app origin; file names stripped of paths, control and bidi characters | 🟡 Optional fail-closed ClamAV tested with real clean/EICAR/unavailable upload/import cases. Production web namespace accepted clean/rejected EICAR with fresh loaded signatures on 2026-10-21; authenticated production upload acceptance remains separate. Scanning is not universal malware detection. E2EE DM attachments cannot be scanned/re-encoded by the server and remain opaque downloads decrypted in the browser |
 | T24 | Spam sign-ups / account farming | Cloudflare Turnstile verified server-side on sign-up (when configured); 5 sign-ups per 10 min per IP; optional Closed Alpha: new accounts need admin approval before any session is issued | ✅ (shared across replicas: D4) |
 | T24 | Account enumeration | Password reset answers identically for unknown emails. Sign-up reveals that an email is taken (accepted trade-off for usability) | 🟡 |
-| T26 | Voice: joining without permission, staying after removal, eavesdropping | Deployed legacy SFU path (production revision `4386e071`): tokens only after channel checks (Join voice/Speak), 60-second lifetime (tokens can't be revoked), media grants per permission (microphone: Speak; camera/screen: Video), no data channel; participants re-checked and removed on kick/ban/suspension/transfer/role or override changes, again after the token lifetime; LiveKit server API not exposed publicly; DTLS-SRTP in transit | 🟡 not end-to-end encrypted; removal is best effort if LiveKit is unreachable. Product Voice (channels and direct-message calls) is end-to-end encrypted per [voice/call-session.md](voice/call-session.md); DM calls authorize by current conversation membership and are revoked on leave/removal/block/suspension |
+| T26 | Voice: joining without permission, staying after removal, eavesdropping | Current product Voice checks account/session/device and channel or conversation authority; exact generation/room grants, native admitted peers, verified key installation and fail-closed media fencing are described in [voice/call-session.md](voice/call-session.md). Media frames use E2EE on supported browsers; SFU transport alone is not that guarantee. | 🟡 independent integration audit, exact production image/configuration, recurring room cleanup, physical devices and hostile-network acceptance remain release gates. The current running image has no verified source-revision label; historical deployed SHAs are not current proof |
 | T27 | Integrations: leaked or guessed tokens, bots escalating | 256-bit random tokens stored as SHA-256; revocable at once; bots are members bound by roles and channel overrides, webhooks can only post plain text into one channel; per-token and message rate limits; AutoMod; audited | ✅ |
-| T25 | Child safety, grooming, harassment | Blocking and reporting ✅; age attestation and DM restrictions pending | 🟡 age attestation and DM restrictions required before public launch of the official instance |
+| T25 | Child safety, grooming, harassment | Blocking/reporting and restricted DM requests implemented; official signup requires 16-year self-attestation, not proof of age | 🟡 external legal/safeguarding review required before public launch |
 
 ## Residual risks we accept for the MVP
 
 - `script-src 'unsafe-inline'`: a nonce-based CSP would force every page to render dynamically. XSS
   defence relies on React escaping and on never rendering user HTML. Revisit before rich text or embeds.
-- The mutation burst limit and stream caps are per process (auth limits are shared). With several replicas, share them too (D4).
+- Auth/mutation burst counters and expiring SSE leases are PostgreSQL-backed across processes.
+  Concurrent upload slots remain process-local; quotas and daily byte reservations are shared.
 - Not-found pages inside streamed routes return HTTP 200 (D12); no data is rendered.
 
 ## Verification

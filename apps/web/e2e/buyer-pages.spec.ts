@@ -17,7 +17,9 @@ for (const path of ["/discord-alternative", "/hosting"]) {
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByRole("main")).toContainText("Closed alpha");
-    await expect(page.getByRole("main")).toContainText("not end-to-end encrypted");
+    await expect(page.getByRole("main")).toContainText("1:1 and group DMs, including DM attachments, are end-to-end encrypted");
+    await expect(page.getByRole("main")).toContainText("Voice media uses end-to-end encryption on supported browsers");
+    await expect(page.getByRole("main")).toContainText("Community text and its attachments are readable by the operator");
     await expect(page.getByRole("main").getByRole("link", { name: "Request alpha access", exact: true })).toHaveAttribute("href", "/sign-up");
     await expect(page.getByRole("main").getByRole("link", { name: "Read the self-hosting guide", exact: true })).toHaveAttribute("href", "https://github.com/Livvux/openDiscord/blob/main/docs/SELF-HOSTING.md");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

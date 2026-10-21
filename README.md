@@ -12,8 +12,10 @@ and works without it.
 > blocking, AutoMod, anti-raid controls, bots, webhooks and a public API, community export/import, GDPR
 > export and deletion, 2FA and passkeys — all covered by automated tests ([roadmap](docs/ROADMAP.md)).
 > Home with friends and profile status, custom emoji and stickers, public channels and discovery.
-> **Only 1:1 text DMs are end-to-end encrypted**; community messages, files and voice are not, so the
-> operator of an instance can read them ([privacy](docs/PRIVACY.md)). No external security audit has been done.
+> **1:1 and group DMs, including DM attachments, are end-to-end encrypted.** Voice media uses
+> end-to-end encryption on supported browsers; unsupported browsers refuse calls. Community text
+> and its attachments are readable by the operator ([privacy](docs/PRIVACY.md)). No independent
+> security or cryptographic integration audit has been completed. See [beta readiness](docs/OPEN-BETA-READINESS.md).
 
 ## Stack
 

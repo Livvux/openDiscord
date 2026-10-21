@@ -28,7 +28,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await showNavigationFor(owner, "Invite people");
   const invitePath = await createInviteLink(owner);
   await owner.goto(settingsPath);
-  const rules = owner.locator('section[aria-labelledby="community-rules"]');
+  const rules = owner.getByRole("main").locator('section[aria-labelledby="community-rules"]:visible');
   await rules.getByRole("textbox", { name: "Community rules", exact: true }).fill("Be respectful. <b>Plain text rules</b>");
   await rules.getByRole("checkbox", { name: "Require acknowledgement before joining or sending messages", exact: true }).check();
   await rules.getByRole("button", { name: "Save community rules" }).click();
@@ -69,7 +69,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await member.screenshot({ path: testInfo.outputPath("own-restriction.png"), fullPage: true });
 
   await owner.reload();
-  const reviews = owner.locator('section[aria-labelledby="ban-appeals"]');
+  const reviews = owner.getByRole("main").locator('section[aria-labelledby="ban-appeals"]:visible');
   await expect(reviews.getByText("I understand; please review <script>as text</script>.", { exact: true })).toBeVisible();
   await reviews.getByLabel("Decision").selectOption("unban");
   await reviews.getByLabel("Reply to appellant (optional)").fill("You can rejoin.");
