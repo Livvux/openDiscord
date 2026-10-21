@@ -14,7 +14,7 @@ test("inline event attributes are blocked while the Next sign-in form hydrates",
   const request = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/auth/sign-in/email");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await request;
-  await expect(page.getByRole("alert")).toHaveText("CSP hydration probe");
+  await expect(page.locator("form:visible").getByRole("alert")).toHaveText("CSP hydration probe");
   await page.evaluate(() => {
     document.addEventListener("securitypolicyviolation", (event) => {
       if (event.effectiveDirective === "script-src-attr") document.documentElement.dataset.cspBlocked = "yes";
