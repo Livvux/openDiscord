@@ -18,6 +18,7 @@ test("runtime collection catches uncaught errors and rejected promises across na
 test("a handled aborted fetch is a network diagnostic, not an unhandled application rejection", async ({ page }, info) => {
   const errors: string[] = [], diagnostics: string[] = [];
   await collectRuntimeErrors(page, errors, diagnostics);
+  try {
   await page.goto("/sign-in");
   await page.route("**/api/runtime-error-probe", (route) => route.abort("aborted"));
   expect(await page.evaluate(async () => {
@@ -26,5 +27,7 @@ test("a handled aborted fetch is a network diagnostic, not an unhandled applicat
   // Wait for a later browser task so a possible unhandledrejection event has fired.
   await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
   expect(errors).toEqual([]);
-  await info.attach("runtime-error-probe", { body: JSON.stringify({ errors, diagnostics }), contentType: "application/json" });
+  } finally {
+    await info.attach("runtime-error-probe", { body: JSON.stringify({ errors, diagnostics }), contentType: "application/json" });
+  }
 });
