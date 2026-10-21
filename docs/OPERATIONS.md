@@ -154,7 +154,7 @@ fresh bucket.
 ### Hosted-instance restore evidence, 2026-10-21
 
 The current scheduled archive `daily/2026-10-21T03-11-54Z.tar.gz.age` (72,437 bytes) was fetched
-off host using the read-only recovery credential. Encrypted SHA-256:
+off host using the read-only recovery credential. The encrypted file matched SHA-256
 `af4acd77f0ded52c4b98194e9f98b9699ffe6fcfb57d2ce0ac8c21340fa58119`.
 The separate 1Password recovery identity decrypted it in a restricted RAM-backed directory.
 An isolated Docker daemon on a separate validation host used its own socket, data directory and
