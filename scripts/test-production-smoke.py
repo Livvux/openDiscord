@@ -4,8 +4,9 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from email.message import Message
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("smoke", Path(__file__).with_name("production-smoke.py"))
 smoke = importlib.util.module_from_spec(spec)
@@ -71,6 +72,20 @@ class ReleaseSmokeTests(unittest.TestCase):
                     smoke.verify_revision(Path("."), sha, web, "db")
             fetch.assert_not_called()
             command.assert_not_called()
+
+    def test_duplicate_physical_security_headers_are_rejected(self):
+        for name, first, second in (("Strict-Transport-Security", "max-age=0", "max-age=31536000"),
+                                     ("Content-Security-Policy", "frame-ancestors *", "frame-ancestors 'none'")):
+            headers = Message()
+            headers[name] = first
+            headers[name] = second
+            response = MagicMock(status=200, headers=headers)
+            response.read.return_value = b"ok"
+            response.geturl.return_value = "https://example.test/sign-in"
+            response.__enter__.return_value = response
+            with patch.object(smoke.urllib.request, "urlopen", return_value=response), \
+                    self.assertRaisesRegex(smoke.SmokeFailure, "ambiguous-security-headers"):
+                smoke.fetch("https://example.test", "/sign-in")
 
 
 if __name__ == "__main__":

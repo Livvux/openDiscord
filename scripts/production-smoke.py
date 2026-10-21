@@ -50,6 +50,9 @@ def fetch(origin: str, path: str, limit: int = 32768) -> tuple[bytes, dict[str, 
         body = response.read(limit + 1)
         if response.status != 200 or response.geturl() != target or len(body) > limit:
             raise SmokeFailure("unexpected-http-response")
+        for name in ("Strict-Transport-Security", "Content-Security-Policy", "X-Content-Type-Options"):
+            if len(response.headers.get_all(name, [])) > 1:
+                raise SmokeFailure("ambiguous-security-headers")
         return body, {name.lower(): value for name, value in response.headers.items()}
 
 

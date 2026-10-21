@@ -78,6 +78,12 @@ review capacity before the job starts to fail: raise the budgets together with t
 quota and host RAM, shorten retention, or move media to incremental off-host copies. Never exclude
 media from the bundle without a verified replacement copy.
 
+It also checks `opendiscord-maintenance.service` and its timer: the last completion must have
+`Result=success`, a nonzero monotonic completion time no more than 90 minutes old, and an active
+hourly timer. A fresh backup cannot hide `maintenance-job-failed`, `maintenance-stale`,
+`maintenance-timer-inactive` or `maintenance-status-unavailable`. Install the updated monitor at
+both operator paths above; a source merge alone does not update host scripts.
+
 Operator install (manual; update the backup script, helper and monitor together, or the monitor
 reports `backup-capacity-unavailable`). The backup monitor is `opendiscord-monitor.service` (timer
 `opendiscord-monitor.timer`, every five minutes) running `/etc/opendiscord-monitor/monitor.py` with
@@ -144,6 +150,53 @@ The container, decrypted files, recovery identity copy and credential file were 
 Not covered: booting the application against the restored database and re-uploading media to a
 fresh bucket.
 
+
+### Hosted-instance restore evidence, 2026-10-21
+
+The current scheduled archive `daily/2026-10-21T03-11-54Z.tar.gz.age` (72,437 bytes) was fetched
+off host using the read-only recovery credential. Encrypted SHA-256:
+`af4acd77f0ded52c4b98194e9f98b9699ffe6fcfb57d2ce0ac8c21340fa58119`.
+The separate 1Password recovery identity decrypted it in a restricted RAM-backed directory.
+An isolated Docker daemon on a separate validation host used its own socket, data directory and
+network-disabled PostgreSQL 18.6 container; the production daemon was not used for tests.
+`pg_restore --no-owner --no-privileges --exit-on-error` succeeded.
+
+Before adding any fixtures the recovered database held 40 migrations, 3 users, 1 community,
+22 messages and 1 attachment. That attachment is an **avatar**, not a message attachment.
+Its archived object existed and matched the reference and byte count. The actual running production
+web image was exported read-only and booted against this database and read-only local media with
+production email, storage, push and SFU connections excluded. `/api/health`, `/api/ready`,
+`/sign-in` and `/manifest.webmanifest` returned 200 with the expected content types.
+
+A synthetic account existed only in the recovered database. The copied Closed Alpha policy
+rejected its pending login (403); after approving and email-verifying only that fixture in the copy,
+login succeeded. With isolated community membership its authenticated avatar request returned
+12,312 bytes identical to the restored object. This proves application boot, authentication and
+readback of the media actually present in this backup. It does not prove recovery of absent DM
+attachments, browser private keys, a replacement production bucket or a larger data set.
+The app/database containers, isolated daemon, downloaded image layers and temporary recovery
+identity, credentials, session, dump and media were removed; absence was checked at 16:55:27 UTC.
+Production accounts, policy and data were unchanged.
+
+### Current operational failures, 2026-10-21
+
+- The hourly maintenance timer is active, but its job fails because its configured migrate image
+  `compose-index-virtual-microchip-f3zupk-migrate:latest` is missing. Preserve the fail-closed behavior:
+  build and retain a reviewed compatible migrate image under the deployment procedure below,
+  record its immutable ID, and verify a bounded maintenance dry run before any separately approved
+  retention apply. Do not silently build/pull from inside the maintenance job or delete data to test it.
+- No installed Voice maintenance/monitor timer was observed. Source and CI Voice tests do not prove
+  production cleanup/alert activation; follow the coherent Voice activation gates below.
+- The current 1 GiB aggregate full-snapshot budget remains inadequate for increased media traffic.
+  The warning/projection is diagnostic, not a capacity solution. Before opening admissions, the
+  operator must approve either an encrypted incremental off-host media design with retention and
+  isolated recovery proof, or a funded full-bundle budget covering at least 31 worst-case bundles
+  plus database growth and RAM headroom. Keep the 30-day recovery policy unless explicitly changed
+  with privacy/legal review. Keep uploads/admissions bounded while this remains unresolved.
+- A test alert was accepted by SMTP on this date. Recipient inbox delivery remains UNVERIFIED.
+
+See [RELEASE-RUNBOOK.md](RELEASE-RUNBOOK.md) for exact revision, migration, public smoke and
+rollback gates. Historical successful checks above do not override these current failures.
 
 ### Hosted maintenance lifecycle
 
