@@ -20,7 +20,7 @@ Historical evidence is dated and does not certify the current candidate.
 | Running SFU | LiveKit 1.13.10, immutable image `sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a`; inspected inline config omits required `room.auto_create: false`. Source template now denies auto-create in #128, but hosted configuration needs the coherent issuer/SFU rollout. | FAIL product activation |
 | Migration journal | Read-only comparison: all 40 ordered production journal hashes equal SHA-256 of the baseline SQL files, through `0039_dm_calls`; newest timestamp `1792407256144` | PASS baseline journal |
 | Public probes/PWA | Collaborative Chromium browser: `/api/health` 200 `no-store`, `/api/ready` 200 `no-store`, `/manifest.webmanifest` 200 `application/manifest+json` | PASS |
-| Candidate delivery | Five readiness PRs below, including the browser-discovered read-receipt fix stacked on #125. No merged release commit, beta tag or matching candidate deployment exists. | UNVERIFIED |
+| Candidate delivery | Five component PRs below are combined on `release/hosted-readiness-2026-10-21` for one integration review and exact-head CI. Integration merges on that branch are not merges into `main`. No final release commit, beta tag or matching candidate deployment exists. | UNVERIFIED |
 
 ## P0 release gates
 
@@ -107,11 +107,15 @@ restore performance or admission enforcement. Until chosen, installed and proven
 | [#128](https://github.com/Livvux/openDiscord/pull/128) | Production source/migration/header proof, maintenance monitoring, actual recovery, generation-only SFU default and release runbook | Open; stacked on #125; retarget/update to main after its merge, require exact-head checks and separate approval |
 | [#129](https://github.com/Livvux/openDiscord/pull/129) | Handle interrupted read markers, persist unread only after success, retry/fence with unit/browser regressions | Open; stacked on #125; retarget/update to main after its merge, then require exact-head checks and separate approval |
 
-**Merge commits: none. Final release SHA: not established. Candidate deployment: not performed.**
+**Merges into main: none. Final release SHA: not established. Candidate deployment: not performed.**
 Protection must not be bypassed. Only the author currently has repository write rights, so the owner
-must provide a distinct eligible reviewer before validated PRs can merge. Merge #125 first so its
-additional required browser gate applies to the final integration, rebase/update subsequent PRs,
-and require final-main CI and production readback. Do not infer deployed changes from PR success.
+must provide a distinct eligible reviewer before validated changes can merge. The integration branch
+contains #125 `81878ec`, #126 `7f772a4`, #127 `beed453`, #128 `43b9ba4` and #129 `311c06a`,
+preserving their small component diffs. Its required browser gate includes all product fixes and the
+CSP regression. Require independent approval and all required checks on the integration PR, then
+final-main CI and production readback; close component PRs only after proving they are integrated.
+Do not infer deployed changes from PR success. The owner's production-update request authorizes
+deploying the reviewed fixes with existing Closed Alpha policy; it does not close the Open Beta gates.
 
 External/operator actions: commission and attach crypto/pentest/legal sign-offs (S6/R3); supply
 physical-device, assistive-technology and restrictive-network evidence (F4–F6); approve and prove

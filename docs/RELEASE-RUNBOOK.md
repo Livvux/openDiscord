@@ -6,7 +6,10 @@ turning off Closed Alpha, publishing an Open Beta announcement or exposing nativ
 
 ## Review and build
 
-1. Merge small PRs only after the protected checks and a separate approving GitHub review pass.
+1. Review the small component PRs and merge their integration candidate only after the protected
+   checks and a separate approving GitHub review pass. The candidate branch
+   `release/hosted-readiness-2026-10-21` contains all five readiness PRs; its CI must validate their
+   combination. Local branch integration commits do not establish a merge into `main`.
    `main` requires `check`, `voice-product` and `real-engine`, an up-to-date branch, one approving
    review, approval after the latest push, resolved discussions and admin enforcement. Do not use
    an admin bypass, self-review or direct write to satisfy this gate.
