@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { db } from "@/db";
@@ -91,5 +92,17 @@ it("parallel sends share one atomic sliding-window limit across communities", as
   for (const result of results) {
     if (result.status === "rejected") expect(result.reason).toMatchObject({ code: "rate_limited" });
   }
+  expect(await db.$count(message, eq(message.authorId, actor))).toBe(RATE_LIMIT.messages);
+});
+
+it("an unavailable attachment rolls back the message and its rate-limit acquisition", async () => {
+  const actor = await users.create("Attachment rollback sender");
+  const { channelId } = await createCommunity(actor, "Rollback community");
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  await expect(sendMessage(actor, channelId, "Unavailable attachment", [randomUUID()]))
+    .rejects.toMatchObject({ code: "invalid" });
+  expect(await db.$count(message, eq(message.authorId, actor))).toBe(0);
+  for (let i = 0; i < RATE_LIMIT.messages; i++) await sendMessage(actor, channelId, `Valid message ${i}`);
+  await expect(sendMessage(actor, channelId, "Over the limit")).rejects.toMatchObject({ code: "rate_limited" });
   expect(await db.$count(message, eq(message.authorId, actor))).toBe(RATE_LIMIT.messages);
 });
