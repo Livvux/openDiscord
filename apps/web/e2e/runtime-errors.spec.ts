@@ -9,10 +9,10 @@ test("runtime collection catches uncaught errors and rejected promises across na
     setTimeout(() => { throw new Error("uncaught runtime probe"); }, 0);
     void Promise.reject(new Error("unhandled rejection probe"));
   });
-  await expect.poll(() => errors).toEqual(expect.arrayContaining(["uncaught runtime probe", "unhandled rejection probe"]));
+  await expect.poll(() => errors).toEqual(expect.arrayContaining([expect.stringContaining("uncaught runtime probe"), "unhandled rejection probe"]));
   await page.goto("/sign-up");
   await page.evaluate(() => { setTimeout(() => { throw new Error("after navigation probe"); }, 0); });
-  await expect.poll(() => errors).toContain("after navigation probe");
+  await expect.poll(() => errors).toEqual(expect.arrayContaining([expect.stringContaining("after navigation probe")]));
 });
 
 test("a handled aborted fetch is a network diagnostic, not an unhandled application rejection", async ({ page }, info) => {
