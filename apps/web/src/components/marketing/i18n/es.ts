@@ -59,9 +59,9 @@ export const es: Messages = {
     },
     encryption: {
       title: "Honestos con el cifrado",
-      body: "Los mensajes directos están cifrados de extremo a extremo entre dispositivos verificados. El texto y la voz de las comunidades no. La integración aún no ha pasado una auditoría de seguridad independiente.",
+      body: "Los mensajes directos individuales y de grupo, incluidos sus archivos adjuntos, están cifrados de extremo a extremo entre dispositivos verificados. La voz y el vídeo usan cifrado de extremo a extremo en navegadores compatibles. El operador puede leer el texto de las comunidades y sus archivos adjuntos. La integración aún no ha pasado una auditoría de seguridad independiente.",
       dms: "Mensajes directos",
-      community: "Canales de comunidad",
+      community: "Texto de comunidad",
       yes: "Extremo a extremo",
       no: "En el servidor",
     },
@@ -103,17 +103,17 @@ export const es: Messages = {
       {
         label: "Ahora",
         title: "Alfa cerrada",
-        items: ["Canales privados, roles, moderación", "Menciones, hilos, búsqueda, reacciones", "Voz, vídeo y compartir pantalla", "Bots, webhooks, API pública", "MD cifrados con verificación de dispositivos", "Apelaciones, normas y controles de retención", "Emojis y stickers propios", "Canales públicos y descubrimiento"],
+        items: ["Canales privados, roles, moderación", "Menciones, hilos, búsqueda, reacciones", "Voz, vídeo y compartir pantalla", "Bots, webhooks, API pública", "MD individuales y grupales cifrados y llamadas por MD", "Apelaciones, normas y controles de retención", "Emojis y stickers propios", "Canales públicos y descubrimiento"],
       },
       {
         label: "Después",
         title: "Más cerca",
-        items: ["Cifrado de voz y TURN", "Revisión de seguridad independiente", "Pruebas en dispositivos físicos", "Pulir el autoalojamiento"],
+        items: ["Pruebas de voz y TURN en dispositivos reales", "Revisión de seguridad independiente", "Pruebas en dispositivos físicos", "Pulir el autoalojamiento"],
       },
       {
         label: "Más adelante",
-        title: "Apps y grupos",
-        items: ["Apps nativas", "MD grupales y llamadas por MD"],
+        title: "Aplicaciones nativas",
+        items: ["Apps nativas"],
       },
     ],
   },

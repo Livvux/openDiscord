@@ -59,9 +59,9 @@ export const de: Messages = {
     },
     encryption: {
       title: "Ehrlich bei Verschlüsselung",
-      body: "Direktnachrichten sind zwischen verifizierten Geräten Ende-zu-Ende-verschlüsselt. Community-Text und Sprache sind es nicht. Die Integration wurde noch nicht unabhängig geprüft.",
+      body: "1:1- und Gruppen-Direktnachrichten samt Anhängen sind zwischen verifizierten Geräten Ende-zu-Ende-verschlüsselt. Sprach- und Videoanrufe verschlüsseln Medien in unterstützten Browsern Ende zu Ende. Community-Text und zugehörige Anhänge bleiben für den Betreiber lesbar. Die Integration wurde noch nicht unabhängig geprüft.",
       dms: "Direktnachrichten",
-      community: "Community-Kanäle",
+      community: "Community-Text",
       yes: "Ende-zu-Ende",
       no: "Serverseitig",
     },
@@ -103,17 +103,17 @@ export const de: Messages = {
       {
         label: "Jetzt",
         title: "Geschlossene Alpha",
-        items: ["Private Kanäle, Rollen, Moderation", "Erwähnungen, Threads, Suche, Reaktionen", "Sprache, Video und Bildschirmfreigabe", "Bots, Webhooks, öffentliche API", "Verschlüsselte DMs mit Geräteverifizierung", "Einsprüche, Regeln und Aufbewahrungsfristen", "Eigene Emojis und Sticker", "Öffentliche Kanäle und Verzeichnis"],
+        items: ["Private Kanäle, Rollen, Moderation", "Erwähnungen, Threads, Suche, Reaktionen", "Sprache, Video und Bildschirmfreigabe", "Bots, Webhooks, öffentliche API", "Verschlüsselte 1:1-/Gruppen-DMs und DM-Anrufe", "Einsprüche, Regeln und Aufbewahrungsfristen", "Eigene Emojis und Sticker", "Öffentliche Kanäle und Verzeichnis"],
       },
       {
         label: "Als Nächstes",
         title: "Näher zusammen",
-        items: ["Sprachverschlüsselung und TURN", "Unabhängiges Sicherheitsreview", "Abnahme auf echten Geräten", "Feinschliff fürs Selbsthosten"],
+        items: ["Sprach- und TURN-Abnahme auf echten Geräten", "Unabhängiges Sicherheitsreview", "Abnahme auf echten Geräten", "Feinschliff fürs Selbsthosten"],
       },
       {
         label: "Später",
-        title: "Apps und Gruppen",
-        items: ["Native Apps", "Gruppen-DMs und DM-Anrufe"],
+        title: "Native Clients",
+        items: ["Native Apps"],
       },
     ],
   },

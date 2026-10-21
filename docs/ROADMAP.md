@@ -32,10 +32,10 @@ Encrypted DMs, private complete archives, custom emoji/stickers, explicit public
 operator policies, 16-year signup self-attestation, funding disclosure and auth-key rotation support
 are implemented. Desktop/mobile automated web acceptance passes. Real HTTP/SSE characterization,
 real ClamAV-engine rejection and populated operational-backup recovery now have isolated CI evidence.
-The official instance runs a healthy private ClamAV daemon (fresh definitions, reachable from the app
-network as `opendiscord-private-scanner`, verified 2026-10-17), but the app's `CLAMAV_HOST` is empty, so
-uploads are not scanned yet. Remaining activation steps (app variable, backup `OPENDISCORD_SCANNER_COMPOSE_DIR`,
-monitor timer, real clean/EICAR upload through the browser) follow [ops/scanner](../ops/scanner/README.md).
+The official instance has ClamAV configured in the app and a healthy private scanner/monitor
+(verified 2026-10-21). Isolated real-engine CI is green; current clean/EICAR production uploads through
+an authenticated browser remain an explicit acceptance gate. See [ops/scanner](../ops/scanner/README.md)
+and [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
 Voice E2EE passes the three-account product acceptance workflow in CI (synthetic Chromium media).
@@ -61,7 +61,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Minimise IPs, logs, metadata | ✅ | IPs not stored with sessions; Caddy access logs off; app logs errors only |
 | Encryption in transit | ✅ | HTTPS + HSTS; official instance uses Cloudflare/Traefik, standalone deployment uses Caddy |
 | Encryption at rest | 🟡 | TOTP secrets and backup codes encrypted by Better Auth; database relies on disk encryption (documented). Column-level encryption is not planned for message content because the server must read it to serve it |
-| E2EE for private communication | 🟡 | Matrix crypto DMs merged in #30 with desktop/mobile runtime acceptance; no external integration audit. Community text and voice are not E2EE |
+| E2EE for private communication | 🟡 external review open | 1:1/group DMs and DM attachments use Matrix crypto; supported Voice calls encrypt media frames. Community text and its attachments remain server-readable. Independent integration audit and physical-device acceptance remain open. |
 | Private content out of search engines and public APIs | ✅ | `robots.txt`, `noindex` on `/app` and `/invite`; private content APIs require membership; anonymous public HTML exposes only explicitly published text channels |
 
 ### 2. Data ownership and self-hosting
@@ -100,8 +100,10 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 
 Voice channels ✅ on self-hosted LiveKit as an optional compose profile ([DECISIONS.md](DECISIONS.md) D8): permission-checked
 short-lived tokens, *Join voice*/*Speak* per channel, removal on loss of access, calls survive navigation.
-Video calls and screen sharing ✅ in voice channels (separate *Video* permission, per channel). Not end-to-end
-encrypted (the SFU relays DTLS-SRTP).
+Video and screen-share publication paths are implemented (separate *Video* permission, per channel).
+Supported browsers encrypt media frames before LiveKit transport; unsupported browsers fail closed.
+Successful screen-share publication/reception, real-device acceptance and independent crypto review
+remain gates in [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 ### 5. Security
 
