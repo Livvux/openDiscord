@@ -14,9 +14,13 @@ external gates prevent treating that statement as a clean bill of health or Open
 | B2 | Low | Message rate limiting counted committed messages before a later serialized insert. Parallel requests, including across communities, could exceed the stated five-per-five-seconds author cap. The separate action/token limits still bound ordinary traffic; no unlimited flood claim. | #126 uses the existing PostgreSQL atomic sliding counter inside the message transaction. Parallel cross-community sends admit at most five. A missing-attachment regression requires rollback of both the message and consumed budget. | Fixed in PR; not merged/deployed |
 | B4 | Low | Push subscription count and upsert were separate, allowing concurrent creation to exceed ten. Moving an already-known endpoint to another signed-in account also skipped the receiving account's cap. Endpoint possession is not treated as a victim-account takeover. | #126 serializes target-user count and upsert, counts transfers as new for that user, and preserves refresh of an already-owned endpoint at capacity. Concurrent and transfer/refresh integration checks use fresh fixtures and locally generated test VAPID keys. | Fixed in PR; not merged/deployed |
 
-Prior-head #126 [CI 39639579791](https://github.com/Livvux/openDiscord/actions/runs/39639579791)
-passed full backend/browser/build/restore checks. Latest-head tests and protected review remain
-required. No migration, dependency or access-policy change is needed for these fixes.
+#126 head `7f772a4` passed full backend/browser/build/restore checks in
+[CI 39647785737](https://github.com/Livvux/openDiscord/actions/runs/39647785737), strict
+[Voice 39647785678](https://github.com/Livvux/openDiscord/actions/runs/39647785678) and
+[scanner 39647785629](https://github.com/Livvux/openDiscord/actions/runs/39647785629).
+Protected review and final integration remain required. A prior Voice SDK console failure remains
+documented in the readiness matrix; its assertions were not weakened. No migration, dependency
+or access-policy change is needed for these fixes.
 
 ## Controls reviewed and focused dynamic evidence
 
@@ -24,7 +28,10 @@ The focused investigators fully read 108 unique files under `apps/web`, plus sup
 design documents. This is selected coverage; the architecture walkthrough is not counted as a full
 line-by-line audit. Four baseline files were partially reviewed and substantial UI/other source and
 dependency implementation remain outside full coverage. The private workbench retains detailed
-path lists and counterevidence under scan `737ef9a4-9939-4347-b1f5-6eb3c96e5e57`.
+path lists and counterevidence under scan `737ef9a4-9939-4347-b1f5-6eb3c96e5e57`, finalized
+2026-10-21 18:03:38 UTC with a report, coverage ledger, findings and SARIF export. That sealed
+report describes the baseline revision and partial review scope, not the later candidate or an
+independent audit.
 
 - Auth/session/account status, passkey/TOTP plugins and fresh-session reset controls; exact-origin
   cookie APIs and Next server-action boundaries; centralized community/channel/DM access checks.
