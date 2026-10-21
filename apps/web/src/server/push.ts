@@ -1,7 +1,7 @@
 // Web Push for mentions and new private messages when no tab is open (or the tab is in the background). Optional: needs VAPID
 // keys. Browsers deliver pushes through their vendor's push service (Google, Mozilla, Apple, Microsoft);
 // the payload is end-to-end encrypted for the browser, so that service only sees that a push happened.
-import { and, count, eq, inArray, or } from "drizzle-orm";
+import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import webpush from "web-push";
 import { z } from "zod";
 import { db } from "@/db";
@@ -48,16 +48,18 @@ const subscriptionInput = z.object({
 export async function savePushSubscription(userId: string, rawSubscription: unknown): Promise<void> {
   if (!pushEnabled) throw new AppError("not_found", "Push notifications aren't set up on this instance.");
   const sub = parse(subscriptionInput, rawSubscription);
-  const [existing] = await db.select({ id: pushSubscription.id }).from(pushSubscription).where(eq(pushSubscription.endpoint, sub.endpoint));
-  if (!existing) {
-    const [{ total }] = await db.select({ total: count() }).from(pushSubscription).where(eq(pushSubscription.userId, userId));
-    enforceCap(total, MAX_SUBSCRIPTIONS_PER_USER, `Push notifications can be on for at most ${MAX_SUBSCRIPTIONS_PER_USER} devices.`);
-  }
-  // An endpoint belongs to one browser profile: re-subscribing moves it to whoever is signed in now.
-  await db
-    .insert(pushSubscription)
-    .values({ userId, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth })
-    .onConflictDoUpdate({ target: pushSubscription.endpoint, set: { userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select 1 from ${user} where ${user.id} = ${userId} for update`);
+    const [existing] = await tx.select({ userId: pushSubscription.userId }).from(pushSubscription).where(eq(pushSubscription.endpoint, sub.endpoint));
+    if (existing?.userId !== userId) {
+      const [{ total }] = await tx.select({ total: count() }).from(pushSubscription).where(eq(pushSubscription.userId, userId));
+      enforceCap(total, MAX_SUBSCRIPTIONS_PER_USER, `Push notifications can be on for at most ${MAX_SUBSCRIPTIONS_PER_USER} devices.`);
+    }
+    // An endpoint belongs to one browser profile: re-subscribing moves it to whoever is signed in now.
+    await tx.insert(pushSubscription)
+      .values({ userId, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth })
+      .onConflictDoUpdate({ target: pushSubscription.endpoint, set: { userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+  });
 }
 
 export async function deletePushSubscription(userId: string, rawEndpoint: unknown): Promise<void> {
