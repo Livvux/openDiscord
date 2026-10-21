@@ -127,7 +127,11 @@ test.describe("communities", () => {
       expect(response.status()).toBe(200);
       await response.finished();
       await member.getByRole("link", { name: "other", exact: true }).click();
+      await expect(member.getByRole("heading", { level: 1, name: "other", exact: true })).toBeVisible();
+      await expect(member).not.toHaveURL(channelUrl);
       await member.reload();
+      await expect(member.getByRole("heading", { level: 1, name: "other", exact: true })).toBeVisible();
+      await expect(member.getByRole("link", { name: /^general/ })).not.toHaveAttribute("aria-current", "page");
       await expect(member.getByRole("link", { name: /^general/ })).not.toHaveAccessibleName(/unread|mention/);
       expect(errors).toEqual([]);
     } finally {
