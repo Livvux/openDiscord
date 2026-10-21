@@ -230,7 +230,30 @@ def check(config: MonitorConfig, now: float) -> str | None:
         return "backup-capacity-exceeded" if ratios and ratios[1] > 1 else problem
     if ratios is None:
         return "backup-capacity-unavailable"
-    return "backup-capacity-warning" if ratios[0] >= 0.8 else None
+    return maintenance_job_problem() or ("backup-capacity-warning" if ratios[0] >= 0.8 else None)
+
+
+def maintenance_job_problem() -> str | None:
+    """A fresh backup cannot make broken hourly privacy retention healthy."""
+    try:
+        result = subprocess.run(["systemctl", "show", "opendiscord-maintenance.service",
+                                 "--property=LoadState,Result,ExecMainExitTimestampMonotonic"],
+                                capture_output=True, text=True, timeout=10, check=False)
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if result.returncode or fields.get("LoadState") != "loaded":
+            return "maintenance-status-unavailable"
+        if fields.get("Result") != "success":
+            return "maintenance-job-failed"
+        age = time.monotonic() - int(fields["ExecMainExitTimestampMonotonic"]) / 1_000_000
+        if age < -30 or age > 90 * 60 or int(fields["ExecMainExitTimestampMonotonic"]) == 0:
+            return "maintenance-stale"
+        timer = subprocess.run(["systemctl", "is-active", "opendiscord-maintenance.timer"],
+                               capture_output=True, text=True, timeout=10, check=False)
+        if timer.returncode or timer.stdout.strip() != "active":
+            return "maintenance-timer-inactive"
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return "maintenance-status-unavailable"
+    return None
 
 
 def backup_capacity_ratios(now: float) -> tuple[float, float] | None:

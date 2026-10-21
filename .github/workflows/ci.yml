@@ -78,6 +78,7 @@ jobs:
         run: |
           python3 scripts/test-operator-monitor.py
           python3 scripts/test-backup-capacity.py
+          python3 scripts/test-production-smoke.py
           python3 scripts/test-capture-scanner-recovery.py
       - name: Voice operator wrapper isolation and cleanup
         if: matrix.shard == 1

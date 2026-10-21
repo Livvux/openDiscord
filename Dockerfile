@@ -14,9 +14,13 @@ RUN pnpm --filter web build
 
 # One-shot job: applies pending Drizzle migrations, then exits.
 FROM build AS migrate
+ARG SOURCE_COMMIT=unverified
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 CMD ["pnpm", "--filter", "web", "db:migrate"]
 
 FROM node:25-alpine AS web
+ARG SOURCE_COMMIT=unverified
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
