@@ -157,7 +157,7 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Restore Next.js compiler cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -168,7 +168,7 @@ jobs:
       # Only main saves: per-PR saves pushed the repo past its 10 GB cache limit and evicted main's entries.
       - name: Save Next.js compiler cache
         if: github.ref == 'refs/heads/main' && matrix.shard == 1
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -268,7 +268,7 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Restore Next.js compiler cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
