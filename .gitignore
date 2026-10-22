@@ -4,5 +4,6 @@ node_modules
 backups/
 apps/web/load-characterization.json
 apps/web/http-sse-characterization.json
+apps/web/beta-browser-results.json
 
 __pycache__/

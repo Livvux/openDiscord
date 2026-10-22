@@ -57,9 +57,9 @@ export const en = {
     },
     encryption: {
       title: "Honest about encryption",
-      body: "Direct messages are end-to-end encrypted between verified devices. Community text and voice are not. The integration has not had an independent security audit.",
+      body: "1:1 and group DMs, including their attachments, are end-to-end encrypted between verified devices. Voice media uses end-to-end encryption on supported browsers. Community text and its attachments remain readable by the operator. The integration has not had an independent security audit.",
       dms: "Direct messages",
-      community: "Community channels",
+      community: "Community text",
       yes: "End-to-end",
       no: "Server-side",
     },
@@ -101,17 +101,17 @@ export const en = {
       {
         label: "Now",
         title: "Closed alpha",
-        items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API", "Encrypted DMs with device verification", "Appeals, rules and retention controls", "Custom emoji and stickers", "Public channels and discovery"],
+        items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API", "Encrypted 1:1/group DMs and DM calls", "Appeals, rules and retention controls", "Custom emoji and stickers", "Public channels and discovery"],
       },
       {
         label: "Next",
         title: "Closer together",
-        items: ["Voice encryption and TURN", "Independent security review", "Physical-device acceptance", "Self-hosting polish"],
+        items: ["Real-device Voice and TURN acceptance", "Independent security review", "Physical-device acceptance", "Self-hosting polish"],
       },
       {
         label: "Later",
-        title: "Apps and groups",
-        items: ["Native apps", "Group DMs and DM calls"],
+        title: "Native clients",
+        items: ["Native apps"],
       },
     ],
   },

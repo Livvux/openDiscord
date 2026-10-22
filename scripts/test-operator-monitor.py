@@ -14,9 +14,37 @@ spec.loader.exec_module(monitor)
 
 
 class AlertStateTests(unittest.TestCase):
+    def test_maintenance_completion_and_timer_are_both_required(self):
+        now = 10_000
+        healthy = "LoadState=loaded\nResult=success\nExecMainExitTimestampMonotonic=9940000000\n"
+        cases = [
+            (healthy, 0, "active", 0, None),
+            (healthy.replace("Result=success", "Result=exit-code"), 0, "active", 0, "maintenance-job-failed"),
+            (healthy.replace("loaded", "not-found"), 0, "active", 0, "maintenance-status-unavailable"),
+            (healthy, 1, "active", 0, "maintenance-status-unavailable"),
+            (healthy.replace("9940000000", "0"), 0, "active", 0, "maintenance-stale"),
+            (healthy.replace("9940000000", "10031000000"), 0, "active", 0, "maintenance-stale"),
+            (healthy.replace("9940000000", "4599000000"), 0, "active", 0, "maintenance-stale"),
+            (healthy, 0, "inactive", 3, "maintenance-timer-inactive"),
+            ("malformed", 0, "active", 0, "maintenance-status-unavailable"),
+        ]
+        for service, code, timer, timer_code, expected in cases:
+            with self.subTest(expected=expected), patch.object(monitor.time, "monotonic", return_value=now), \
+                    patch.object(monitor.subprocess, "run", side_effect=[subprocess.CompletedProcess([], code, service), subprocess.CompletedProcess([], timer_code, timer)]):
+                self.assertEqual(monitor.maintenance_job_problem(), expected)
+        for error in (OSError(), subprocess.TimeoutExpired("systemctl", 10)):
+            with patch.object(monitor.subprocess, "run", side_effect=error):
+                self.assertEqual(monitor.maintenance_job_problem(), "maintenance-status-unavailable")
+
     def test_broken_http_response_enters_failure_state(self):
         with patch.object(monitor.urllib.request, "urlopen", side_effect=http.client.IncompleteRead(b"")):
             self.assertEqual(monitor.check({"mode": "health"}, 100), "public-health-unavailable")
+
+    def test_fresh_backup_does_not_hide_failed_maintenance(self):
+        with patch.object(monitor, "backup_job_problem", return_value=None), \
+                patch.object(monitor, "backup_capacity_ratios", return_value=(0.01, 0.01)), \
+                patch.object(monitor, "maintenance_job_problem", return_value="maintenance-job-failed"):
+            self.assertEqual(monitor.check({"mode": "backup"}, 100), "maintenance-job-failed")
 
     def test_backup_probe_failures_enter_failure_state(self):
         now = dt.datetime(2026, 10, 15, tzinfo=dt.UTC).timestamp()

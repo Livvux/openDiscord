@@ -26,6 +26,9 @@ function liveKitOrigins(): string {
 export const CSP = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${dev ? " 'unsafe-eval'" : ""} ${TURNSTILE}`,
+  // React uses listeners, not HTML event-handler attributes. Block this injection path
+  // while the PPR shell still requires Next's inline bootstrap scripts.
+  "script-src-attr 'none'",
   `frame-src 'self' ${TURNSTILE}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://api.producthunt.com/widgets/embed-image/ https://*.giphy.com https://static.klipy.com https://static1.klipy.com https://static2.klipy.com",

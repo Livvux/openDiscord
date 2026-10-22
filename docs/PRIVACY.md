@@ -11,6 +11,8 @@ data controllers and must publish their own privacy notice; this document is the
 | Passwords | TLS | Salted hash (Better Auth, scrypt) | n/a |
 | TOTP secrets, backup codes | TLS | Encrypted with the configured Better Auth secret/keyring | n/a |
 | Direct messages | TLS and client encryption | Ciphertext in Postgres; browser crypto state in IndexedDB | **Yes**, between verified devices; see [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) |
+| DM attachments | TLS and client encryption | Ciphertext in object storage; keys/metadata inside encrypted DMs | **Yes**, including group DMs |
+| Voice media | DTLS-SRTP and client frame encryption | Not recorded by this application | **Yes**, in supported browsers; unsupported browsers refuse calls |
 | Passkeys | TLS | Public keys only | n/a |
 
 Community messages are readable by the instance operator. In the application, instance administrators
@@ -19,8 +21,11 @@ Global rights do not grant community membership. Direct messages use Matrix cryp
 browser devices, with no plaintext fallback. A recipient can explicitly disclose a decrypted message
 when reporting it. Recovery copies are bounded to loaded, authenticated messages, not a complete history
 backup. Malicious operator-delivered JavaScript or a compromised device can access plaintext; the
-integration has not received an independent cryptographic audit. Voice remains encrypted in transit,
-not end-to-end. See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [DECISIONS.md](DECISIONS.md) D10.
+integration has not received an independent cryptographic audit. Voice media uses client frame
+encryption in supported browsers in addition to DTLS-SRTP. The SFU relays encrypted frames; call,
+membership and connection metadata remain visible to the service. Unsupported browsers refuse
+encrypted calls. Physical-device and hostile-network acceptance remain release gates.
+See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 ## Data inventory
 
@@ -40,7 +45,7 @@ not end-to-end. See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [DECISIONS.md
 | Desktop-notification preference | Opt-in desktop notifications for mentions and new private messages | Stored in the person's browser only (`localStorage`) | Until changed or browser data is cleared. Mention notifications show sender, channel and the start of the message on the device; private-message notifications show only the sender |
 | Online status (opt-in) and last-seen time | Show "online" to members of shared communities | Members of shared communities, only while the person has it switched on | `last_seen_at` is overwritten on each heartbeat (no history); deleted with the account |
 | Notification level per community | Mute communities | The person only | Until changed, leaving or account deletion |
-| Voice audio, camera video and screen shares | Live conversation in voice channels | People in the same voice channel | Never stored: relayed live by the operator's LiveKit server (encrypted in transit, not end-to-end) |
+| Voice audio, camera video and screen shares | Live conversation in community or DM calls | Explicitly admitted call devices; service sees call and transport metadata | Not recorded by this application: client-encrypted frames relayed by LiveKit in supported browsers; recipients can still record |
 | Push subscriptions (per device, opt-in) | Mention and new-private-message notifications when openDiscord isn't open (private messages: sender name only, never text) | The person; the browser's push service (Google, Mozilla, Apple or Microsoft) receives an end-to-end encrypted payload and sees only that a push happened | Until switched off on the device, the push service reports it gone, or account deletion |
 | Community exports | Moving a community to another instance | The owner who downloads it | Generated for download; each export is recorded in the audit log. JSON version 2 includes library metadata and readable image fallbacks without files; complete gzip archive version 3 includes all live library files including unused images. Archives are compressed, not encrypted, and do not replace operator backups. Contains display names and messages, optionally their files; account records and email fields are excluded, but message/file contents may contain personal data. Failed imports can leave private, unlinked files eligible for cleanup after one hour |
 | Bots and webhooks | Integrations a community set up | Members see their messages (labelled BOT); managers see name, target channel and last use | Until revoked; their accounts are deleted with the community |
@@ -105,7 +110,7 @@ list means more work remains for the next run. New sessions and updates containi
 
 Personal export version 8 includes community image upload attribution separately from personal messages, the person's retained public post snapshots (including their send-time display name), and public-channel publication state for communities they currently own, including withdrawn publications. Other authors' snapshots are excluded. Custom image references in personal message exports become readable text. Library ownership remains with the community, independently of the uploader account.
 
-The unreleased generation-bound voice service stores a durable `voice_sfu_room` ownership ledger:
+The generation-bound voice service stores a durable `voice_sfu_room` ownership ledger:
 exact channel/call UUIDs and generation, active/retired status, creation/retirement and maximum app
 JWT expiry timestamps, retry/lease metadata and a small outcome category. It stores no user IDs,
 participant identities, JWTs, enrollment secrets, private keys or encrypted media/control payloads.

@@ -59,9 +59,9 @@ export const pt: Messages = {
     },
     encryption: {
       title: "Honestos sobre criptografia",
-      body: "Mensagens diretas são criptografadas de ponta a ponta entre dispositivos verificados. Texto e voz das comunidades não são. A integração ainda não passou por uma auditoria de segurança independente.",
+      body: "Mensagens diretas individuais e de grupo, incluindo anexos, são criptografadas de ponta a ponta entre dispositivos verificados. Os meios de áudio e vídeo usam criptografia de ponta a ponta em navegadores compatíveis. O texto das comunidades e seus anexos continuam legíveis para o operador. A integração ainda não passou por uma auditoria de segurança independente.",
       dms: "Mensagens diretas",
-      community: "Canais da comunidade",
+      community: "Texto da comunidade",
       yes: "Ponta a ponta",
       no: "No servidor",
     },
@@ -103,17 +103,17 @@ export const pt: Messages = {
       {
         label: "Agora",
         title: "Alfa fechado",
-        items: ["Canais privados, cargos, moderação", "Menções, threads, busca, reações", "Voz, vídeo e compartilhamento de tela", "Bots, webhooks, API pública", "DMs criptografadas com verificação de dispositivos", "Recursos, regras e controles de retenção", "Emojis e figurinhas próprios", "Canais públicos e descoberta"],
+        items: ["Canais privados, cargos, moderação", "Menções, threads, busca, reações", "Voz, vídeo e compartilhamento de tela", "Bots, webhooks, API pública", "DMs individuais e de grupo criptografadas e chamadas por DM", "Recursos, regras e controles de retenção", "Emojis e figurinhas próprios", "Canais públicos e descoberta"],
       },
       {
         label: "Em seguida",
         title: "Mais perto",
-        items: ["Criptografia de voz e TURN", "Revisão de segurança independente", "Validação em dispositivos físicos", "Polimento da auto-hospedagem"],
+        items: ["Validação de voz e TURN em dispositivos reais", "Revisão de segurança independente", "Validação em dispositivos físicos", "Polimento da auto-hospedagem"],
       },
       {
         label: "Depois",
-        title: "Apps e grupos",
-        items: ["Apps nativos", "DMs em grupo e chamadas por DM"],
+        title: "Apps nativos",
+        items: ["Apps nativos"],
       },
     ],
   },

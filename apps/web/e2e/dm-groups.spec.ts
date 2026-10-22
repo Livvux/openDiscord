@@ -2,7 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { createCommunity, createInviteLink, joinAsNewUser, newUserPage, signUp } from "./helpers";
 
 async function befriend(owner: Page, friend: Page, friendName: string, ownerName: string) {
-  await owner.goto("/app");
   await owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: "Add Friend" }).click();
   await owner.getByLabel("Search your communities").fill(friendName);
   await owner.getByRole("button", { name: "Search" }).click();
@@ -32,6 +31,9 @@ test("encrypted group: create from friends, members read, removal is immediate a
   const wire: string[] = [];
   gina.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/dm") && request.method() === "POST") wire.push(request.postData() ?? ""); });
   try {
+    // Keep the owner's friends page mounted between requests; a reload can race its refresh.
+    await gina.goto("/app");
+    await expect(gina.getByRole("heading", { level: 1, name: "Friends", exact: true })).toBeVisible();
     await befriend(gina, hugo, "Hugo Group", "Gina Group");
     await befriend(gina, ivy, "Ivy Group", "Gina Group");
     // Each browser sets up its encryption device on its first visit.

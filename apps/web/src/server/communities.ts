@@ -138,7 +138,11 @@ export async function renameCommunity(userId: string, rawId: unknown, rawName: u
   const communityId = parse(uuid, rawId);
   const name = parse(communityName, rawName);
   await requireMember(db, communityId, userId, Permission.ManageCommunity);
-  await db.update(community).set({ name }).where(eq(community.id, communityId));
+  await db.transaction(async (tx) => {
+    await lockCommunity(tx, communityId);
+    await requireMember(tx, communityId, userId, Permission.ManageCommunity);
+    await tx.update(community).set({ name }).where(eq(community.id, communityId));
+  });
   await publish({ type: "channels.changed", communityId });
 }
 
@@ -202,7 +206,11 @@ export async function updateChannel(userId: string, rawChannelId: unknown, rawNa
   const name = parse(channelName, rawName);
   const topic = parse(channelTopic, rawTopic ?? "");
   const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
-  await db.update(channel).set({ name, topic: topic || null }).where(eq(channel.id, channelId));
+  await db.transaction(async (tx) => {
+    await lockCommunity(tx, ch.communityId);
+    await requireChannel(tx, channelId, userId, Permission.ManageChannels);
+    await tx.update(channel).set({ name, topic: topic || null }).where(eq(channel.id, channelId));
+  });
   await publish({ type: "channels.changed", communityId: ch.communityId });
 }
 
@@ -491,5 +499,9 @@ export async function revokeInvite(userId: string, rawCode: unknown) {
   const [row] = await db.select().from(invite).where(eq(invite.code, code));
   if (!row) throw notFound("Invite not found.");
   await requireMember(db, row.communityId, userId, Permission.ManageCommunity);
-  await db.delete(invite).where(eq(invite.code, code));
+  await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    await requireMember(tx, row.communityId, userId, Permission.ManageCommunity);
+    await tx.delete(invite).where(eq(invite.code, code));
+  });
 }

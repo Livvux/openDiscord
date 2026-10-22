@@ -27,6 +27,7 @@ const harness = vi.hoisted(() => {
   };
   return {
     messages,
+    clearUnread: vi.fn(),
     begin() { cursor = 0; },
     commit() {
       for (const run of [...layouts, ...effects]) run();
@@ -57,7 +58,7 @@ const harness = vi.hoisted(() => {
 vi.mock("react", async (original) => ({ ...await original<typeof import("react")>(), ...harness.react }));
 vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.fn() }));
 vi.mock("@/components/app/realtime-provider", () => ({ useRealtime: () => ({ state: "open" }) }));
-vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => undefined }));
+vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread }));
 vi.mock("@/components/app/chat/use-channel-messages", () => ({ useChannelMessages: () => harness.messages }));
 vi.mock("@/components/ui/button", () => ({ Button: "button" }));
 vi.mock("@/components/app/chat/composer", () => ({ Composer: () => null }));
@@ -65,6 +66,7 @@ vi.mock("@/components/app/chat/message-item", () => ({ MessageItem: () => null, 
 vi.mock("@/components/app/chat/thread-panel", () => ({ ThreadPanel: () => null }));
 
 import { ChannelChat } from "@/components/app/chat/channel-chat";
+import { markChannelRead } from "@/app/app/actions";
 
 class ResizeDouble implements ResizeObserver {
   static instances: ResizeDouble[] = [];
@@ -141,10 +143,48 @@ beforeEach(() => {
   harness.reset(); ResizeDouble.instances = []; vi.clearAllMocks(); vi.useFakeTimers();
   vi.stubGlobal("ResizeObserver", ResizeDouble);
   vi.stubGlobal("document", { visibilityState: "hidden", addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("requestAnimationFrame", vi.fn());
   vi.stubGlobal("fetch", vi.fn());
 });
 afterEach(() => { harness.unmount(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+describe("ChannelChat read-marker lifecycle", () => {
+  it("keeps a failed transport pending, retries on visibility and clears only after success", async () => {
+    vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+    harness.messages.messages = [message("latest")];
+    vi.mocked(markChannelRead).mockRejectedValueOnce(new TypeError("Load failed"))
+      .mockResolvedValueOnce({ ok: true, data: undefined });
+    render();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(markChannelRead).toHaveBeenCalledTimes(1);
+    expect(harness.clearUnread).not.toHaveBeenCalled();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(markChannelRead).toHaveBeenCalledTimes(2);
+    expect(harness.clearUnread).toHaveBeenCalledExactlyOnceWith("channel");
+    window.dispatchEvent(new Event("online"));
+    expect(markChannelRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes pending requests and fences a late successful result after cleanup", async () => {
+    vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+    harness.messages.messages = [message("latest")];
+    let complete!: (result: { ok: true; data: undefined }) => void;
+    vi.mocked(markChannelRead).mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
+    render();
+    await vi.advanceTimersByTimeAsync(500);
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("online"));
+    expect(markChannelRead).toHaveBeenCalledTimes(1);
+    harness.unmount();
+    complete({ ok: true, data: undefined });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.clearUnread).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event("online"));
+    expect(markChannelRead).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("ChannelChat content-size pinning", () => {
   it("observes content and follows growth after the layout effect already pinned the view", () => {

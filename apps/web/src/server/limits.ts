@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { applicationRateLimit } from "@/db/schema";
 import { hashRateLimitKey } from "./rate-limit-store";
 import { AppError } from "./errors";
+import type { Db } from "./access";
 
 /** Hard caps that bound storage growth per user and per community. */
 export const CAPS = {
@@ -20,9 +21,9 @@ export function enforceCap(current: number, cap: number, message: string): void 
 export const MUTATION_LIMIT = { max: 30, windowMs: 10_000 };
 
 /** Atomic sliding-window acquisition shared by every web process. Rejected hits do not extend the window. */
-export async function consume(key: string, max: number, windowMs: number, now = Date.now()): Promise<void> {
+export async function consume(key: string, max: number, windowMs: number, now = Date.now(), database: Db = db): Promise<void> {
   const recent = sql`array(select hit from unnest(${applicationRateLimit.hits}) as hit where hit > ${now - windowMs})`;
-  const [row] = await db.insert(applicationRateLimit).values({
+  const [row] = await database.insert(applicationRateLimit).values({
     key: hashRateLimitKey(key), hits: [now], windowStart: now,
   }).onConflictDoUpdate({
     target: applicationRateLimit.key,

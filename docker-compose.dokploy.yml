@@ -17,14 +17,20 @@ services:
       retries: 10
 
   migrate:
-    build: { context: ., target: migrate }
+    build:
+      context: .
+      target: migrate
+      args: { SOURCE_COMMIT: "${OPENDISCORD_SOURCE_COMMIT:-unverified}" }
     environment:
       DATABASE_URL: postgres://opendiscord:${POSTGRES_PASSWORD}@db:5432/opendiscord
     depends_on:
       db: { condition: service_healthy }
 
   web:
-    build: { context: ., target: web }
+    build:
+      context: .
+      target: web
+      args: { SOURCE_COMMIT: "${OPENDISCORD_SOURCE_COMMIT:-unverified}" }
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://opendiscord:${POSTGRES_PASSWORD}@db:5432/opendiscord

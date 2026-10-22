@@ -29,11 +29,17 @@ jobs:
         with:
           context: .
           target: web
+          build-args: SOURCE_COMMIT=${{ github.sha }}
           tags: opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }}
           load: true
           cache-from: type=gha,scope=media-recovery-image
           # PR runs only read the layer cache; per-PR blobs evicted main's caches.
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=media-recovery-image' || '' }}
+      - name: Verify the built image's source revision
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          RELEASE_IMAGE: opendiscord-media-recovery:${{ github.run_id }}-${{ github.run_attempt }}
+        run: test "$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_COMMIT"
       - name: Rehearse exact operational archive with private media
         run: pnpm --filter web exec node scripts/verify-media-recovery.mjs
       - uses: actions/upload-artifact@v7

@@ -1,5 +1,8 @@
 # LiveKit for the optional `voice` compose profile. API keys come from LIVEKIT_KEYS (see docker-compose.yml).
 port: 7880
+room:
+  # Only the application's authorized generation issuer may create a room.
+  auto_create: false
 rtc:
   tcp_port: 7881
   # One UDP port for all media (multiplexed), so only 7882/udp needs to be open.

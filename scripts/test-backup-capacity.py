@@ -76,7 +76,8 @@ class MonitorCapacityTests(unittest.TestCase):
         if record is None:
             files["capacity.json"] = None
         with patch.object(Path, "read_text", read_text), \
-                patch.object(monitor.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, job)):
+                patch.object(monitor.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, job)), \
+                patch.object(monitor, "maintenance_job_problem", return_value=None):
             return monitor.check({"mode": "backup"}, self.now)
 
     def record(self, *measurements):

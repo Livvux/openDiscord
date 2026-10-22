@@ -1,6 +1,6 @@
 import type { AssetView } from "@/lib/community-assets";
 import { assetsForMessages, validateCommunityAssetRefs } from "./community-assets";
-import { and, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, integration, message, publicPost, reaction, user, userBlock } from "@/db/schema";
@@ -187,13 +187,6 @@ export async function sendMessage(
   if (ch.kind === "voice") throw new AppError("invalid", "Voice channels don't have messages.");
   await enforceAutomod(ch.communityId, userId, authority, content);
 
-  const since = new Date(Date.now() - RATE_LIMIT.windowSeconds * 1000);
-  const [{ recent }] = await db
-    .select({ recent: count() })
-    .from(message)
-    .where(and(eq(message.authorId, userId), gt(message.createdAt, since)));
-  if (recent >= RATE_LIMIT.messages) throw new AppError("rate_limited", "You're sending messages too quickly. Wait a moment.");
-
   if (replyToId) {
     // Replies stay inside one channel, so a preview can never come from a channel the reader can't see.
     const [parent] = await db.select({ id: message.id }).from(message).where(and(eq(message.id, replyToId), eq(message.channelId, channelId)));
@@ -205,6 +198,7 @@ export async function sendMessage(
     await requireChannel(tx, channelId, userId, Permission.SendMessages);
     const publication = await checkPublicPost(tx, channelId, publicGeneration, content, ids, replyToId, threadId);
     await validateCommunityAssetRefs(tx, ch.communityId, content);
+    await consume(`message:${userId}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000, Date.now(), tx);
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
     if (publication) await snapshotPublicPost(tx, created);
     await linkAttachments(tx, userId, channelId, created.id, ids);
@@ -254,6 +248,9 @@ export async function deleteMessage(userId: string, rawMessageId: unknown) {
   const own = row.message.authorId === userId;
   if (!own && !has(authority, Permission.ManageMessages)) throw forbidden("You can only delete your own messages.");
   await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    const current = await requireChannel(tx, row.message.channelId, userId);
+    if (!own && !has(current.authority, Permission.ManageMessages)) throw forbidden("You can only delete your own messages.");
     await tx.delete(message).where(eq(message.id, row.message.id));
     // Moderator deletions are audited, without the content.
     if (!own) {
@@ -304,14 +301,18 @@ export async function setPinned(userId: string, rawMessageId: unknown, pinned: b
   const row = await loadOwnedMessage(rawMessageId);
   await requireChannel(db, row.message.channelId, userId, Permission.ManageMessages);
   await db.transaction(async (tx) => {
-    if (pinned && !row.message.pinnedAt) {
+    await lockCommunity(tx, row.communityId);
+    await requireChannel(tx, row.message.channelId, userId, Permission.ManageMessages);
+    const [current] = await tx.select({ pinnedAt: message.pinnedAt }).from(message).where(eq(message.id, row.message.id));
+    if (!current) throw notFound("Message not found.");
+    if (pinned && !current.pinnedAt) {
       // Serialise pins per channel so concurrent pins can't pass the cap.
       await tx.execute(sql`select 1 from ${channel} where ${channel.id} = ${row.message.channelId} for update`);
       const [{ pins }] = await tx.select({ pins: count() }).from(message)
         .where(and(eq(message.channelId, row.message.channelId), isNotNull(message.pinnedAt)));
       if (pins >= MAX_PINS_PER_CHANNEL) throw new AppError("conflict", `A channel can have at most ${MAX_PINS_PER_CHANNEL} pinned messages.`);
     }
-    await tx.update(message).set({ pinnedAt: pinned ? (row.message.pinnedAt ?? new Date()) : null }).where(eq(message.id, row.message.id));
+    await tx.update(message).set({ pinnedAt: pinned ? (current.pinnedAt ?? new Date()) : null }).where(eq(message.id, row.message.id));
     await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: pinned ? "message.pin" : "message.unpin", targetId: row.message.authorId });
   });
   await publish({ type: "message.updated", communityId: row.communityId, channelId: row.message.channelId, messageId: row.message.id });

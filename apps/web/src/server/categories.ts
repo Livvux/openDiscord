@@ -4,7 +4,7 @@ import { and, asc, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, category, channel } from "@/db/schema";
-import { lockCommunity, requireChannel, requireMember } from "./access";
+import { lockCommunity, requireChannel, requireMember, type Db } from "./access";
 import { enforceCap } from "./limits";
 import { notFound } from "./errors";
 import { Permission } from "./permissions";
@@ -50,11 +50,11 @@ export async function createCategory(userId: string, rawCommunityId: unknown, ra
   return id;
 }
 
-async function requireCategory(userId: string, rawId: unknown) {
+async function requireCategory(userId: string, rawId: unknown, database: Db = db) {
   const id = parse(uuid, rawId);
-  const [row] = await db.select().from(category).where(eq(category.id, id));
+  const [row] = await database.select().from(category).where(eq(category.id, id));
   if (!row) throw notFound("Category not found.");
-  await requireMember(db, row.communityId, userId, Permission.ManageChannels);
+  await requireMember(database, row.communityId, userId, Permission.ManageChannels);
   return row;
 }
 
@@ -62,8 +62,10 @@ export async function renameCategory(userId: string, rawId: unknown, rawName: un
   const name = parse(categoryName, rawName);
   const row = await requireCategory(userId, rawId);
   await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    const current = await requireCategory(userId, row.id, tx);
     await tx.update(category).set({ name }).where(eq(category.id, row.id));
-    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: "category.rename", targetId: name, reason: row.name });
+    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: "category.rename", targetId: name, reason: current.name });
   });
   await publish({ type: "channels.changed", communityId: row.communityId });
 }
@@ -72,8 +74,10 @@ export async function renameCategory(userId: string, rawId: unknown, rawName: un
 export async function deleteCategory(userId: string, rawId: unknown): Promise<void> {
   const row = await requireCategory(userId, rawId);
   await db.transaction(async (tx) => {
+    await lockCommunity(tx, row.communityId);
+    const current = await requireCategory(userId, row.id, tx);
     await tx.delete(category).where(eq(category.id, row.id));
-    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: "category.delete", targetId: row.name });
+    await tx.insert(auditLog).values({ communityId: row.communityId, actorId: userId, action: "category.delete", targetId: current.name });
   });
   await publish({ type: "channels.changed", communityId: row.communityId });
 }
@@ -82,11 +86,15 @@ export async function setChannelCategory(userId: string, rawChannelId: unknown, 
   const channelId = parse(uuid, rawChannelId);
   const categoryId = rawCategoryId ? parse(uuid, rawCategoryId) : null;
   const { channel: ch } = await requireChannel(db, channelId, userId, Permission.ManageChannels);
-  if (categoryId) {
-    const [target] = await db.select({ id: category.id }).from(category)
-      .where(and(eq(category.id, categoryId), eq(category.communityId, ch.communityId)));
-    if (!target) throw notFound("Category not found.");
-  }
-  await db.update(channel).set({ categoryId }).where(eq(channel.id, channelId));
+  await db.transaction(async (tx) => {
+    await lockCommunity(tx, ch.communityId);
+    await requireChannel(tx, channelId, userId, Permission.ManageChannels);
+    if (categoryId) {
+      const [target] = await tx.select({ id: category.id }).from(category)
+        .where(and(eq(category.id, categoryId), eq(category.communityId, ch.communityId)));
+      if (!target) throw notFound("Category not found.");
+    }
+    await tx.update(channel).set({ categoryId }).where(eq(channel.id, channelId));
+  });
   await publish({ type: "channels.changed", communityId: ch.communityId });
 }
