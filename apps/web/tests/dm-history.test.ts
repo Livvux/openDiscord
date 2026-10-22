@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { boundedHistory, historyEntrySchema, MAX_HISTORY_BYTES, MAX_HISTORY_COPIES } from "@/lib/dm/history";
+import { boundedHistory, pruneDeletedHistory, historyEntrySchema, MAX_HISTORY_BYTES, MAX_HISTORY_COPIES } from "@/lib/dm/history";
 
 function entry(body: string) {
   const conversationId = randomUUID(), transactionId = randomUUID(), deviceId = randomUUID();
@@ -12,6 +12,15 @@ function entry(body: string) {
 }
 
 describe("authenticated source history capacity", () => {
+  it("prunes author-deleted copies even when only a recent edit remains in the bounded cache", () => {
+    const original = entry("Original private copy");
+    const edit = entry("Edited private copy");
+    edit.message.operation = { kind: "edit", target: original.envelope.id };
+    expect(pruneDeletedHistory([original, edit], original.envelope.id, "outsider")).toEqual([original, edit]);
+    expect(pruneDeletedHistory([original, edit], original.envelope.id, "fixture")).toEqual([]);
+    expect(pruneDeletedHistory([edit], original.envelope.id, "fixture")).toEqual([]);
+    expect(pruneDeletedHistory([edit], original.envelope.id, "outsider")).toEqual([edit]);
+  });
   it("keeps newest loaded Unicode copies within the backup byte budget", () => {
     const entries = Array.from({ length: MAX_HISTORY_COPIES }, () => entry("界".repeat(4000)));
     const retained = boundedHistory(entries);

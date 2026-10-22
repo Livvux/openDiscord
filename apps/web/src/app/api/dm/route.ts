@@ -1,4 +1,4 @@
-import { appendDirectMessage, createDirectConversation, markDirectConversationRead, listDirectConversations, listDirectMessages, listDmDevices, registerDmDevice, reportDirectMessage, respondToDirectRequest, revokeDmDevice } from "@/server/direct-messages";
+import { appendDirectMessage, publishDirectTyping, createDirectConversation, markDirectConversationRead, listDirectConversations, listDirectMessages, listDmDevices, registerDmDevice, reportDirectMessage, respondToDirectRequest, revokeDmDevice } from "@/server/direct-messages";
 import { addGroupMembers, createGroupConversation, leaveGroup, removeGroupMember, renameGroup } from "@/server/dm-groups";
 import { assertDmOrigin, dmActionSchema, requireDmDevice } from "@/server/dm-http";
 import { invalid } from "@/server/errors";
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     await consume(`dm-read:${user.id}`, 120, 60_000);
     const params = new URL(request.url).searchParams;
     const conversation = params.get("conversation");
-    if (conversation) return Response.json(await listDirectMessages(user.id, conversation, params.get("before") ?? undefined), { headers: PRIVATE_NO_STORE });
+    if (conversation) return Response.json(await listDirectMessages(user.id, conversation, params.get("before") ?? undefined, params.get("after") ?? undefined), { headers: PRIVATE_NO_STORE });
     const target = params.get("devices");
     if (target) return Response.json({ devices: await listDmDevices(user.id, target) }, { headers: PRIVATE_NO_STORE });
     return Response.json({ conversations: await listDirectConversations(user.id), devices: await listDmDevices(user.id) }, { headers: PRIVATE_NO_STORE });
@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       case "respond": await respondToDirectRequest(user.id, parse(uuid, body.id), body.status); break;
       case "send": result = await appendDirectMessage(await requireDmDevice(request), parse(uuid, body.id), body.input); break;
       case "read": await markDirectConversationRead(user.id, parse(uuid, body.id), body.message); break;
+      case "typing": await publishDirectTyping(user.id, parse(uuid, body.id), body.typing); break;
       case "report": await reportDirectMessage(user.id, { id: body.id, reason: body.reason, excerpt: body.excerpt }); break;
       case "call-decline": await declineDmCall(user.id, body.id); break;
       case "revoke": await revokeDmDevice(user.id, parse(uuid, body.id)); break;

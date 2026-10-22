@@ -7,7 +7,7 @@ import { DM_MAX_BACKUP_BYTES, encryptedMessageSchema, plainMessageSchema } from 
 export const MAX_HISTORY_COPIES = 200;
 export const MAX_HISTORY_BYTES = 3_500_000;
 export const historyEntrySchema = z.object({
-  envelope: z.object({ id: z.uuid(), conversationId: z.uuid(), senderId: z.string().max(64), deviceId: z.uuid(), transactionId: z.uuid(), content: encryptedMessageSchema, createdAt: z.iso.datetime() }).strict(),
+  envelope: z.object({ id: z.uuid(), conversationId: z.uuid(), senderId: z.string().max(64), deviceId: z.uuid(), transactionId: z.uuid(), content: encryptedMessageSchema, createdAt: z.iso.datetime(), kind: z.enum(["message", "edit", "reaction", "delete"]).optional(), targetId: z.uuid().nullable().optional(), deletedAt: z.iso.datetime().nullable().optional() }).strict(),
   message: plainMessageSchema,
   verifiedAt: z.iso.datetime(),
 }).strict().refine((entry) => entry.envelope.conversationId === entry.message.conversation && entry.envelope.transactionId === entry.message.transaction, "Historical message binding mismatch");
@@ -18,6 +18,16 @@ export const archiveSchema = z.object({
 }).strict();
 export const recoverySnapshotSchema = archiveSchema.extend({ secrets: z.unknown() }).strict();
 export type HistoryEntry = z.infer<typeof historyEntrySchema>;
+/** Only authenticated author deletions may remove trusted local copies. */
+export function pruneDeletedHistory(entries: HistoryEntry[], target: string, sender: string): HistoryEntry[] {
+  const original = entries.find((entry) => entry.envelope.id === target);
+  if (original && original.envelope.senderId !== sender) return entries;
+  return entries.filter((entry) => {
+    if (entry.envelope.id === target) return false;
+    // The original may have fallen outside the bounded cache while its edit remains.
+    return entry.message.operation?.target !== target || (!original && entry.envelope.senderId !== sender);
+  });
+}
 export type HistoryArchive = z.infer<typeof archiveSchema>;
 export type RecoverySnapshot = z.infer<typeof recoverySnapshotSchema>;
 /** Keep the newest loaded copies within both count and encrypted backup byte budgets. */

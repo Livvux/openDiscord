@@ -28,6 +28,7 @@ interface NotificationsValue {
 
 /** Dispatched on window so mounted views (Home, the open conversation) can refetch their own data. */
 export const DM_CHANGED_EVENT = "opendiscord:dm";
+export const DM_TYPING_EVENT = "opendiscord:dm-typing";
 export const FRIENDS_CHANGED_EVENT = "opendiscord:friends";
 /** Fallback while the stream is down or events were missed; normally the stream triggers refetches. */
 const DIRECT_POLL_MS = 30_000;
@@ -152,6 +153,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       if (!watching && !quiet.current) desktopNotifyDm(notice, () => router.push(url));
     });
     es.addEventListener("call", (e) => window.dispatchEvent(new CustomEvent(DM_CALL_EVENT, { detail: JSON.parse((e as MessageEvent<string>).data) })));
+    es.addEventListener("typing", (e) => window.dispatchEvent(new CustomEvent(DM_TYPING_EVENT, { detail: JSON.parse((e as MessageEvent<string>).data) })));
     es.addEventListener("friends", () => window.dispatchEvent(new CustomEvent(FRIENDS_CHANGED_EVENT)));
     es.addEventListener("mention", (e) => {
       const notice = JSON.parse((e as MessageEvent<string>).data) as MentionNotice;

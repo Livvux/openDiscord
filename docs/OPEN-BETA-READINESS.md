@@ -1,5 +1,13 @@
 # Open Beta readiness
 
+> Operational update, 2026-10-22: the owner explicitly authorized public beta admissions.
+> Registration is open and Closed Alpha is off. Revision `d969304` was deployed with passing
+> production smoke, a real signup/verification-email/login flow, repaired retention and a fresh
+> encrypted off-host backup. See [the current roadmap checkpoint](ROADMAP.md#current-assessment).
+> The ledger below preserves the 2026-10-21 pre-launch assessment; its NO-GO and unmerged-PR
+> statements are historical. Outstanding capacity, Voice activation, device/network and external
+> review gates have not been converted to PASS by the owner's admission decision.
+
 Evidence date: 2026-10-21. Scope: hosted web application and installable PWA.
 Desktop installers and native mobile applications are excluded. **Decision: NO-GO.**
 Closed Alpha stays enabled. No public beta release or announcement is authorized.

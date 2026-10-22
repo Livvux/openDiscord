@@ -1,9 +1,9 @@
 # Roadmap and gap analysis
 
-Readiness reconciliation: 2026-10-21 against baseline `f4bb1f3` and the pending readiness PRs.
-Implementation, automated acceptance, deployment and external review are separate evidence states.
-A checkmark describes the stated implementation/test scope; it does not establish production readiness
-or an external audit. See the [evidence ledger](superpowers/plans/2026-10-15-roadmap-completion.md#main-acceptance-checkpoint-2026-10-16).
+Readiness reconciliation: 2026-10-22. The hosted beta has public registration enabled.
+Implementation, automated acceptance, deployment and external review remain separate evidence states.
+The production checkpoint below refers to `d969304`; the DM conversation tools in this change need
+their own migration, CI and deployment acceptance before they are available on the hosted instance.
 
 ## Why openDiscord exists
 
@@ -21,13 +21,19 @@ We separate what is verifiable about Discord from what is opinion, and design ag
 
 ## Current assessment
 
-**Open Beta is NO-GO.** The current production checkout equals baseline `f4bb1f3`, and all 40 ordered
-migration hashes match its SQL journal through `0039_dm_calls`. The running immutable web image
-has no source-revision label, so checkout equality does not prove which commit serves traffic.
-Public health/readiness respond successfully. The current off-host backup was restored in isolation
-with app login and authenticated avatar readback. Capacity, failed retention (missing migrate image),
-Voice scheduling, actual alert delivery and external/device gates remain open in
-[OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md). No beta release is published or authorized.
+The owner explicitly authorized opening the hosted beta on 2026-10-22. The production web and
+migrate images were built with revision `d969304f00575bd5442928eb4af12307c1bbcb1d` and the web
+image was deployed. Read-only production smoke passed revision, all 40 ordered migration hashes,
+health/readiness, manifest/icons and security headers. Registration is open and Closed Alpha is off.
+A fresh ordinary QA account completed registration, actual verification-email delivery, verification,
+automatic approval, logout and subsequent login. The temporary account was then deleted.
+
+The missing migrate image was rebuilt and the hourly retention job completed successfully. A fresh
+encrypted off-host backup and backup/scanner monitor jobs succeeded. This does not resolve backup
+capacity for growing media, coherent Voice product activation/scheduling, physical-device/network
+acceptance, independent crypto/pentest/legal review or measured production concurrency. Those are
+explicit outstanding risks; opening registration does not mark every readiness gate as passed.
+[OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md) retains the historical pre-launch gate evidence.
 
 Encrypted DMs, private complete archives, custom emoji/stickers, explicit public channels/discovery,
 operator policies, 16-year signup self-attestation, funding disclosure and auth-key rotation support
@@ -40,8 +46,8 @@ and [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
 Voice E2EE passes the three-account product acceptance workflow in CI (synthetic Chromium media).
-Physical devices, additional browsers and a production activation record remain open. Native desktop bundles are preview artifacts;
-full native application-flow acceptance remains open. Physical-device media, actual inbox delivery, real push-service delivery,
+Physical devices and a coherent production Voice activation record remain open; bounded Firefox/WebKit/Edge automation is implemented. Native desktop bundles are preview artifacts;
+full native application-flow acceptance remains open. Physical-device media, real push-service delivery,
 manual screen-reader acceptance and independent security/crypto/legal/license reviews remain open.
 
 ## Requirements matrix
@@ -54,7 +60,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | --- | --- | --- |
 | Collect only necessary data | ✅ | Email, display name, password hash and sessions; coarse browser/platform labels, no raw session user-agent or IP. Legacy metadata minimized by maintenance |
 | No analytics, ads or trackers | ✅ | No application analytics. Cloudflare RUM injection disabled for the official hostname and browser-verified; optional Turnstile and configured media services still make external requests |
-| Retention and deletion policies | 🟡 production failure | Bounded dry-run/apply policy exists; expired credentials/limits and resolved moderation/audit retention 180 days. Hourly production job currently fails because its migrate image is missing; repair and completion proof required |
+| Retention and deletion policies | ✅ bounded operation | Bounded dry-run/apply policy; expired credentials/limits and resolved moderation/audit retention 180 days. Missing migrate image repaired and hourly production job completed successfully on 2026-10-22. Backup growth capacity remains open |
 | GDPR access/export | ✅ | `/api/me/export`, JSON, tested |
 | GDPR correction | ✅ | Display name editable; SMTP-gated email change confirms current address and verifies new address; recent-session guard. Real inbox acceptance remains separate |
 | GDPR deletion | ✅ | Deletes account, sessions, messages; blocked while owning a community |
@@ -84,10 +90,11 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Communities and channels | ✅ | |
 | Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
 | Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
+| DM conversation tools | 🟡 implementation in this change | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` and candidate-specific checks/deployment required. Community typing remains a follow-up |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
-| Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local private volume and optional fail-closed ClamAV protocol integration implemented; production uses R2 without a scanner |
+| Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local private volume and optional fail-closed ClamAV protocol integration implemented; production uses R2 and private fail-closed ClamAV |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
 | Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
@@ -116,7 +123,7 @@ remain gates in [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 | Rate limiting, anti-spam | ✅ | PostgreSQL-backed auth/mutation counters and expiring SSE leases; per-user, per-scope 8-stream caps, community caps and shared anti-raid controls; concurrent integration tests |
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
-| IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | 🟡 release review | Tests cover non-member access, role escalation and HTML injection. User push endpoints are allowlisted; storage/SFU fetches use operator configuration. Confirmed mutation-authorization races have a tested fix in #126 pending merge/deploy; external pentest remains open |
+| IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | 🟡 release review | Tests cover non-member access, role escalation and HTML injection. User push endpoints are allowlisted; storage/SFU fetches use operator configuration. Confirmed mutation-authorization races were fixed in #126, integrated through #130 and deployed at the 2026-10-22 checkpoint; external pentest remains open |
 | Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Production web namespace passed clean/EICAR with fresh loaded signatures on 2026-10-21; authenticated production upload acceptance remains separate (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
@@ -203,3 +210,18 @@ Published operator rules and minimum-age attestation shipped in #34; legal revie
 
 Private custom emoji/stickers and library-complete archives shipped in #41. Explicit public channels and community discovery shipped in #44. Native desktop shells shipped as a preview without a trusted publisher signature in #45: Windows/macOS/Linux bundles pass remote build checks, and the Linux native fixture passes navigation, IPC denial, HTTPS/blob save and cancellation. Publisher signing, notarization, full application flows and Windows/macOS runtime/device acceptance remain open. Mobile native clients are not implemented; the web app is installable as a PWA (manifest, offline fallback, safe areas), checked only in emulation, and docs/MOBILE-STRATEGY.md recommends PWA first with an optional Capacitor shell. Native auth multi-key rotation and automated
 license declaration checks and federation research (D13) are complete; professional compatibility review and any future federation implementation remain separate.
+
+## Remaining product gaps after the DM tools
+
+- Native Android/iOS clients are not implemented; the PWA remains the mobile client. Native background
+  calls/CallKit and native push require separate work and device acceptance.
+- Desktop remains a preview: publisher signing/notarization, native notifications and full Windows/macOS
+  runtime acceptance are not complete.
+- Community-wide typing indicators, cross-community search, voice-note recording, polls, forum channels,
+  scheduled messages and translated UI are not implemented. These are explicit follow-ups, not beta
+  launch requirements and not implicitly included in the DM tools.
+- DM search never uploads its query or decrypted index. It covers the current conversation's history
+  available to the current device; unreceived keys or history before joining a group cannot be searched.
+- Deletion removes live original/update ciphertext and unlinks encrypted files for the existing object
+  sweeper. Metadata tombstones and authenticated deletion events remain. Existing downloaded copies,
+  immutable recovery archives and historical off-host backups cannot be remotely erased.

@@ -41,7 +41,7 @@ function fromMatrix(value: string): string {
 }
 const pair = (actor: string, target: string) => [actor, target].sort();
 /** Tells the participants' open tabs to refetch; carries ids only. Delivery is best effort. */
-export async function announce(conversationId: string, userIds: string[], reason: "message" | "request" | "read", senderId?: string): Promise<void> {
+export async function announce(conversationId: string, userIds: string[], reason: "message" | "request" | "read" | "update", senderId?: string): Promise<void> {
   try {
     for (const userId of userIds) await publish({ type: "dm.changed", userId, conversationId, reason, ...(senderId ? { senderId } : {}) });
   } catch (error) {
@@ -106,6 +106,29 @@ export async function conversationFor(tx: Tx | typeof db, actor: string, id: str
 /** Throws "not found" unless the person may post to this conversation now. */
 export async function assertCanSendDirect(actor: string, id: string): Promise<void> {
   await conversationFor(db, actor, id, true);
+}
+/** Short-lived metadata only. Never persists a draft or emits message/unread/push events. */
+export async function publishDirectTyping(actor: string, id: string, input: unknown): Promise<void> {
+  const typing = parse(z.boolean(), input);
+  await consume(`dm-typing:${actor}`, 30, 60_000);
+  await db.transaction(async (tx) => {
+    await lockVoiceLifecycle(tx, "auth");
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${parse(uuid, id)}, 34))`);
+    await assertActiveUser(actor, tx);
+    const conversation = await conversationFor(tx, actor, id, true);
+    for (const recipient of conversation.others) {
+      if (await blocked(tx, actor, recipient)) continue;
+      await publish({ type: "dm.typing", userId: recipient, conversationId: id, senderId: actor, typing, expiresAt: Date.now() + 6000 }, tx);
+    }
+  });
+}
+export async function canReceiveDirectTyping(recipient: string, sender: string, id: string): Promise<boolean> {
+  try {
+    const current = await conversationFor(db, recipient, id, true);
+    if (!current.others.includes(sender) || await blocked(db, recipient, sender)) return false;
+    await assertActiveUser(sender);
+    return true;
+  } catch { return false; }
 }
 /** The conversation of a sent DM file, for membership checks; unsent uploads are never readable. */
 export async function directAttachmentFor(actor: string, id: string): Promise<{ key: string }> {
@@ -191,7 +214,7 @@ export const listDirectConversations = cache(async (actor: string): Promise<Dire
   const unread = new Map((await db.select({ id: dmMessage.conversationId, total: count() }).from(dmMessage)
     .leftJoin(dmReadState, and(eq(dmReadState.conversationId, dmMessage.conversationId), eq(dmReadState.userId, actor)))
     .leftJoin(dmMember, and(eq(dmMember.conversationId, dmMessage.conversationId), eq(dmMember.userId, actor)))
-    .where(and(inArray(dmMessage.conversationId, rows.map((r) => r.id)), ne(dmMessage.senderId, actor), or(isNull(dmReadState.lastReadId), gt(dmMessage.id, dmReadState.lastReadId)), or(isNull(dmMember.joinedAt), gte(dmMessage.createdAt, dmMember.joinedAt)),
+    .where(and(eq(dmMessage.kind, "message"), isNull(dmMessage.deletedAt), inArray(dmMessage.conversationId, rows.map((r) => r.id)), ne(dmMessage.senderId, actor), or(isNull(dmReadState.lastReadId), gt(dmMessage.id, dmReadState.lastReadId)), or(isNull(dmMember.joinedAt), gte(dmMessage.createdAt, dmMember.joinedAt)),
       // Group messages from someone either side blocked are unreadable here (no keys), so they never count.
       blockedIds.length ? notInArray(dmMessage.senderId, blockedIds) : undefined))
     .groupBy(dmMessage.conversationId)).map((r) => [r.id, r.total]));
@@ -221,28 +244,39 @@ export async function advanceRead(tx: Tx | typeof db, conversationId: string, us
     .returning({ id: dmReadState.conversationId });
   return changed.length > 0;
 }
-export async function listDirectMessages(actor: string, id: string, before?: string) {
+export async function listDirectMessages(actor: string, id: string, before?: string, after?: string) {
   const { joinedAt } = await conversationFor(db, actor, id);
   // A group member added later never had keys for earlier messages; those stay out of their timeline.
-  const rows = await db.select().from(dmMessage).where(and(eq(dmMessage.conversationId, id), before ? lt(dmMessage.id, parse(uuid, before)) : undefined, joinedAt ? gte(dmMessage.createdAt, joinedAt) : undefined)).orderBy(desc(dmMessage.id)).limit(50);
-  return { messages: rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), hasMore: rows.length === 50 };
+  const rows = await db.select().from(dmMessage).where(and(eq(dmMessage.conversationId, id), before ? lt(dmMessage.id, parse(uuid, before)) : undefined, after ? gt(dmMessage.id, parse(uuid, after)) : undefined, joinedAt ? gte(dmMessage.createdAt, joinedAt) : undefined)).orderBy(after ? asc(dmMessage.id) : desc(dmMessage.id)).limit(50);
+  return { messages: (after ? rows : rows.reverse()).map((r) => ({ ...r, createdAt: r.createdAt.toISOString(), deletedAt: r.deletedAt?.toISOString() ?? null })), hasMore: rows.length === 50 };
 }
 export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input: unknown) {
-  const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema, attachments: z.array(uuid).max(DM_MAX_ATTACHMENTS).optional() }).strict(), input);
+  const data = parse(z.object({ transactionId: uuid, content: encryptedMessageSchema, attachments: z.array(uuid).max(DM_MAX_ATTACHMENTS).optional(), kind: z.enum(["message", "edit", "reaction", "delete"]).default("message"), targetId: uuid.optional() }).strict(), input);
+  if ((data.kind === "message") === !!data.targetId || (data.kind !== "message" && data.attachments?.length)) throw invalid("Invalid private message update.");
   await consume(`dm-send:${auth.userId}`, 5, 5000);
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(810025)`);
     // Same lock as membership changes (dm-groups.ts): a send cannot commit after its sender's removal.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${parse(uuid, id)}, 34))`);
     const device = await deviceFor(tx, auth);
-    const { others, kind } = await conversationFor(tx, auth.userId, id, true);
+    const { others, kind, joinedAt } = await conversationFor(tx, auth.userId, id, true);
     if (data.content.device_id !== device.id || record(device.keys?.keys)[`curve25519:${device.id}`] !== data.content.sender_key) throw invalid("The encrypted sender does not match this device.");
     const [existing] = await tx.select().from(dmMessage).where(and(eq(dmMessage.deviceId, device.id), eq(dmMessage.transactionId, data.transactionId)));
     if (existing) {
-      if (existing.conversationId !== id || !same(existing.content, data.content)) throw conflict("A message transaction cannot be reused.");
+      if (existing.conversationId !== id || existing.kind !== data.kind || existing.targetId !== (data.targetId ?? null) || !same(existing.content, data.content)) throw conflict("A message transaction cannot be reused.");
       return { id: existing.id, recipients: [], group: false };
     }
-    const [created] = await tx.insert(dmMessage).values({ conversationId: id, senderId: auth.userId, deviceId: device.id, transactionId: data.transactionId, content: data.content }).returning({ id: dmMessage.id });
+    if (data.targetId) {
+      const [target] = await tx.select().from(dmMessage).where(and(eq(dmMessage.id, data.targetId), eq(dmMessage.conversationId, id), eq(dmMessage.kind, "message"), isNull(dmMessage.deletedAt)));
+      if (!target || (joinedAt && target.createdAt < joinedAt)) throw notFound("Message not found.");
+      if (data.kind !== "reaction" && target.senderId !== auth.userId) throw forbidden("Only the author can change this message.");
+    }
+    const [created] = await tx.insert(dmMessage).values({ conversationId: id, senderId: auth.userId, deviceId: device.id, transactionId: data.transactionId, content: data.content, kind: data.kind, targetId: data.targetId }).returning({ id: dmMessage.id });
+    if (data.kind === "delete") {
+      // Keep metadata tombstones for pagination/replay; no message or edit ciphertext remains live.
+      await tx.update(dmMessage).set({ content: {}, deletedAt: new Date() }).where(and(eq(dmMessage.conversationId, id), or(eq(dmMessage.id, data.targetId!), and(eq(dmMessage.targetId, data.targetId!), ne(dmMessage.kind, "delete")))));
+      await tx.update(attachment).set({ dmMessageId: null }).where(eq(attachment.dmMessageId, data.targetId!));
+    }
     const files = [...new Set(data.attachments ?? [])];
     if (files.length) {
       // Only the sender's own unsent opaque uploads; community, avatar and asset files have other links or a channel.
@@ -252,14 +286,14 @@ export async function appendDirectMessage(auth: DmDeviceAuth, id: string, input:
       if (linked.length !== files.length) throw invalid("An attachment is no longer available. Remove it and attach it again.");
     }
     // Replying means the sender has seen everything before it (Discord semantics), even from a stale device.
-    await advanceRead(tx, id, auth.userId, created.id);
+    if (data.kind === "message") await advanceRead(tx, id, auth.userId, created.id);
     return { id: created.id, recipients: others, group: kind === "group" };
   });
   if (result.recipients.length) {
-    await announce(id, result.recipients, "message", auth.userId);
-    await announce(id, [auth.userId], "message");
+    await announce(id, result.recipients, data.kind === "message" ? "message" : "update", data.kind === "message" ? auth.userId : undefined);
+    await announce(id, [auth.userId], data.kind === "message" ? "message" : "update");
     // Loaded lazily (push imports the message modules); never decrypts: the server has no keys.
-    void import("./push").then(({ pushDirectMessage }) => Promise.all(result.recipients.map((recipient) => pushDirectMessage(recipient, auth.userId, undefined, result.group ? id : undefined))))
+    if (data.kind === "message") void import("./push").then(({ pushDirectMessage }) => Promise.all(result.recipients.map((recipient) => pushDirectMessage(recipient, auth.userId, undefined, result.group ? id : undefined))))
       .catch((error: unknown) => console.error("[push] direct message push failed", error));
   }
   return { id: result.id };
