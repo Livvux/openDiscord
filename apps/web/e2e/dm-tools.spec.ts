@@ -30,6 +30,9 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     await bob.getByRole("button", { name: "Accept message request", exact: true }).click();
     const aLog = alice.getByRole("log"), bLog = bob.getByRole("log");
     const composer = alice.getByLabel("Encrypted message", { exact: true });
+    // Typing notices are only shown in an accepted view; one fill sends one notice, so Bob's
+    // view must have rendered the acceptance before Alice types.
+    await expect(bob.getByLabel("Encrypted message", { exact: true })).toBeVisible({ timeout: 30_000 });
     const original = "Original encrypted tools message 87342";
     await composer.fill(original);
     await expect(bob.getByText("Tools Alice is typing…", { exact: true })).toBeVisible({ timeout: 10_000 });
