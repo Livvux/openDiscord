@@ -238,13 +238,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Firefox and WebKit were the ~10 min critical path at one worker; each shard has its own runner and database.
         include:
-          - engine: firefox
-            projects: --project=firefox
-          - engine: webkit
-            projects: --project=webkit --project=iphone
-          - engine: msedge
-            projects: --project=edge
+          - { engine: firefox, projects: --project=firefox, shard: 1/2 }
+          - { engine: firefox, projects: --project=firefox, shard: 2/2 }
+          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 1/2 }
+          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 2/2 }
+          - { engine: msedge, projects: --project=edge, shard: 1/1 }
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -267,6 +267,13 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Restore Next.js compiler cache
+        uses: actions/cache/restore@v5
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: pnpm db:migrate
       - run: pnpm build
       - name: Install the tested browser
@@ -276,11 +283,12 @@ jobs:
       - name: Repeatable beta journeys (one worker per database)
         env:
           PROJECTS: ${{ matrix.projects }}
-        run: pnpm --filter web exec playwright test --config playwright.beta.config.ts $PROJECTS --workers=1
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter web exec playwright test --config playwright.beta.config.ts $PROJECTS --shard="$SHARD" --workers=1
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: beta-browser-${{ matrix.engine }}
+          name: beta-browser-${{ matrix.engine }}-${{ strategy.job-index }}
           path: |
             apps/web/beta-browser-results.json
             apps/web/test-results/beta/**
