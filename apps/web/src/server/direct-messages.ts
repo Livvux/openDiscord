@@ -111,16 +111,14 @@ export async function assertCanSendDirect(actor: string, id: string): Promise<vo
 export async function publishDirectTyping(actor: string, id: string, input: unknown): Promise<void> {
   const typing = parse(z.boolean(), input);
   await consume(`dm-typing:${actor}`, 30, 60_000);
-  await db.transaction(async (tx) => {
-    await lockVoiceLifecycle(tx, "auth");
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${parse(uuid, id)}, 34))`);
-    await assertActiveUser(actor, tx);
-    const conversation = await conversationFor(tx, actor, id, true);
-    for (const recipient of conversation.others) {
-      if (await blocked(tx, actor, recipient)) continue;
-      await publish({ type: "dm.typing", userId: recipient, conversationId: id, senderId: actor, typing, expiresAt: Date.now() + 6000 }, tx);
-    }
-  });
+  // Ephemeral and re-checked by each recipient on delivery (canReceiveDirectTyping), so plain reads
+  // suffice: the instance-wide lifecycle locks would let typing traffic queue sends and sign-ins.
+  await assertActiveUser(actor);
+  const conversation = await conversationFor(db, actor, parse(uuid, id), true);
+  for (const recipient of conversation.others) {
+    if (await blocked(db, actor, recipient)) continue;
+    await publish({ type: "dm.typing", userId: recipient, conversationId: id, senderId: actor, typing, expiresAt: Date.now() + 6000 });
+  }
 }
 export async function canReceiveDirectTyping(recipient: string, sender: string, id: string): Promise<boolean> {
   try {

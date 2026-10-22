@@ -211,6 +211,11 @@ It also stores, per person and conversation, the newest message ID they have see
 count unread messages; the peer never receives it. New-message events and Web Push notifications
 carry only the sender and conversation, never text: the server has no key to read it, and a push
 says "New encrypted message" with the sender's display name.
+Replies, edits, reactions and deletions are encrypted, but their operation kind, target message ID
+and time are plaintext envelope metadata, and typing notices are plaintext events. A deletion
+tombstone (`deletedAt`) is server-asserted: a malicious server can make a message look deleted or
+withhold it, but it cannot alter content or remove copies already verified in the browser. Local
+recovery copies keep messages before operations, so an operation flood cannot evict them.
 It can refuse delivery or hide devices. This is not metadata-hiding messaging, key transparency or
 an externally audited application. The web application is delivered by the operator: an operator or
 attacker able to replace that code can obtain plaintext in the browser. E2EE protects content from
