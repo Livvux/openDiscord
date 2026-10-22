@@ -1,0 +1,64 @@
+name: Install Playwright browsers and apt packages
+description: >-
+  Installs Playwright browsers and their OS packages from a cache. The hosted apt mirror has
+  delivered ~100 KB/s for whole jobs (2026-10-22), so the .deb files are cached next to the browsers.
+inputs:
+  browsers:
+    description: Space-separated Playwright browser names
+    default: ""
+  packages:
+    description: Extra space-separated apt packages, cached with the browser dependencies
+    default: ""
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: echo "playwright=$(pnpm --filter web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.playwright }}-${{ inputs.browsers }}-${{ inputs.packages }}
+    - name: Install browsers and OS packages
+      shell: bash
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        archives="$HOME/.cache/playwright-apt"
+        mkdir -p "$archives/partial"
+        # azure.archive.ubuntu.com served indexes at 5 MB/s but pool files at ~100 KB/s; prefer the
+        # canonical archive and keep Azure as fallback (apt's mirror method tries entries in order).
+        if [ -f /etc/apt/apt-mirrors.txt ]; then
+          printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://security.ubuntu.com/ubuntu/\tpriority:2\nhttp://azure.archive.ubuntu.com/ubuntu/\tpriority:3\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+        fi
+        printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$archives" \
+          | sudo tee /etc/apt/apt.conf.d/99playwright-cache > /dev/null
+        for attempt in 1 2 3; do
+          if timeout --kill-after=30s 6m bash -c '
+            set -e
+            if [ -n "$PACKAGES" ]; then sudo apt-get update -q && sudo apt-get install -y -q $PACKAGES; fi
+            if [ -n "$BROWSERS" ]; then pnpm --filter web exec playwright install --with-deps $BROWSERS; fi
+          '; then
+            # apt downloads as root; the cache save runs as the runner user.
+            sudo chown -R "$(id -u):$(id -g)" "$archives"
+            exit 0
+          fi
+          # The killed installer leaves its sudo apt-get child holding the dpkg lock, which failed every retry.
+          sudo pkill -9 -x apt-get || true
+          sudo dpkg --configure -a || true
+          echo "::warning::Playwright install attempt $attempt timed out or failed; retrying"
+        done
+        exit 1
+    # Only main saves: per-PR saves are scoped to the PR and count against the repo cache limit.
+    - if: steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: ${{ steps.cache.outputs.cache-primary-key }}
