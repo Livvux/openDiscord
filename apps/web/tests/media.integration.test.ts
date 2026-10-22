@@ -47,6 +47,7 @@ describe("image processing", () => {
   it("stops reading a body that is longer than announced", async () => {
     await expect(readLimited(new Blob([new Uint8Array(2048)]).stream(), 1024)).rejects.toThrow(/larger than it announced/);
     expect((await readLimited(new Blob([new Uint8Array(1024)]).stream(), 1024)).byteLength).toBe(1024);
+    await expect(readLimited(new Blob([new Uint8Array(512)]).stream(), 1024)).rejects.toThrow(/incomplete/);
   });
 
   it("gives up on a body that stalls or trickles past the deadline, and cancels it", async () => {
