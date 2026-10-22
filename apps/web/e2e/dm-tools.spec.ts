@@ -9,10 +9,12 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
   await createCommunity(alice, "Tools Lab");
   const bob = await joinAsNewUser(browser, "Tools Bob", await createInviteLink(alice));
   await bob.setViewportSize({ width: 1280, height: 900 });
-  const errors: string[] = [], wire: string[] = [];
+  const errors: string[] = [], wire: string[] = [], throttled: string[] = [];
   for (const page of [alice, bob]) {
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/dm")) wire.push(request.url() + (request.postData() ?? "")); });
+    // The client's own polling must stay inside the DM read budget, or explicit history loads fail.
+    page.on("response", (response) => { if (response.status() === 429 && new URL(response.url()).pathname.startsWith("/api/dm")) throttled.push(new URL(response.url()).pathname); });
   }
   try {
     const aliceId = (await alice.request.get("/api/auth/get-session").then((r) => r.json())).user.id as string;
@@ -100,5 +102,6 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     expect(await bob.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await bob.screenshot({ path: info.outputPath("dm-tools-mobile.png") });
     expect(errors).toEqual([]);
+    expect(throttled).toEqual([]);
   } finally { await Promise.all([alice.context().close(), bob.context().close()]); }
 });

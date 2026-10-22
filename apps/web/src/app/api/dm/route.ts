@@ -11,7 +11,9 @@ import { parse, uuid } from "@/server/validation";
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request.headers);
-    await consume(`dm-read:${user.id}`, 120, 60_000);
+    // The client itself polls listing + new events (2 reads) every few seconds per tab and on each
+    // incoming event; 120/min starved explicit history loads during ordinary bursts or with two tabs.
+    await consume(`dm-read:${user.id}`, 300, 60_000);
     const params = new URL(request.url).searchParams;
     const conversation = params.get("conversation");
     if (conversation) return Response.json(await listDirectMessages(user.id, conversation, params.get("before") ?? undefined, params.get("after") ?? undefined), { headers: PRIVATE_NO_STORE });
