@@ -1,11 +1,14 @@
-name: Install Playwright browsers
+name: Install Playwright browsers and apt packages
 description: >-
   Installs Playwright browsers and their OS packages from a cache. The hosted apt mirror has
   delivered ~100 KB/s for whole jobs (2026-10-22), so the .deb files are cached next to the browsers.
 inputs:
   browsers:
     description: Space-separated Playwright browser names
-    required: true
+    default: ""
+  packages:
+    description: Extra space-separated apt packages, cached with the browser dependencies
+    default: ""
 runs:
   using: composite
   steps:
@@ -18,18 +21,23 @@ runs:
         path: |
           ~/.cache/ms-playwright
           ~/.cache/playwright-apt
-        key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.playwright }}-${{ inputs.browsers }}
+        key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.playwright }}-${{ inputs.browsers }}-${{ inputs.packages }}
     - name: Install browsers and OS packages
       shell: bash
       env:
         BROWSERS: ${{ inputs.browsers }}
+        PACKAGES: ${{ inputs.packages }}
       run: |
         archives="$HOME/.cache/playwright-apt"
         mkdir -p "$archives/partial"
         printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$archives" \
           | sudo tee /etc/apt/apt.conf.d/99playwright-cache > /dev/null
         for attempt in 1 2 3; do
-          if timeout --kill-after=30s 6m pnpm --filter web exec playwright install --with-deps $BROWSERS; then
+          if timeout --kill-after=30s 6m bash -c '
+            set -e
+            if [ -n "$PACKAGES" ]; then sudo apt-get update -q && sudo apt-get install -y -q $PACKAGES; fi
+            if [ -n "$BROWSERS" ]; then pnpm --filter web exec playwright install --with-deps $BROWSERS; fi
+          '; then
             # apt downloads as root; the cache save runs as the runner user.
             sudo chown -R "$(id -u):$(id -g)" "$archives"
             exit 0

@@ -80,6 +80,7 @@ jobs:
           python3 scripts/test-backup-capacity.py
           python3 scripts/test-production-smoke.py
           python3 scripts/test-capture-scanner-recovery.py
+          python3 scripts/test-playwright-shard-weights.py
       - name: Voice operator wrapper isolation and cleanup
         if: matrix.shard == 1
         run: python3 scripts/test-production-voice-maintenance.py
@@ -117,11 +118,12 @@ jobs:
           name: load-characterization
           path: apps/web/load-characterization.json
           if-no-files-found: error
+      - uses: ./.github/actions/install-playwright
+        if: matrix.shard == 2
+        with: { packages: age }
       - name: Rehearse encrypted backup and isolated restore
         if: matrix.shard == 2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y age
           pnpm --filter web exec node scripts/verify-restore.mjs "${{ job.services.postgres.id }}"
 
   browser:
@@ -200,10 +202,10 @@ jobs:
       - name: Desktop and mobile browser shard
         env:
           SHARD: ${{ matrix.shard }}
-          # Playwright splits shards by test count; voice-worker's many sub-second tests gave shard 1
-          # ~2x the runtime of shard 3. Weights come from measured durations (PR #97, --reporter=list);
-          # stale weights only skew balance, every test still runs on exactly one shard.
-          PWTEST_SHARD_WEIGHTS: "2:4:5"
+          # Playwright splits shards by test count; the weights are per-shard test counts balanced on
+          # measured durations (scripts/playwright-shard-weights.py, 2026-10-22: ~350 s each instead of
+          # 460/280/280 s). Stale weights only skew balance, every test still runs on exactly one shard.
+          PWTEST_SHARD_WEIGHTS: "35:75:130"
         run: pnpm --filter web exec playwright test --project=desktop --project=mobile --shard="$SHARD/3" --workers=2 --reporter=list --output=test-results/browser
       # Each shard owns its database. The instance-wide alpha switch runs only after
       # this runner's ordinary tests finish, with no other tests using that database.
@@ -239,13 +241,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Firefox and WebKit were the ~10 min critical path at one worker; each shard has its own runner and database.
+        # One worker per database, so each shard gets its own runner. Weights are per-shard test counts
+        # balanced on measured durations (scripts/playwright-shard-weights.py); empty means equal counts.
         include:
-          - { engine: firefox, projects: --project=firefox, shard: 1/2 }
-          - { engine: firefox, projects: --project=firefox, shard: 2/2 }
-          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 1/2 }
-          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 2/2 }
-          - { engine: msedge, projects: --project=edge, shard: 1/1 }
+          - { engine: firefox, projects: --project=firefox, shard: 1/2, weights: "" }
+          - { engine: firefox, projects: --project=firefox, shard: 2/2, weights: "" }
+          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 1/2, weights: "16:34" }
+          - { engine: webkit, projects: --project=webkit --project=iphone, shard: 2/2, weights: "16:34" }
+          - { engine: msedge, projects: --project=edge, shard: 1/2, weights: "" }
+          - { engine: msedge, projects: --project=edge, shard: 2/2, weights: "" }
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -283,6 +287,7 @@ jobs:
         env:
           PROJECTS: ${{ matrix.projects }}
           SHARD: ${{ matrix.shard }}
+          PWTEST_SHARD_WEIGHTS: ${{ matrix.weights }}
         run: pnpm --filter web exec playwright test --config playwright.beta.config.ts $PROJECTS --shard="$SHARD" --workers=1
       - uses: actions/upload-artifact@v7
         if: always()
