@@ -79,7 +79,7 @@ jobs:
       - name: SFU listener startup only
         if: always()
         run: docker logs opendiscord-product-livekit 2>&1 | sed -n '/starting LiveKit server/p'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: voice-product-evidence
