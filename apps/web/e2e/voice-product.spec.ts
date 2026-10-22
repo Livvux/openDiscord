@@ -321,7 +321,10 @@ test.describe("genuine Next product encrypted Voice", () => {
       await Promise.all(consoleObservations);
       // The SFU removes revoked peers itself; SCTP cause 12 (user-initiated abort) is that removal, not a product fault.
       // Firefox does not expose sctpCauseCode (null), so there only the revoking window identifies it.
-      const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))));
+      // The same removal closes the signal WebSocket without a close frame. The SDK's read loop then
+      // rejects with ConnectionError(reason websocket) and logs "error reading from signal stream"
+      // when that close beats its own handling of the LeaveRequest (seen on main 2026-10-22).
+      const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))) || (entry.code === "signal-read" && entry.transport.some(part => part.name === "ConnectionError" && part.connectionReason === "websocket")));
       expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
