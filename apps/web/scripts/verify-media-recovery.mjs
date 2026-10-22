@@ -213,10 +213,12 @@ try {
   await ownerPage.getByLabel('Name', { exact: true }).fill('Private Recovery Fixture');
   await ownerPage.getByRole('button', { name: 'Create', exact: true }).click();
   await ownerPage.getByRole('heading', { level: 1, name: 'general' }).waitFor();
+  writeFileSync(join(work, 'recovery-proof.bin'), fixture, { mode: 0o600 });
   const chooser = ownerPage.waitForEvent('filechooser');
   await ownerPage.getByRole('button', { name: /Attach files/ }).click();
-  await (await chooser).setFiles([{ name: 'recovery-proof.bin', mimeType: 'application/octet-stream', buffer: fixture },
-    ...bulk.map((buffer, i) => ({ name: `ciphertext-${i}.bin`, mimeType: 'application/octet-stream', buffer }))]);
+  // Playwright caps in-memory file buffers at 50 MB, so the large files go through private paths.
+  const bulkPaths = bulk.map((buffer, i) => { const path = join(work, `ciphertext-${i}.bin`); writeFileSync(path, buffer, { mode: 0o600 }); return path; });
+  await (await chooser).setFiles([join(work, 'recovery-proof.bin'), ...bulkPaths]);
   await ownerPage.waitForFunction(() => document.querySelector('[aria-label="Attachments"]')?.querySelectorAll('[role="status"]').length === 0);
   await ownerPage.getByRole('button', { name: 'Send message' }).click();
   const link = ownerPage.getByRole('log').getByRole('link', { name: /recovery-proof\.bin/ });
