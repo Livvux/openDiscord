@@ -29,6 +29,24 @@ describe("authenticated source history capacity", () => {
     expect(retained.at(-1)).toBe(entries.at(-1));
     expect(new TextEncoder().encode(JSON.stringify(retained)).length).toBeLessThanOrEqual(MAX_HISTORY_BYTES);
   });
+  it("never lets a flood of reactions, edits or deletes evict authenticated message copies", () => {
+    const messages = Array.from({ length: 30 }, (_, i) => entry(`Message ${i}`));
+    const ops = Array.from({ length: 400 }, (_, i) => {
+      const op = entry(`👍 ${i}`);
+      op.envelope.kind = "reaction";
+      op.message.operation = { kind: "reaction", target: messages[i % 3].envelope.id, emoji: "👍", active: i % 2 === 0 };
+      return op;
+    });
+    const orphan = entry("Edit of an unloaded message");
+    orphan.message.operation = { kind: "edit", target: randomUUID() };
+    const retained = boundedHistory([...messages, ...ops, orphan]);
+    for (const message of messages) expect(retained).toContain(message);
+    expect(retained).not.toContain(orphan);
+    expect(retained.length).toBeLessThanOrEqual(MAX_HISTORY_COPIES);
+    // Original order is preserved, and the newest operations on retained messages fill the rest.
+    expect(retained.map((e) => e.envelope.id)).toEqual([...messages, ...ops].filter((e) => retained.includes(e)).map((e) => e.envelope.id));
+    expect(retained.at(-1)).toBe(ops.at(-1));
+  });
   it("retains empty and smaller histories without changing their order", () => {
     const entries = [entry("First"), entry("Second")];
     expect(boundedHistory([])).toEqual([]);
