@@ -321,6 +321,7 @@ try {
   assert.equal(download.status(), 200);
   assert.equal(hash(await download.body()), hash(fixture));
   // The large incompressible files are readable through the restored app, too.
+  phase = 'restored-browser-large-files';
   const bulkURLs = await (async () => {
     await recovered.goto('/app');
     await recovered.getByRole('link', { name: 'Private Recovery Fixture' }).first().click();
@@ -337,6 +338,7 @@ try {
   }
   assert.match(download.headers()['content-disposition'], /^attachment;/);
   assert.match(download.headers()['cache-control'], /^private/);
+  phase = 'restored-browser-authorization';
   const denied = await newPage(targetBase);
   await signin(denied, outsider);
   assert.equal((await denied.request.get(attachmentURL)).status(), 404);
