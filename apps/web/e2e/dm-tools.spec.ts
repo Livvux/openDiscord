@@ -21,8 +21,11 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     await bob.goto("/app/messages");
     await expect(bob.getByText("Encrypted messaging ready.")).toBeVisible({ timeout: 30_000 });
     await alice.goto(`/app/messages?to=${bobId}`);
+    const created = alice.waitForResponse((response) => new URL(response.url()).pathname === "/api/dm" && response.request().method() === "POST" && response.request().postDataJSON()?.action === "request");
     await alice.getByRole("button", { name: "Send message request", exact: true }).click();
-    const conversationId = (await alice.request.get("/api/dm").then((r) => r.json())).conversations[0].id as string;
+    const response = await created;
+    expect(response.ok()).toBe(true);
+    const conversationId = (await response.json()).id as string;
     await bob.goto(`/app/messages?c=${conversationId}`);
     await bob.getByRole("button", { name: "Accept message request", exact: true }).click();
     const aLog = alice.getByRole("log"), bLog = bob.getByRole("log");
