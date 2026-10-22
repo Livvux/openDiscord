@@ -3,6 +3,9 @@ on:
   pull_request:
   push:
     branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -37,8 +40,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Collect product acceptance before expensive validation
         run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts --list
-      - run: pnpm lint
-      - run: pnpm typecheck
+      # Lint and typecheck already gate every PR in CI's backend job.
       - run: pnpm db:migrate
       - name: Call and presentation regression checks
         run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-support.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
