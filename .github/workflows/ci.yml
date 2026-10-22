@@ -279,7 +279,14 @@ jobs:
       - name: Install the tested browser
         env:
           ENGINE: ${{ matrix.engine }}
-        run: pnpm --filter web exec playwright install --with-deps "$ENGINE"
+        # The apt step for WebKit/Firefox dependencies has hung for the whole job timeout on hosted
+        # runners (2026-10-22, three times); bound each attempt instead of losing the test budget.
+        run: |
+          for attempt in 1 2 3; do
+            timeout --kill-after=30s 6m pnpm --filter web exec playwright install --with-deps "$ENGINE" && exit 0
+            echo "::warning::Browser install attempt $attempt timed out or failed; retrying"
+          done
+          exit 1
       - name: Repeatable beta journeys (one worker per database)
         env:
           PROJECTS: ${{ matrix.projects }}
