@@ -126,6 +126,21 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   }, [userId]);
   useEffect(() => () => { if (recoveryDownload) URL.revokeObjectURL(recoveryDownload); }, [recoveryDownload]);
 
+  const commitTimeline = useCallback(async (incoming: DirectEnvelope[], current: DirectConversation) => {
+    if (!client) return;
+    // Pagination must work while a listing refresh is stalled. If another decrypt publishes in the
+    // meantime, merge again rather than replacing its older pages with our captured snapshot.
+    while (selectedRef.current === current.id) {
+      const previous = history.current;
+      const all = [...new Map([...previous, ...incoming].map((message) => [message.id, message])).values()].sort((a, b) => a.id.localeCompare(b.id));
+      const decoded = await client.decrypt(all, current.id, sendersOf(current));
+      if (selectedRef.current !== current.id) return;
+      if (previous !== history.current) continue;
+      history.current = all; setMessages(decoded);
+      return all;
+    }
+  }, [client]);
+
   const refresh = useCallback(async () => {
     if (!client || loading.current || scanning.current) return;
     loading.current = true;
@@ -157,6 +172,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       setVerifications(client.verifications().filter((v) => v.userId === userId || people.includes(v.userId)));
       setArchives(await client.archives()); setPendingIdentity(client.hasPendingIdentity()); setTransfers(await client.pendingTransfers());
       if (current && selection === selectedRef.current) {
+        const wasEmpty = history.current.length === 0;
         let after = history.current.at(-1)?.id;
         let timeline: { messages: DirectEnvelope[]; hasMore: boolean };
         const incoming: DirectEnvelope[] = [];
@@ -167,11 +183,9 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           if (!after || !timeline.hasMore || !timeline.messages.length) break;
           after = timeline.messages.at(-1)!.id;
         }
-        const all = [...new Map([...history.current, ...incoming].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
-        const decoded = await client.decrypt(all, current.id, sendersOf(current));
-        if (selection === selectedRef.current) {
-          const wasEmpty = history.current.length === 0;
-          history.current = all; setMessages(decoded); if (wasEmpty) setHasMore(timeline!.hasMore);
+        const all = await commitTimeline(incoming, current);
+        if (all && selection === selectedRef.current) {
+          if (wasEmpty) setHasMore(timeline!.hasMore);
           // Seen only when it is on screen, and not by an unverified browser that gets no keys: it must not
           // clear the unread marker for the person's trusted devices. The server keeps the marker monotonic.
           const latest = all.at(-1);
@@ -184,7 +198,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       setStatus("Encrypted messaging ready.");
     } catch (e) { setError(errorText(e)); setStatus("Connection or verification needs attention."); }
     finally { loading.current = false; }
-  }, [client, userId, target, targetIsFriend, conversation]);
+  }, [client, userId, target, targetIsFriend, conversation, commitTimeline]);
   useEffect(() => {
     const initial = window.setTimeout(() => { void refresh(); }, 0);
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
@@ -211,20 +225,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   async function backups() { const data = await dmFetch<{ backups: typeof backupList }>("/api/dm/backups"); setBackupList(data.backups); }
   async function loadEarlier(): Promise<boolean> {
     if (!client || !active || !history.current.length) return false;
-    while (loading.current && selectedRef.current === active.id) await new Promise((resolve) => setTimeout(resolve, 50));
-    if (selectedRef.current !== active.id) return false;
-    loading.current = true;
-    try {
     const data = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${active.id}&before=${history.current[0].id}`);
     // The polling refresh may be in flight or stalled; never decrypt against a stale peer identity.
     await client.sync(recipientsOf(active), formerOf(active));
-    const all = [...new Map([...data.messages, ...history.current].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
-    const decoded = await client.decrypt(all, active.id, sendersOf(active));
-    if (selectedRef.current !== active.id) return false;
-    history.current = all;
-    setMessages(decoded); setHasMore(data.hasMore);
+    if (!(await commitTimeline(data.messages, active))) return false;
+    setHasMore(data.hasMore);
     return data.hasMore;
-    } finally { loading.current = false; }
   }
   async function searchHistory() {
     const token = ++scan.current;

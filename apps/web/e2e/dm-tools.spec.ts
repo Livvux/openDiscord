@@ -26,7 +26,7 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     const response = await created;
     expect(response.ok()).toBe(true);
     const conversationId = (await response.json()).id as string;
-    await bob.goto(`/app/messages?c=${conversationId}`);
+    await bob.getByRole("navigation", { name: "Home" }).getByRole("link").filter({ has: bob.locator("[data-dm-peer-name]", { hasText: "Tools Alice" }) }).click();
     await bob.getByRole("button", { name: "Accept message request", exact: true }).click();
     const aLog = alice.getByRole("log"), bLog = bob.getByRole("log");
     const composer = alice.getByLabel("Encrypted message", { exact: true });

@@ -127,7 +127,8 @@ test.describe("communities", () => {
       }).toBe(2);
       const response = await retried;
       expect(response.status()).toBe(200);
-      await response.finished();
+      // A Server Action's RSC stream need not close before navigation. The persisted unread
+      // assertion after reload below proves the retry committed instead of waiting on the stream.
       await member.getByRole("link", { name: "other", exact: true }).click();
       await expect(member.getByRole("heading", { level: 1, name: "other", exact: true })).toBeVisible();
       await expect(member).not.toHaveURL(channelUrl);
