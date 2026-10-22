@@ -1,0 +1,50 @@
+name: Install Playwright browsers
+description: >-
+  Installs Playwright browsers and their OS packages from a cache. The hosted apt mirror has
+  delivered ~100 KB/s for whole jobs (2026-10-22), so the .deb files are cached next to the browsers.
+inputs:
+  browsers:
+    description: Space-separated Playwright browser names
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: echo "playwright=$(pnpm --filter web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+    - id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.playwright }}-${{ inputs.browsers }}
+    - name: Install browsers and OS packages
+      shell: bash
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+      run: |
+        archives="$HOME/.cache/playwright-apt"
+        mkdir -p "$archives/partial"
+        printf 'Dir::Cache::Archives "%s";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$archives" \
+          | sudo tee /etc/apt/apt.conf.d/99playwright-cache > /dev/null
+        for attempt in 1 2 3; do
+          if timeout --kill-after=30s 6m pnpm --filter web exec playwright install --with-deps $BROWSERS; then
+            # apt downloads as root; the cache save runs as the runner user.
+            sudo chown -R "$(id -u):$(id -g)" "$archives"
+            exit 0
+          fi
+          # The killed installer leaves its sudo apt-get child holding the dpkg lock, which failed every retry.
+          sudo pkill -9 -x apt-get || true
+          sudo dpkg --configure -a || true
+          echo "::warning::Playwright install attempt $attempt timed out or failed; retrying"
+        done
+        exit 1
+    # Only main saves: per-PR saves are scoped to the PR and count against the repo cache limit.
+    - if: steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: ${{ steps.cache.outputs.cache-primary-key }}

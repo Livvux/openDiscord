@@ -41,7 +41,7 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: Restore Next.js compiler cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -52,11 +52,12 @@ jobs:
       - run: pnpm build
       - name: Save Next.js compiler cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: apps/web/.next/cache
           key: ${{ runner.os }}-next-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
-      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - uses: ./.github/actions/install-playwright
+        with: { browsers: chromium }
       - name: Prepare private disposable storage
         run: |
           fixture_dir=$(mktemp -d /tmp/opendiscord-scanner-XXXXXXXX)
