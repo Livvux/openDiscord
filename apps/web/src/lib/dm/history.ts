@@ -30,17 +30,27 @@ export function pruneDeletedHistory(entries: HistoryEntry[], target: string, sen
 }
 export type HistoryArchive = z.infer<typeof archiveSchema>;
 export type RecoverySnapshot = z.infer<typeof recoverySnapshotSchema>;
-/** Keep the newest loaded copies within both count and encrypted backup byte budgets. */
+/**
+ * Keep the newest loaded copies within both count and encrypted backup byte budgets. Messages come
+ * first: a peer's flood of reactions/edits/deletes must not evict the copies recovery relies on.
+ * Operations are kept only for retained messages, in the space messages leave free.
+ */
 export function boundedHistory(entries: HistoryEntry[]): HistoryEntry[] {
-  const selected: HistoryEntry[] = [];
   const encoder = new TextEncoder();
+  const kept = new Set<HistoryEntry>();
   let bytes = 2;
-  for (const entry of entries.slice(-MAX_HISTORY_COPIES).reverse()) {
-    const size = encoder.encode(JSON.stringify(entry)).length + (selected.length ? 1 : 0);
-    if (bytes + size > MAX_HISTORY_BYTES) break;
-    selected.push(entry); bytes += size;
+  const take = (entry: HistoryEntry) => {
+    const size = encoder.encode(JSON.stringify(entry)).length + (kept.size ? 1 : 0);
+    if (kept.size >= MAX_HISTORY_COPIES || bytes + size > MAX_HISTORY_BYTES) return false;
+    kept.add(entry); bytes += size; return true;
+  };
+  const newest = [...entries].reverse();
+  for (const entry of newest) if (!entry.message.operation && !take(entry)) break;
+  const messageIds = new Set([...kept].map((entry) => entry.envelope.id));
+  for (const entry of newest) {
+    if (entry.message.operation && messageIds.has(entry.message.operation.target) && !take(entry)) break;
   }
-  return selected.reverse();
+  return entries.filter((entry) => kept.has(entry));
 }
 const outgoingSchema = z.object({ id: z.uuid(), target: z.uuid(), snapshot: recoverySnapshotSchema, attempts: z.number().int().min(0).max(8), attemptedAt: z.number().nonnegative() }).strict();
 export type PendingTransfer = z.infer<typeof outgoingSchema>;

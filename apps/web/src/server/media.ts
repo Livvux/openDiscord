@@ -130,6 +130,9 @@ export async function readLimited(body: ReadableStream<Uint8Array> | null, limit
     await reader.cancel().catch(() => undefined);
     throw error;
   }
+  // Every caller passes the announced Content-Length: a short body (cut by a proxy buffer or a
+  // dropped connection) must fail rather than be stored as a silently truncated file.
+  if (size !== limit) throw invalid("The upload was incomplete. Try again.");
   return Buffer.concat(chunks);
 }
 

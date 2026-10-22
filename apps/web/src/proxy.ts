@@ -55,5 +55,7 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Static build assets don't need a policy; attachments set their own stricter one (`sandbox`).
-  matcher: ["/((?!_next/static|_next/image|api/attachments/).*)"],
+  // Upload and import endpoints are excluded too: a proxy buffers request bodies only up to 10 MB
+  // (proxyClientMaxBodySize) and would hand the route a truncated body. They return JSON only.
+  matcher: ["/((?!_next/static|_next/image|api/attachments/|api/channels/[^/]+/attachments$|api/dm/attachments$|api/communities/[^/]+/assets$|api/communities/import$|api/me/avatar$).*)"],
 };
