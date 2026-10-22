@@ -141,6 +141,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
     }
   }, [client]);
 
+  const lastRefresh = useRef(0);
   const refresh = useCallback(async () => {
     if (!client || loading.current || scanning.current) return;
     loading.current = true;
@@ -197,11 +198,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       }
       setStatus("Encrypted messaging ready.");
     } catch (e) { setError(errorText(e)); setStatus("Connection or verification needs attention."); }
-    finally { loading.current = false; }
+    finally { loading.current = false; lastRefresh.current = Date.now(); }
   }, [client, userId, target, targetIsFriend, conversation, commitTimeline]);
   useEffect(() => {
     const initial = window.setTimeout(() => { void refresh(); }, 0);
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
+    // Event-driven refreshes already cover active conversations; the interval only fills quiet gaps.
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible" && Date.now() - lastRefresh.current >= 2500) void refresh(); }, 3000);
     // New messages arrive through the personal stream; the interval also drives crypto sync.
     // Our own read markers need no crypto refresh.
     const changed = (event: Event) => { if ((event as CustomEvent<DmNotice | undefined>).detail?.reason !== "read") void refresh(); };
