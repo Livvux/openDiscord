@@ -1,5 +1,5 @@
 // Image processing runs everywhere; the storage round trip needs R2_* credentials (skipped otherwise).
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sum } from "drizzle-orm";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
@@ -7,7 +7,7 @@ import { attachment } from "@/db/schema";
 import { MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES } from "@/lib/limits";
 import { exportUserData } from "@/server/account";
 import { acceptInvite, createCommunity, createInvite } from "@/server/communities";
-import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, processImage, readAttachment, readLimited, stageAvatarAttachment, sweepAttachments, uploadAttachment } from "@/server/media";
+import { cleanFilename, DAILY_UPLOAD_BYTES, mediaEnabled, mediaStorageLimit, processImage, readAttachment, readLimited, stageAvatarAttachment, sweepAttachments, uploadAttachment } from "@/server/media";
 import { deleteMessage, listMessages, sendMessage } from "@/server/messages";
 import { testUsers } from "./helpers";
 
@@ -185,6 +185,22 @@ describe.skipIf(!mediaEnabled)("attachments in private storage", () => {
     await db.insert(attachment).values({ channelId, uploaderId: heavy, key: `attachments/${heavy}.bin`, contentType: "application/octet-stream", filename: "big.bin", size: DAILY_UPLOAD_BYTES - 4, width: 0, height: 0, messageId: null, linkedAt: new Date() });
     const small = new Uint8Array(8);
     await expect(uploadAttachment(heavy, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/per day/);
+  });
+
+  it("refuses uploads beyond the instance storage capacity, and a malformed cap", async () => {
+    const [{ total }] = await db.select({ total: sum(attachment.size).mapWith(Number) }).from(attachment);
+    const small = new Uint8Array(8);
+    const saved = process.env.MEDIA_STORAGE_LIMIT_BYTES;
+    try {
+      process.env.MEDIA_STORAGE_LIMIT_BYTES = String((total ?? 0) + 4);
+      await expect(uploadAttachment(author, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).rejects.toThrow(/storage capacity/);
+      process.env.MEDIA_STORAGE_LIMIT_BYTES = "50GiB";
+      expect(() => mediaStorageLimit()).toThrow(/positive integer/);
+      process.env.MEDIA_STORAGE_LIMIT_BYTES = String(Number.MAX_SAFE_INTEGER);
+      ids.push((await uploadAttachment(author, channelId, "application/zip", small.byteLength, async () => small, "a.zip")).id);
+    } finally {
+      if (saved === undefined) delete process.env.MEDIA_STORAGE_LIMIT_BYTES; else process.env.MEDIA_STORAGE_LIMIT_BYTES = saved;
+    }
   });
 
   it("stores nothing when the configured scanner is unreachable (fail closed)", async () => {

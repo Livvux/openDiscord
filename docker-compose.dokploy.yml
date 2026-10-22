@@ -48,6 +48,8 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       ATTACHMENT_DIR: ${ATTACHMENT_DIR:-}
+      # Owner-approved hosted beta media capacity (50 GiB); backups are budgeted for it.
+      MEDIA_STORAGE_LIMIT_BYTES: ${MEDIA_STORAGE_LIMIT_BYTES:-53687091200}
       CLAMAV_HOST: ${CLAMAV_HOST:-}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       R2_ENDPOINT: ${R2_ENDPOINT:-}

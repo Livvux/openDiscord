@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -31,7 +31,7 @@ chmodSync(work, 0o700);
 const owned = new Map();
 const createdPaths = [];
 const fixtureFiles = new Map();
-const paths = ['/etc/opendiscord-backup', '/var/backups/opendiscord', '/etc/dokploy/traefik/dynamic', '/etc/nftables.d'];
+const paths = ['/etc/opendiscord-backup', '/var/backups/opendiscord', '/var/lib/opendiscord-backup', '/var/cache/opendiscord-restic', '/etc/dokploy/traefik/dynamic', '/etc/nftables.d'];
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const run = (file, args, options = {}) => execFileSync(file, args, {
   timeout: 90_000, maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...options,
@@ -57,9 +57,12 @@ const envFile = join(work, 'web.env');
 const s3EnvFile = join(work, 's3.env');
 const appDir = join(work, 'app');
 const voiceDir = join(work, 'voice');
-const identity = join(work, 'identity');
 const localConfig = join(work, 'rclone.conf');
 const fixture = Buffer.from('Private operational recovery fixture\n' + randomUUID() + '\n');
+// Incompressible like E2EE DM ciphertext: three 20 MiB random files beside the readable proof.
+const bulk = [1, 2, 3].map(() => randomBytes(20 * 1024 * 1024));
+const attachmentBytes = fixture.length + bulk.reduce((total, file) => total + file.length, 0);
+const repository = `rclone:opendiscord-backup:${'opendiscord-backups-private'}/restic`;
 const account = `${prefix}@example.test`;
 const outsider = `${prefix}-outsider@example.test`;
 const accountPassword = `Recovery-${randomBytes(16).toString('hex')}`;
@@ -152,12 +155,17 @@ function fixtureFile(path, value) {
   writeFileSync(path, value, { mode: 0o600, flag: 'wx' });
   fixtureFiles.set(path, hash(readFileSync(path)));
 }
+function restic(...args) {
+  return run('restic', args, { env: { ...process.env, RESTIC_REPOSITORY: repository, RESTIC_PASSWORD_FILE: '/etc/opendiscord-backup/restic-password', RCLONE_CONFIG: '/etc/opendiscord-backup/rclone.conf', RESTIC_CACHE_DIR: join(work, 'restic-cache') }, timeout: 300_000 });
+}
+const repositoryBytes = () => JSON.parse(restic('stats', '--mode', 'raw-data', '--json').toString()).total_size;
+const snapshots = () => JSON.parse(restic('snapshots', '--json').toString()).map(({ id }) => id).sort();
 function objects() {
   return JSON.parse(rclone('lsjson', `fixture:${backupBucket}`, '--recursive', '--files-only').toString())
     .map(({ Path, Size }) => ({ Path, Size })).sort((a, b) => a.Path.localeCompare(b.Path));
 }
 function backup() {
-  return run('bash', [join(root, 'scripts/production-backup.sh')], { env: {
+  return run('bash', [join(root, 'scripts/production-backup.sh')], { timeout: 600_000, env: {
     ...process.env, OPENDISCORD_DB_CONTAINER: container(sourceDB), OPENDISCORD_WEB_CONTAINER: container(sourceWeb),
     OPENDISCORD_COMPOSE_DIR: appDir, OPENDISCORD_VOICE_COMPOSE_DIR: voiceDir,
   } });
@@ -177,8 +185,7 @@ try {
   writeFileSync(s3EnvFile, `AWS_ACCESS_KEY_ID=${access}\nAWS_SECRET_ACCESS_KEY=${secret}\nS3_BUCKET=${sourceBucket},${targetBucket},${backupBucket}\n`, { mode: 0o600 });
   writeFileSync(localConfig, `[fixture]\ntype = s3\nprovider = Other\naccess_key_id = ${access}\nsecret_access_key = ${secret}\nendpoint = ${s3}\nno_check_bucket = true\nforce_path_style = true\n`, { mode: 0o600 });
   fixtureFile('/etc/opendiscord-backup/rclone.conf', readFileSync(localConfig).toString().replace('[fixture]', '[opendiscord-backup]'));
-  run('age-keygen', ['-o', identity]);
-  fixtureFile('/etc/opendiscord-backup/age-recipient', run('age-keygen', ['-y', identity]));
+  fixtureFile('/etc/opendiscord-backup/restic-password', randomBytes(32).toString('hex'));
   // Synthetic recovery configuration, including optional router files. Never sourced or executed.
   for (const [path, value] of [
     [join(appDir, '.env'), readFileSync(envFile)], [join(appDir, 'docker-compose.dokploy.yml'), 'services: {}\n'],
@@ -208,7 +215,8 @@ try {
   await ownerPage.getByRole('heading', { level: 1, name: 'general' }).waitFor();
   const chooser = ownerPage.waitForEvent('filechooser');
   await ownerPage.getByRole('button', { name: /Attach files/ }).click();
-  await (await chooser).setFiles({ name: 'recovery-proof.bin', mimeType: 'application/octet-stream', buffer: fixture });
+  await (await chooser).setFiles([{ name: 'recovery-proof.bin', mimeType: 'application/octet-stream', buffer: fixture },
+    ...bulk.map((buffer, i) => ({ name: `ciphertext-${i}.bin`, mimeType: 'application/octet-stream', buffer }))]);
   await ownerPage.waitForFunction(() => document.querySelector('[aria-label="Attachments"]')?.querySelectorAll('[role="status"]').length === 0);
   await ownerPage.getByRole('button', { name: 'Send message' }).click();
   const link = ownerPage.getByRole('log').getByRole('link', { name: /recovery-proof\.bin/ });
@@ -226,41 +234,53 @@ try {
   await client.connect();
   const { rows: refs } = await client.query('select key,size from attachment order by key');
   await client.end();
-  assert.equal(refs.length, 1); assert.equal(refs[0].size, fixture.length);
-  assert.equal(hash(rclone('cat', `fixture:${sourceBucket}/${refs[0].key}`)), hash(fixture));
+  assert.equal(refs.length, 4);
+  assert.equal(refs.reduce((total, ref) => total + ref.size, 0), attachmentBytes);
+  const proof = refs.find((ref) => ref.size === fixture.length);
+  assert.equal(hash(rclone('cat', `fixture:${sourceBucket}/${proof.key}`)), hash(fixture));
+  const sourceHashes = Object.fromEntries(refs.map(({ key }) => [key, hash(rclone('cat', `fixture:${sourceBucket}/${key}`))]));
   phase = 'operational-backup';
+  restic('init');
   backup();
   const lastSuccess = readFileSync('/var/backups/opendiscord/last-success');
-  const archiveKey = lastSuccess.toString().trim().split(' ')[1];
-  assert.match(archiveKey, /^daily\/[0-9TZ:-]+\.tar\.gz\.age$/);
-  phase = 'archive-validation';
-  const encrypted = rclone('cat', `fixture:${backupBucket}/${archiveKey}`);
-  assert.equal(hash(encrypted), lastSuccess.toString().trim().split(' ')[3]);
-  const damaged = Buffer.from(encrypted); damaged[damaged.length - 1] ^= 1;
-  assert.throws(() => run('age', ['-d', '-i', identity], { input: damaged }));
-  const decrypted = run('age', ['-d', '-i', identity], { input: encrypted });
-  const members = run('tar', ['-tzf', '-'], { input: decrypted }).toString().trim().split('\n');
-  const expected = ['database.dump', 'manifest.txt', 'media/', `media/${refs[0].key}`, 'media/attachments/', 'config/', 'config/app.env', 'config/app-compose.yml', 'config/voice.env', 'config/voice-compose.yml', 'config/voice-maintenance/', 'config/traefik.yml', 'config/traefik-turn.yml', 'config/firewall.nft'];
-  assert.deepEqual([...members].sort(), expected.sort());
+  const [, snapshotRef, firstBytes, dumpHash] = lastSuccess.toString().trim().split(' ');
+  assert.match(snapshotRef, /^restic:[0-9a-f]{8}$/);
+  const snapshotId = snapshotRef.slice('restic:'.length);
+  // Random media does not compress: the repository really holds the incompressible bytes.
+  assert(Number(firstBytes) >= attachmentBytes, 'Repository is smaller than the incompressible media');
+  phase = 'incremental-backup';
+  backup();
+  const secondBytes = repositoryBytes();
+  // Unchanged media is deduplicated: a second daily snapshot adds at most a little metadata and dump.
+  assert(secondBytes - Number(firstBytes) < 2 * 1024 * 1024, 'Unchanged media was stored again');
+  assert.equal(snapshots().length, 2);
+  phase = 'snapshot-validation';
   const extracted = join(work, 'extracted'); mkdirSync(extracted, { mode: 0o700 });
-  run('tar', ['-xzf', '-', '-C', extracted], { input: decrypted });
-  assert.equal(readFileSync(join(extracted, 'manifest.txt'), 'utf8'), 'format=opendiscord-recovery-v1\nattachment_references=1\ndm_ciphertext_bytes=0\n');
+  restic('restore', snapshotId, '--target', extracted);
+  const staged = join(extracted, 'dev/shm/opendiscord-backup');
+  const mirrored = join(extracted, 'var/lib/opendiscord-backup/media');
+  assert.equal(hash(readFileSync(join(staged, 'database.dump'))), dumpHash);
+  assert.equal(readFileSync(join(staged, 'manifest.txt'), 'utf8'), 'format=opendiscord-recovery-v2\nattachment_references=4\ndm_ciphertext_bytes=0\n');
+  for (const name of ['app.env', 'app-compose.yml', 'voice.env', 'voice-compose.yml', 'traefik.yml', 'traefik-turn.yml', 'firewall.nft']) {
+    assert(existsSync(join(staged, 'config', name)), `Recovery configuration ${name} missing`);
+  }
+  assert.deepEqual(readFileSync(join(staged, 'config/app.env')), readFileSync(envFile));
+  for (const { key } of refs) assert.equal(hash(readFileSync(join(mirrored, key))), sourceHashes[key]);
   // Every budget is recorded for the operator monitor's early capacity warning.
   const { metrics } = JSON.parse(readFileSync('/var/backups/opendiscord/capacity.json', 'utf8'));
-  assert.deepEqual(Object.keys(metrics).sort(), ['database', 'dm_ciphertext', 'encrypted_total', 'media', 'retention_projection']);
-  assert.equal(metrics.media.bytes, fixture.length); assert.equal(metrics.dm_ciphertext.bytes, 0);
-  assert.equal(metrics.retention_projection.bytes, 31 * encrypted.length);
-  assert.deepEqual(readFileSync(join(extracted, 'config/app.env')), readFileSync(envFile));
-  assert.equal(hash(readFileSync(join(extracted, 'media', refs[0].key))), hash(fixture));
+  assert.deepEqual(Object.keys(metrics).sort(), ['database', 'dm_ciphertext', 'media', 'repository']);
+  assert.equal(metrics.media.bytes, attachmentBytes); assert.equal(metrics.dm_ciphertext.bytes, 0);
+  assert.equal(metrics.repository.bytes, secondBytes);
   phase = 'restoration';
-  restore(targetDB, readFileSync(join(extracted, 'database.dump')));
+  restore(targetDB, readFileSync(join(staged, 'database.dump')));
   assert.deepEqual(await snapshot(5433), sourceSnapshot);
-  rclone('copy', join(extracted, 'media'), `fixture:${targetBucket}`, '--quiet');
-  assert.equal(hash(rclone('cat', `fixture:${targetBucket}/${refs[0].key}`)), hash(fixture));
-  // Missing referenced bytes must fail before encryption/upload and must preserve last-success.
+  rclone('copy', mirrored, `fixture:${targetBucket}`, '--quiet');
+  for (const { key } of refs) assert.equal(hash(rclone('cat', `fixture:${targetBucket}/${key}`)), sourceHashes[key]);
+  // Missing referenced bytes must fail before the snapshot and must preserve last-success.
   phase = 'missing-reference';
-  const beforeObjects = objects();
-  rclone('deletefile', `fixture:${sourceBucket}/${refs[0].key}`);
+  const beforeSnapshots = snapshots();
+  const beforeLastSuccess = readFileSync('/var/backups/opendiscord/last-success');
+  rclone('deletefile', `fixture:${sourceBucket}/${proof.key}`);
   let failure;
   try { backup(); } catch (error) { failure = error; }
   phase = 'missing-reference-exit';
@@ -271,11 +291,22 @@ try {
   console.log(`Negative backup rejection category: ${rejection}; status: ${Number.isInteger(failure.status) ? failure.status : 'unknown'}`);
   assert(failure.stderr.toString().includes('Referenced attachment missing from backup'));
   phase = 'missing-reference-last-success';
-  assert.deepEqual(readFileSync('/var/backups/opendiscord/last-success'), lastSuccess);
-  phase = 'missing-reference-remote-objects';
-  assert.deepEqual(objects(), beforeObjects);
-  phase = 'missing-reference-remote-bytes';
-  assert.equal(hash(rclone('cat', `fixture:${backupBucket}/${archiveKey}`)), hash(encrypted));
+  assert.deepEqual(readFileSync('/var/backups/opendiscord/last-success'), beforeLastSuccess);
+  phase = 'missing-reference-snapshots';
+  assert.deepEqual(snapshots(), beforeSnapshots);
+  // Tampered ciphertext must be detected by the integrity check, then the original bytes are put back.
+  phase = 'tamper-detection';
+  const pack = JSON.parse(rclone('lsjson', `fixture:${backupBucket}/restic/data`, '--recursive', '--files-only').toString())
+    .sort((a, b) => b.Size - a.Size)[0];
+  const packPath = `fixture:${backupBucket}/restic/data/${pack.Path}`;
+  const original = rclone('cat', packPath);
+  const damaged = Buffer.from(original); damaged[Math.floor(damaged.length / 2)] ^= 1;
+  const damagedFile = join(work, 'damaged-pack'); writeFileSync(damagedFile, damaged, { mode: 0o600 });
+  rclone('copyto', damagedFile, packPath, '--quiet');
+  assert.throws(() => restic('check', '--read-data'));
+  writeFileSync(damagedFile, original, { mode: 0o600 });
+  rclone('copyto', damagedFile, packPath, '--quiet');
+  restic('check', '--read-data');
   phase = 'restored-browser';
   const targetEnv = join(work, 'target.env');
   writeFileSync(targetEnv, webEnv(5433, targetBucket), { mode: 0o600 });
@@ -287,6 +318,19 @@ try {
   const download = await recovered.request.get(attachmentURL);
   assert.equal(download.status(), 200);
   assert.equal(hash(await download.body()), hash(fixture));
+  // The large incompressible files are readable through the restored app, too.
+  const bulkURLs = await (async () => {
+    await recovered.goto('/app');
+    await recovered.getByRole('link', { name: 'Private Recovery Fixture' }).first().click();
+    return recovered.getByRole('log').getByRole('link', { name: /ciphertext-\d\.bin/ }).evaluateAll((links) => links.map((a) => a.getAttribute('href')));
+  })();
+  assert.equal(bulkURLs.length, 3);
+  const bulkHashes = new Set(bulk.map(hash));
+  for (const url of bulkURLs) {
+    const response = await recovered.request.get(url);
+    assert.equal(response.status(), 200);
+    assert(bulkHashes.delete(hash(await response.body())), 'Restored large attachment differs');
+  }
   assert.match(download.headers()['content-disposition'], /^attachment;/);
   assert.match(download.headers()['cache-control'], /^private/);
   const denied = await newPage(targetBase);
@@ -294,13 +338,14 @@ try {
   assert.equal((await denied.request.get(attachmentURL)).status(), 404);
   const anonymous = await newPage(targetBase);
   assert.equal((await anonymous.request.get(attachmentURL)).status(), 401);
-  assert.equal((await fetch(`${s3}/${targetBucket}/${refs[0].key}`)).status, 403);
+  assert.equal((await fetch(`${s3}/${targetBucket}/${proof.key}`)).status, 403);
   report = { format: 'opendiscord-recovery-v1', fixtureOnly: true, productionDataRestore: false,
-    sourceFrozen: true, attachmentReferences: refs.length, attachmentBytes: fixture.length,
-    fixtureSha256: hash(fixture), tablesCompared: sourceSnapshot.length, encryptedArchiveSha256: hash(encrypted),
-    exactOperationalScript: true, separateDatabaseAndBucket: true, memberDownload: 200, outsiderDownload: 404,
-    anonymousDownload: 401, anonymousObject: 403, corruptedAgeRejected: true, missingReferenceRejected: true,
-    failurePreservedRemoteArchiveAndLastSuccess: true, s3Image };
+    sourceFrozen: true, attachmentReferences: refs.length, attachmentBytes, incompressibleBytes: attachmentBytes - fixture.length,
+    fixtureSha256: hash(fixture), tablesCompared: sourceSnapshot.length, resticSnapshot: snapshotId,
+    repositoryBytesAfterFirst: Number(firstBytes), repositoryBytesAfterUnchangedSecond: secondBytes,
+    exactOperationalScript: true, separateDatabaseAndBucket: true, memberDownload: 200, largeDownloadsVerified: 3, outsiderDownload: 404,
+    anonymousDownload: 401, anonymousObject: 403, tamperedPackRejected: true, missingReferenceRejected: true,
+    failurePreservedSnapshotsAndLastSuccess: true, s3Image };
 } catch (error) {
   failed = true;
   // Child errors can include env arguments, response bodies or config. Never print them.
@@ -331,6 +376,10 @@ try {
         if (existsSync(file)) rmSync(file);
       }
     }
+    // The mirror and restic cache are generated only by our backup invocations.
+    if (path === '/var/lib/opendiscord-backup' || path === '/var/cache/opendiscord-restic') {
+      for (const name of readdirSync(path)) if (name !== '.recovery-owner') rmSync(join(path, name), { recursive: true, force: true });
+    }
     // Only unlink our now-empty, preflight-absent directory; foreign contents fail closed.
     run('sudo', ['rmdir', '--', path]);
   });
@@ -340,4 +389,4 @@ if (failed || cleanupFailed) throw new Error('Media recovery acceptance or owned
 assert(report);
 report.cleanupCompleted = true;
 writeFileSync('media-recovery-summary.json', JSON.stringify(report, null, 2) + '\n');
-console.log('Exact operational media archive restored; private bytes, table digests, authorization and failure rejection verified; owned resources removed.');
+console.log('Exact operational restic snapshots restored; incremental dedup, incompressible bytes, table digests, authorization, tamper and failure rejection verified; owned resources removed.');

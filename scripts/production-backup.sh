@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-# Operator job: database + attachments + recovery configuration, encrypted before leaving RAM.
+# Operator job: database + attachments + recovery configuration into an encrypted, incremental
+# restic repository off host. Unchanged media is neither re-downloaded nor re-uploaded.
 set -euo pipefail
 umask 077
 config=/etc/opendiscord-backup/rclone.conf
-recipient=/etc/opendiscord-backup/age-recipient
+password=/etc/opendiscord-backup/restic-password
 state=/var/backups/opendiscord
-remote=opendiscord-backup:opendiscord-backups-private
+# Plaintext media mirror on the root disk (root-only, like the database volume beside it).
+mirror=/var/lib/opendiscord-backup/media
+export RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
+export RESTIC_PASSWORD_FILE=$password RCLONE_CONFIG=$config RESTIC_CACHE_DIR=/var/cache/opendiscord-restic
 : "${OPENDISCORD_DB_CONTAINER:?Set the deployed database container}"
 : "${OPENDISCORD_WEB_CONTAINER:?Set the deployed web container}"
 : "${OPENDISCORD_COMPOSE_DIR:?Set the deployed app checkout}"
 : "${OPENDISCORD_VOICE_COMPOSE_DIR:?Set the deployed voice checkout}"
 exec 9>"$state/backup.lock"
 flock -n 9 || exit 1
-test -s "$config" && test -s "$recipient"
-work=$(mktemp -d /dev/shm/opendiscord-backup.XXXXXXXX)
+test -s "$config" && test -s "$password"
+restic cat config > /dev/null
+# A fixed staging path keeps snapshot paths stable, so restic finds its parent snapshot.
+work=/dev/shm/opendiscord-backup
+rm -rf "$work"
+mkdir -m 700 "$work" "$work/config"
+mkdir -p -m 700 "$mirror"
 trap 'rm -rf "$work"' EXIT
-key="daily/$(date -u +%Y-%m-%dT%H-%M-%SZ).tar.gz.age"
-mkdir "$work/media" "$work/config"
 # Every budget measurement is recorded for the operator monitor (80% warning) before it fails closed.
 capacity() { python3 "$(dirname "$0")/backup-capacity.py" "$state/capacity.json" "$@"; }
 capacity reset
@@ -45,10 +52,12 @@ PY
 source=$(cat "$work/media-source")
 rclone --config "$work/media-rclone.conf" size "$source" --json > "$work/media-size.json"
 capacity media "$(python3 -c 'import json,sys;print(int(json.load(open(sys.argv[1]))["bytes"]))' "$work/media-size.json")"
-rclone --config "$work/media-rclone.conf" copy "$source" "$work/media" --quiet
-python3 - "$work" <<'PY'
+# Incremental: only new/changed objects are fetched; deletions remain in older snapshots.
+rclone --config "$work/media-rclone.conf" sync "$source" "$mirror" --quiet
+rm "$work/media-rclone.conf"
+python3 - "$work" "$mirror" <<'PY'
 import pathlib,re,sys
-p=pathlib.Path(sys.argv[1]);data=False;index=None;checked=0;dm_bytes=0
+p=pathlib.Path(sys.argv[1]);mirror=pathlib.Path(sys.argv[2]);data=False;index=None;checked=0;dm_bytes=0
 for line in (p/'attachments.sql').read_text().splitlines():
  if line.startswith('COPY ') and 'attachment ' in line:
   columns=line.split('(',1)[1].split(')',1)[0].split(', ');index=columns.index('key');size_index=columns.index('size');dm_index=columns.index('dm_message_id');data=True;continue
@@ -57,13 +66,13 @@ for line in (p/'attachments.sql').read_text().splitlines():
  fields=line.split('\t');key=fields[index]
  # App-generated storage keys use only this alphabet; do not interpret arbitrary COPY escapes.
  if not re.fullmatch(r'[A-Za-z0-9_./-]+',key):raise SystemExit('Invalid attachment key in archive')
- target=(p/'media'/key).resolve()
- if not target.is_relative_to((p/'media').resolve()) or not target.is_file():raise SystemExit('Referenced attachment missing from backup')
+ target=(mirror/key).resolve()
+ if not target.is_relative_to(mirror.resolve()) or not target.is_file():raise SystemExit('Referenced attachment missing from backup')
  checked+=1
  if fields[dm_index]!='\\N':
   if not fields[size_index].isdigit():raise SystemExit('Invalid attachment size in archive')
   dm_bytes+=int(fields[size_index])
-(p/'manifest.txt').write_text('format=opendiscord-recovery-v1\nattachment_references='+str(checked)+'\ndm_ciphertext_bytes='+str(dm_bytes)+'\n')
+(p/'manifest.txt').write_text('format=opendiscord-recovery-v2\nattachment_references='+str(checked)+'\ndm_ciphertext_bytes='+str(dm_bytes)+'\n')
 (p/'dm-bytes').write_text(str(dm_bytes))
 PY
 capacity dm_ciphertext "$(cat "$work/dm-bytes")"
@@ -98,17 +107,18 @@ done
 if test -f "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml"; then
   cp "$OPENDISCORD_COMPOSE_DIR/ops/voice-maintenance/compose.yml" "$work/config/voice-maintenance/compose.yml"
 fi
-# Stream tar directly to age: there is no unencrypted archive on persistent disk.
-tar -C "$work" -czf - database.dump media config manifest.txt | age -R "$recipient" -o "$work/recovery.tar.gz.age"
-bytes=$(stat -c %s "$work/recovery.tar.gz.age")
-rclone --config "$config" size "$remote" --json > "$work/backup-size.json"
-capacity retention_projection "$bytes"
-capacity encrypted_total "$(python3 -c 'import json,sys;print(int(json.load(open(sys.argv[1]))["bytes"])+int(sys.argv[2]))' "$work/backup-size.json" "$bytes")"
-rclone --config "$config" copyto --immutable "$work/recovery.tar.gz.age" "$remote/$key" --quiet
-# Read back the complete encrypted bytes and compare, not just an object listing or ETag.
-rclone --config "$config" cat "$remote/$key" | sha256sum > "$work/remote-sha256"
-local_hash=$(sha256sum "$work/recovery.tar.gz.age" | cut -d' ' -f1)
-remote_hash=$(cut -d' ' -f1 "$work/remote-sha256")
-test "$local_hash" = "$remote_hash"
-printf '%s\n' "$(date -u +%FT%TZ) $key $bytes $local_hash" > "$state/last-success"
-printf 'Encrypted off-host backup verified: %s (%s bytes)\n' "$key" "$bytes"
+# Stage the same media path into every snapshot; restic deduplicates and encrypts client-side.
+restic backup --host opendiscord --tag daily --compression max --json \
+  "$work/database.dump" "$work/manifest.txt" "$work/config" "$mirror" > "$work/backup.json"
+snapshot=$(python3 -c 'import json,sys;print([m for m in map(json.loads,open(sys.argv[1])) if m.get("message_type")=="summary"][0]["snapshot_id"][:8])' "$work/backup.json")
+# Read back the database dump and the manifest from the new snapshot, not just a listing.
+dump_hash=$(sha256sum "$work/database.dump" | cut -d' ' -f1)
+test "$(restic dump "$snapshot" "$work/database.dump" | sha256sum | cut -d' ' -f1)" = "$dump_hash"
+cmp <(restic dump "$snapshot" "$work/manifest.txt") "$work/manifest.txt"
+restic forget --host opendiscord --tag daily --keep-daily 30 --prune --quiet
+# Rotating 1/30 of pack data each day reads the whole repository about once a month.
+restic check --read-data-subset="$(( $(date -u +%-j) % 30 + 1 ))/30" --quiet
+bytes=$(restic stats --mode raw-data --json | python3 -c 'import json,sys;print(int(json.load(sys.stdin)["total_size"]))')
+capacity repository "$bytes"
+printf '%s\n' "$(date -u +%FT%TZ) restic:$snapshot $bytes $dump_hash" > "$state/last-success"
+printf 'Encrypted off-host restic snapshot verified: %s (repository %s bytes)\n' "$snapshot" "$bytes"
