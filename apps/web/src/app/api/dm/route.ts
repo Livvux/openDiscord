@@ -24,8 +24,9 @@ export async function POST(request: Request) {
   try {
     assertDmOrigin(request);
     const user = await requireUser(request.headers);
-    await consume(`dm-mutation:${user.id}`, 60, 60_000);
     const body = parse(dmActionSchema, await readJsonBody(request, 32_000));
+    // Typing has its own bounded allowance; it must not spend the person's message/action budget.
+    if (body.action !== "typing") await consume(`dm-mutation:${user.id}`, 60, 60_000);
     let result: unknown = {};
     switch (body.action) {
       case "register": await registerDmDevice(user.id, user.sessionId, body.input); break;

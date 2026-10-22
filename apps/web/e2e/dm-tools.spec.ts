@@ -34,6 +34,24 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     await expect(bLog.getByText(original, { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(bob.getByText("Tools Alice is typing…", { exact: true })).toHaveCount(0, { timeout: 10_000 });
 
+    // Cross the server's 50-event boundary, then reopen from a clean timeline. Search must load
+    // earlier encrypted pages instead of reporting a false zero-result on only the latest page.
+    for (let index = 0; index < 51; index++) {
+      await alice.waitForTimeout(1100);
+      const filler = `Encrypted history filler ${index}`;
+      await composer.fill(filler);
+      await composer.press("Enter");
+      await expect(aLog.getByText(filler, { exact: true })).toBeVisible({ timeout: 30_000 });
+    }
+    await bob.reload();
+    await bob.getByRole("button", { name: "Search this conversation", exact: true }).click();
+    await bob.getByLabel("Search private messages").fill("Original encrypted tools");
+    await expect(bLog.getByText(original, { exact: true })).toHaveCount(0);
+    await bob.getByRole("button", { name: "Search entire history", exact: true }).click();
+    await expect(bLog.getByText(original, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(bob.getByText(/Entire available history searched\./)).toBeVisible();
+    await bob.getByRole("button", { name: "Search this conversation", exact: true }).click();
+
     const firstA = aLog.locator("li").filter({ has: alice.getByText(original, { exact: true }) });
     const firstB = bLog.locator("li").filter({ has: bob.getByText(original, { exact: true }) });
     await expect(firstB.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
@@ -61,10 +79,13 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
     await expect(bLog.getByText("Message deleted", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(bLog.getByText("Corrected encrypted tools message 87342", { exact: true })).toHaveCount(0);
     await bob.reload();
+    await bob.getByRole("button", { name: "Load earlier encrypted messages", exact: true }).click();
     await expect(bob.getByRole("log").getByText("Message deleted", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(bob.getByRole("log").getByRole("link", { name: "Reply: Deleted message" })).toBeVisible();
     const timeline = await bob.request.get(`/api/dm?conversation=${conversationId}`).then((r) => r.json());
-    expect(timeline.messages.find((m: { kind: string }) => m.kind === "message").content).toEqual({});
+    const deletion = timeline.messages.find((m: { kind: string }) => m.kind === "delete");
+    const targetPage = await bob.request.get(`/api/dm?conversation=${conversationId}&before=${timeline.messages[0].id}`).then((r) => r.json());
+    expect(targetPage.messages.find((m: { id: string }) => m.id === deletion.targetId).content).toEqual({});
     expect(wire.join("\n")).not.toContain(original);
     expect(wire.join("\n")).not.toContain("Corrected encrypted");
     expect(wire.join("\n")).not.toContain("Private reply 91823");
