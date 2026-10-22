@@ -324,7 +324,9 @@ try {
   const bulkURLs = await (async () => {
     await recovered.goto('/app');
     await recovered.getByRole('link', { name: 'Private Recovery Fixture' }).first().click();
-    return recovered.getByRole('log').getByRole('link', { name: /ciphertext-\d\.bin/ }).evaluateAll((links) => links.map((a) => a.getAttribute('href')));
+    const links = recovered.getByRole('log').getByRole('link', { name: /ciphertext-\d\.bin/ });
+    await links.first().waitFor();
+    return links.evaluateAll((elements) => elements.map((element) => element.getAttribute('href')));
   })();
   assert.equal(bulkURLs.length, 3);
   const bulkHashes = new Set(bulk.map(hash));
