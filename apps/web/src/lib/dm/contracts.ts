@@ -34,13 +34,22 @@ export const dmAttachmentSchema = z.object({
   size: z.number().int().nonnegative().max(DM_MAX_ATTACHMENT_BYTES),
 }).strict();
 export type DmAttachment = z.infer<typeof dmAttachmentSchema>;
+export const dmOperationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("edit"), target: z.uuid() }).strict(),
+  z.object({ kind: z.literal("delete"), target: z.uuid() }).strict(),
+  z.object({ kind: z.literal("reaction"), target: z.uuid(), emoji: z.enum(["👍", "❤️", "😂", "🎉", "😮", "😢"]), active: z.boolean() }).strict(),
+]);
+export type DmOperation = z.infer<typeof dmOperationSchema>;
 export const plainMessageSchema = z.object({
   msgtype: z.literal("m.text"),
   body: z.string().trim().max(DM_MAX_TEXT),
   conversation: z.uuid(),
   transaction: z.uuid(),
   attachments: z.array(dmAttachmentSchema).min(1).max(DM_MAX_ATTACHMENTS).optional(),
-}).strict().refine((message) => message.body.length > 0 || !!message.attachments, "A message needs text or an attachment.");
+  replyTo: z.uuid().optional(),
+  operation: dmOperationSchema.optional(),
+}).strict().refine((message) => message.body.length > 0 || !!message.attachments || (!!message.operation && message.operation.kind !== "edit"), "A message needs text or an attachment.")
+  .refine((message) => !message.operation || (!message.attachments && !message.replyTo), "An update cannot attach files or reply.");
 export type PlainDirectMessage = z.infer<typeof plainMessageSchema>;
 export type DmDeviceAuth = { userId: string; sessionId: string; deviceId: string; secret: string };
 // Matches the eight-device E2EE call bound (VOICE_LIMITS.members) so every member can join a call.
@@ -63,7 +72,7 @@ export type DirectConversation = {
 /** Shown in the DM list: declined requests and people you blocked are hidden. */
 export const visibleConversation = (c: DirectConversation) => c.status !== "rejected" && !c.ownBlocked;
 export const unreadTotal = (list: DirectConversation[]) => list.filter(visibleConversation).reduce((sum, c) => sum + (c.blocked ? 0 : c.unread), 0);
-export type DirectEnvelope = { id: string; conversationId: string; senderId: string; deviceId: string; transactionId: string; content: Record<string, unknown>; createdAt: string };
+export type DirectEnvelope = { id: string; conversationId: string; senderId: string; deviceId: string; transactionId: string; content: Record<string, unknown>; createdAt: string; kind?: "message" | "edit" | "reaction" | "delete"; targetId?: string | null; deletedAt?: string | null };
 export type DeviceView = { id: string; userId: string; name: string; revoked: boolean; createdAt: string };
 export type CryptoSync = { cursor: string; events: Record<string, unknown>[]; oneTimeKeys: Record<string, number>; unusedFallbackKeys: string[] };
 export type RecoveryFile = { format: "opendiscord.e2ee-recovery"; version: 2; origin: string; userId: string; backupId: string; encryptionInfo: string };

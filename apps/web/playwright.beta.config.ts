@@ -3,7 +3,7 @@ import base from "./playwright.config";
 
 // A bounded release gate in addition to the full Chromium desktop/mobile suite.
 // No CDP-only proofs, physical-device claims or substituted browser engines.
-const journeys = /(?:health|auth|registration-policy|friends-home|community|private-channels|message-features|threads|search|direct-messages|dm-groups|dm-attachments|dm-mobile-header|runtime-errors|csp)\.spec\.ts$/;
+const journeys = /(?:health|auth|registration-policy|friends-home|community|private-channels|message-features|threads|search|direct-messages|dm-groups|dm-attachments|dm-tools|dm-mobile-header|runtime-errors|csp)\.spec\.ts$/;
 
 export default defineConfig({
   ...base,

@@ -19,7 +19,8 @@ const eventSchema = z.discriminatedUnion("type", [
   // Personal events go to the person's own stream (`userTopic`), not to the community.
   z.object({ type: z.literal("mention.created"), userId: z.string(), communityId: z.string(), channelId: z.string(), messageId: z.string() }),
   // Metadata only: a conversation of this person changed (new message, request, read marker). No content.
-  z.object({ type: z.literal("dm.changed"), userId: z.string(), conversationId: z.string(), reason: z.enum(["message", "request", "read"]), senderId: z.string().optional() }),
+  z.object({ type: z.literal("dm.changed"), userId: z.string(), conversationId: z.string(), reason: z.enum(["message", "request", "read", "update"]), senderId: z.string().optional() }),
+  z.object({ type: z.literal("dm.typing"), userId: z.string(), conversationId: z.string(), senderId: z.string(), typing: z.boolean(), expiresAt: z.number() }),
   z.object({ type: z.literal("friends.changed"), userId: z.string() }),
   // A conversation's encrypted call started ringing (with the caller) or ended; "cleared" tells the person's other sessions
   // they answered or declined it, "declined" tells people in the call who declined (in `callerId`). Who and which conversation only.
@@ -33,7 +34,7 @@ export type HubEvent = RealtimeEvent | { type: "resync"; communityId: string };
 /** Topic of a person's own stream; community streams use the community id. */
 export const userTopic = (userId: string) => `user:${userId}`;
 const topicOf = (event: RealtimeEvent) =>
-  event.type === "mention.created" || event.type === "dm.changed" || event.type === "dm.call" || event.type === "friends.changed" ? userTopic(event.userId) : event.communityId;
+  event.type === "mention.created" || event.type === "dm.changed" || event.type === "dm.typing" || event.type === "dm.call" || event.type === "friends.changed" ? userTopic(event.userId) : event.communityId;
 type Listener = (event: HubEvent) => void;
 
 export async function publish(event: RealtimeEvent, handle: Pick<typeof db, "execute"> = db): Promise<void> {

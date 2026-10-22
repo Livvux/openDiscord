@@ -23,6 +23,9 @@ import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_TEXT, type DeviceVi
 import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
 import { iosBrowserTab, persistDmStorage, storageHint } from "@/lib/dm/storage-persistence";
 import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, type TrustedDevice, type VerificationView } from "@/lib/dm/client";
+import { searchDmTimeline } from "@/lib/dm/timeline";
+import type { DmOperation } from "@/lib/dm/contracts";
+import { useDmTyping } from "./use-dm-typing";
 
 const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring";
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Private messaging could not complete this action.";
@@ -57,9 +60,15 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const [trusted, setTrusted] = useState<TrustedDevice[]>([]);
   const [verifications, setVerifications] = useState<VerificationView[]>([]);
   const [messages, setMessages] = useState<MessageView[]>([]);
-  const [envelopes, setEnvelopes] = useState<DirectEnvelope[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [text, setText] = useState("");
+  const [replyTo, setReplyTo] = useState<MessageView | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchComplete, setSearchComplete] = useState(false);
+  const scan = useRef(0);
+  const scanning = useRef(false);
   const [files, setFiles] = useState<File[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const openAttachment = useCallback((file: Parameters<PrivateMessaging["openAttachment"]>[0]) => client ? client.openAttachment(file) : Promise.reject(new Error("Encryption is unavailable.")), [client]);
@@ -89,6 +98,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const [reportReason, setReportReason] = useState("");
   const [reportDisclose, setReportDisclose] = useState(false);
   const active = conversations.find((c) => c.id === selected);
+  const typing = useDmTyping(active?.id ?? null, !!client && active?.status === "accepted" && !active.blocked && !unverifiedBrowser);
   const loading = useRef(false);
   const autoStarted = useRef(false);
   const refocus = useRef(false);
@@ -97,7 +107,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const selectedRef = useRef(selected);
   const history = useRef<DirectEnvelope[]>([]);
   const markedRead = useRef<string | null>(null);
-  useEffect(() => { selectedRef.current = selected; history.current = []; }, [selected]);
+  useEffect(() => {
+    selectedRef.current = selected; history.current = []; scan.current++; scanning.current = false;
+    const timer = setTimeout(() => { setMessages([]); setReplyTo(null); setSearchOpen(false); setSearchQuery(""); setSearching(false); setSearchComplete(false); setHasMore(false); setText(""); setFiles([]); }, 0);
+    const cancelScan = () => { scan.current++; };
+    return () => { clearTimeout(timer); cancelScan(); };
+  }, [selected]);
   const ready = !!client;
 
   useEffect(() => {
@@ -111,8 +126,23 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   }, [userId]);
   useEffect(() => () => { if (recoveryDownload) URL.revokeObjectURL(recoveryDownload); }, [recoveryDownload]);
 
+  const commitTimeline = useCallback(async (incoming: DirectEnvelope[], current: DirectConversation) => {
+    if (!client) return;
+    // Pagination must work while a listing refresh is stalled. If another decrypt publishes in the
+    // meantime, merge again rather than replacing its older pages with our captured snapshot.
+    while (selectedRef.current === current.id) {
+      const previous = history.current;
+      const all = [...new Map([...previous, ...incoming].map((message) => [message.id, message])).values()].sort((a, b) => a.id.localeCompare(b.id));
+      const decoded = await client.decrypt(all, current.id, sendersOf(current));
+      if (selectedRef.current !== current.id) return;
+      if (previous !== history.current) continue;
+      history.current = all; setMessages(decoded);
+      return all;
+    }
+  }, [client]);
+
   const refresh = useCallback(async () => {
-    if (!client || loading.current) return;
+    if (!client || loading.current || scanning.current) return;
     loading.current = true;
     const selection = selectedRef.current;
     try {
@@ -142,11 +172,20 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       setVerifications(client.verifications().filter((v) => v.userId === userId || people.includes(v.userId)));
       setArchives(await client.archives()); setPendingIdentity(client.hasPendingIdentity()); setTransfers(await client.pendingTransfers());
       if (current && selection === selectedRef.current) {
-        const timeline = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${current.id}`);
-        const all = [...new Map([...history.current, ...timeline.messages].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
-        const decoded = await client.decrypt(all, current.id, sendersOf(current));
-        if (selection === selectedRef.current) {
-          history.current = all; setMessages(decoded); setEnvelopes(all); if (all.length <= 50) setHasMore(timeline.hasMore);
+        const wasEmpty = history.current.length === 0;
+        let after = history.current.at(-1)?.id;
+        let timeline: { messages: DirectEnvelope[]; hasMore: boolean };
+        const incoming: DirectEnvelope[] = [];
+        // Catch up in ascending pages so a burst of more than 50 events never loses edits or deletes.
+        for (let page = 0; page < 10; page++) {
+          timeline = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${current.id}${after ? `&after=${after}` : ""}`);
+          incoming.push(...timeline.messages);
+          if (!after || !timeline.hasMore || !timeline.messages.length) break;
+          after = timeline.messages.at(-1)!.id;
+        }
+        const all = await commitTimeline(incoming, current);
+        if (all && selection === selectedRef.current) {
+          if (wasEmpty) setHasMore(timeline!.hasMore);
           // Seen only when it is on screen, and not by an unverified browser that gets no keys: it must not
           // clear the unread marker for the person's trusted devices. The server keeps the marker monotonic.
           const latest = all.at(-1);
@@ -159,7 +198,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       setStatus("Encrypted messaging ready.");
     } catch (e) { setError(errorText(e)); setStatus("Connection or verification needs attention."); }
     finally { loading.current = false; }
-  }, [client, userId, target, targetIsFriend, conversation]);
+  }, [client, userId, target, targetIsFriend, conversation, commitTimeline]);
   useEffect(() => {
     const initial = window.setTimeout(() => { void refresh(); }, 0);
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3000);
@@ -174,7 +213,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
     return () => { window.clearTimeout(initial); window.clearInterval(timer); window.removeEventListener(DM_CHANGED_EVENT, changed); document.removeEventListener("visibilitychange", shown); };
   }, [refresh, selected]);
 
-  async function run(fn: () => Promise<void>) {
+  async function run(fn: () => Promise<unknown>) {
     setBusy(true); setError(null);
     try { await fn(); await refresh(); } catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
@@ -184,19 +223,30 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
     setText(""); selectedRef.current = response.id; setSelected(response.id); setVerifications([]); setTrusted([]);
   }
   async function backups() { const data = await dmFetch<{ backups: typeof backupList }>("/api/dm/backups"); setBackupList(data.backups); }
-  async function loadEarlier() {
-    if (!client || !active || !envelopes.length) return;
-    const data = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${active.id}&before=${envelopes[0].id}`);
+  async function loadEarlier(): Promise<boolean> {
+    if (!client || !active || !history.current.length) return false;
+    const data = await dmFetch<{ messages: DirectEnvelope[]; hasMore: boolean }>(`/api/dm?conversation=${active.id}&before=${history.current[0].id}`);
     // The polling refresh may be in flight or stalled; never decrypt against a stale peer identity.
     await client.sync(recipientsOf(active), formerOf(active));
-    const all = [...new Map([...data.messages, ...history.current].map((m) => [m.id, m])).values()].sort((a, b) => a.id.localeCompare(b.id));
-    const decoded = await client.decrypt(all, active.id, sendersOf(active));
-    if (selectedRef.current !== active.id) return;
-    history.current = all;
-    setMessages(decoded); setEnvelopes(all); setHasMore(data.hasMore);
+    if (!(await commitTimeline(data.messages, active))) return false;
+    setHasMore(data.hasMore);
+    return data.hasMore;
+  }
+  async function searchHistory() {
+    const token = ++scan.current;
+    scanning.current = true; setSearching(true); setError(null);
+    try {
+      let more = hasMore;
+      while (more && token === scan.current) {
+        more = await loadEarlier();
+        if (more) await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (token === scan.current) setSearchComplete(!more);
+    } catch (error) { setError(errorText(error)); }
+    finally { if (token === scan.current) { scanning.current = false; setSearching(false); void refresh(); } }
   }
   /** Group membership changes any time: send to the server's current members, never a stale list. */
-  async function sendNow(c: DirectConversation, body: string, attached: File[] = []) {
+  async function sendNow(c: DirectConversation, body: string, attached: File[] = [], extras: { replyTo?: string; operation?: DmOperation } = {}) {
     if (!client) return;
     let current = c;
     if (c.kind === "group") {
@@ -204,7 +254,13 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       if (!fresh) throw new Error("You are no longer in this group.");
       current = fresh;
     }
-    await client.send(c.id, recipientsOf(current), body, attached, c.kind === "group");
+    await client.send(c.id, recipientsOf(current), body, attached, c.kind === "group", extras);
+    typing.stop();
+  }
+  async function updateMessage(c: DirectConversation, operation: DmOperation, body = "") {
+    setBusy(true); setError(null);
+    try { await sendNow(c, body, [], { operation }); await refresh(); }
+    finally { setBusy(false); }
   }
   async function createGroup(members: string[], name: string) {
     const created = await dmFetch<{ id: string }>("/api/dm", { action: "group", members, name });
@@ -247,6 +303,14 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
       </header>
       <div className="border-b px-4 py-1.5"><p className="text-xs text-muted-foreground" role="status">{status}</p>{unverifiedBrowser && <p className="mt-1 text-sm" data-unverified-browser>This browser is a new device on your account. Until you verify it from your other signed-in device in Devices and recovery, it can’t send messages and others’ messages can’t be read here.</p>}{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
       {active && <DmCallPanel key={active.id} conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id && active.status === "accepted" && !active.blocked} />}
+      {active?.status === "accepted" && <div className="border-b px-4 py-2">
+        <Button type="button" size="sm" variant="ghost" aria-expanded={searchOpen} onClick={() => { setSearchOpen((open) => !open); if (searchOpen) { scan.current++; scanning.current = false; setSearching(false); setSearchQuery(""); } }}>Search this conversation</Button>
+        {searchOpen && <div className="grid gap-2 py-2"><label className="text-sm">Search private messages<input autoFocus type="search" className={field} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></label>
+          <p role="status" className="text-xs text-muted-foreground">{searchDmTimeline(messages, searchQuery).length} results in {messages.length} loaded messages. {searchComplete || !hasMore ? "Entire available history searched." : searching ? "Loading and searching earlier encrypted history…" : "Earlier history has not been searched yet."} Search stays in this browser.</p>
+          {hasMore && !searching && <Button type="button" size="sm" variant="outline" onClick={() => void searchHistory()}>Search entire history</Button>}
+          {searching && <Button type="button" size="sm" variant="outline" onClick={() => { scan.current++; scanning.current = false; setSearching(false); }}>Stop loading history</Button>}
+        </div>}
+      </div>}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {creatingGroup && <NewGroupForm friends={friends} busy={busy} onCancel={() => setCreatingGroup(false)} onCreate={(members, name) => void run(() => createGroup(members, name))} />}
         {active && group && groupSettings && <GroupSettings key={active.id} conversation={active} userId={userId} friends={friends} busy={busy}
@@ -287,11 +351,18 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           {hasMore && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void run(loadEarlier)}>Load earlier encrypted messages</Button>}
           {active.status === "accepted" && group && <div className="grid gap-2 px-4 pt-6 pb-2"><GroupAvatars members={active.members} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of the end-to-end encrypted group with {active.members.filter((m) => !m.left).map((m) => m.name).join(", ")}. People added later cannot read earlier messages; people who leave cannot read later ones.</p></div>}
           {active.status === "accepted" && !group && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="lg" status={null} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
-          <div role="log" aria-label={group ? `Group conversation ${active.peerName}` : `Private conversation with ${active.peerName}`}><ol className="grid py-2">{messages.map((m) => <PrivateMessageItem key={m.id} message={m} authorName={m.own ? userName : authorOf(m.senderId)?.name ?? "Former member"} authorAvatar={m.own ? userAvatar : authorOf(m.senderId)?.avatar ?? null} onError={setError} openAttachment={openAttachment} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
+          <div role="log" aria-label={group ? `Group conversation ${active.peerName}` : `Private conversation with ${active.peerName}`}><ol className="grid py-2">{(searchOpen ? searchDmTimeline(messages, searchQuery) : messages).map((m) => <PrivateMessageItem key={m.id} message={m} userId={userId} disabled={busy || active.blocked || unverifiedBrowser} reply={messages.find((message) => message.id === m.replyTo)}
+            onReply={() => { setReplyTo(m); textarea.current?.focus(); }}
+            onEdit={(body) => updateMessage(active, { kind: "edit", target: m.id }, body)}
+            onDelete={() => updateMessage(active, { kind: "delete", target: m.id })}
+            onReact={(emoji, enabled) => updateMessage(active, { kind: "reaction", target: m.id, emoji, active: enabled })}
+            authorName={m.own ? userName : authorOf(m.senderId)?.name ?? "Former member"} authorAvatar={m.own ? userAvatar : authorOf(m.senderId)?.avatar ?? null} onError={setError} openAttachment={openAttachment} onReport={() => { setReport(m); setReportReason(""); setReportDisclose(false); requestAnimationFrame(() => reportTextarea.current?.focus()); }} />)}</ol></div>
         </>}
         {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea ref={reportTextarea} autoFocus className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label>{!!report.body && <label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>}{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose && report.body ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
       </div>
-      {active?.status === "accepted" && !active.blocked && <form className="px-4 pb-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && (text.trim() || files.length)) void run(async () => { await sendNow(active, text, files); setText(""); setFiles([]); refocus.current = true; }); }}>
+      {active?.status === "accepted" && !active.blocked && <form className="px-4 pb-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && (text.trim() || files.length)) void run(async () => { await sendNow(active, text, files, replyTo ? { replyTo: replyTo.id } : {}); setReplyTo(null); setText(""); setFiles([]); refocus.current = true; }); }}>
+        <p role="status" className="min-h-5 text-xs text-muted-foreground">{typing.people.filter((id) => active.members.some((m) => m.id === id && !m.left && !m.blocked)).map((id) => authorOf(id)?.name).join(", ")}{typing.people.length ? " is typing…" : ""}</p>
+        {replyTo && <div className="flex items-center gap-2 border-l-2 px-2 py-1 text-xs"><span className="min-w-0 flex-1 truncate">Replying to {replyTo.own ? "yourself" : authorOf(replyTo.senderId)?.name}: {messages.find((m) => m.id === replyTo.id)?.deleted ? "Deleted message" : replyTo.body}</span><Button type="button" size="icon-xs" variant="ghost" aria-label="Cancel reply" onClick={() => setReplyTo(null)}><XIcon /></Button></div>}
         {files.length > 0 && <ul aria-label="Encrypted attachments" className="flex flex-wrap gap-2 pb-2">{files.map((file, index) => <li key={`${file.name}:${index}`} className="flex max-w-60 items-center gap-1 rounded-md bg-white/5 py-1 pr-1 pl-2 text-xs"><FileIcon aria-hidden className="size-4 shrink-0" /><span className="min-w-0 break-all">{shortFilename(file.name, 32)}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${file.name}`} disabled={busy} onClick={() => setFiles((list) => list.filter((_, i) => i !== index))}><XIcon /></Button></li>)}</ul>}
         <div className="flex items-end gap-1 rounded-lg bg-white/5 px-2 py-1.5">
           {attachmentsEnabled && <>
@@ -316,7 +387,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
               void run(() => sendNow(active, url));
             }} />
           <label className="sr-only" htmlFor="private-message">Encrypted message</label>
-          <textarea ref={textarea} id="private-message" rows={1} className="max-h-48 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-zinc-500" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => setText(e.target.value)}
+          <textarea ref={textarea} id="private-message" rows={1} className="max-h-48 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-zinc-500" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => { setText(e.target.value); typing.changed(!!e.target.value.trim()); }} onBlur={typing.stop}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
             disabled={!client || busy} placeholder={group ? `Message ${active.peerName}` : `Message @${active.peerName}`} />
           <Button type="submit" variant="ghost" size="icon" disabled={!client || busy || (!text.trim() && !files.length)}><SendHorizontalIcon aria-hidden /><span className="sr-only">Send encrypted message</span></Button>

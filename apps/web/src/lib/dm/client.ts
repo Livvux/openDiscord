@@ -3,16 +3,17 @@
 import type * as Matrix from "@matrix-org/matrix-sdk-crypto-wasm";
 import { z } from "zod";
 import { dmMetadataSchema as metadataSchema } from "./enrollment";
-import { archiveSchema, boundedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
-import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type DmAttachment, type RecoveryFile } from "./contracts";
-import { decryptionDiagnostic, publicShieldCode, publicShieldColor, type DecryptionDiagnostic, type DecryptionStage, type ShieldDiagnostic } from "./decryption-diagnostics";
+import { archiveSchema, boundedHistory, pruneDeletedHistory, HistoryStore, historyEntrySchema, recoverySnapshotSchema, type HistoryArchive, type HistoryEntry, type PendingTransfer, type RecoverySnapshot } from "./history";
+import { DM_MAX_ATTACHMENT_BYTES, DM_MAX_ATTACHMENTS, DM_MAX_BACKUP_BYTES, matrixRoom, matrixUser, plainMessageSchema, type CryptoSync, type DirectEnvelope, type DmAttachment, type DmOperation, type RecoveryFile } from "./contracts";
+import { projectDmTimeline, type DecryptedDmEvent, type PrivateMessageView } from "./timeline";
+export type { PrivateMessageView } from "./timeline";
+import { decryptionDiagnostic, publicShieldCode, publicShieldColor, type DecryptionStage, type ShieldDiagnostic } from "./decryption-diagnostics";
 
 type SDK = typeof Matrix;
 type Outgoing = Matrix.KeysUploadRequest | Matrix.KeysQueryRequest | Matrix.KeysClaimRequest | Matrix.ToDeviceRequest | Matrix.SignatureUploadRequest | Matrix.RoomMessageRequest | Matrix.KeysBackupRequest;
 type Metadata = { id: string; secret: string; storeKey: string };
 export type TrustedDevice = { userId: string; id: string; verified: boolean; fingerprint: string };
 export type VerificationView = { userId: string; deviceId: string; flowId: string; requested: boolean; ready: boolean; done: boolean; cancelled: boolean; confirmed: boolean; decimals: number[] | null };
-export type PrivateMessageView = { id: string; own: boolean; createdAt: string; senderId: string } & ({ body: string; attachments: DmAttachment[]; error?: never; diagnostic?: never } | { body: null; attachments?: never; error: string; diagnostic: DecryptionDiagnostic });
 /** Shown inline from decrypted bytes; anything else (including SVG) is only offered as a download. */
 const INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 export const inlineImage = (file: DmAttachment) => INLINE_IMAGE_TYPES.has(file.mime);
@@ -298,7 +299,7 @@ export class PrivateMessaging {
     });
   }
   /** `recipients`: the 1:1 peer, or the group's current members except people either side blocked. */
-  async send(conversation: string, recipients: string[], text: string, files: File[] = [], group = false): Promise<void> {
+  async send(conversation: string, recipients: string[], text: string, files: File[] = [], group = false, extras: { replyTo?: string; operation?: DmOperation } = {}): Promise<void> {
     if (!recipients.length) throw new Error("Nobody else can receive messages in this conversation.");
     if (files.length > DM_MAX_ATTACHMENTS) throw new Error(`Attach at most ${DM_MAX_ATTACHMENTS} files.`);
     if (files.some((file) => file.size === 0 || file.size > DM_MAX_ATTACHMENT_BYTES)) throw new Error(`Files must be between 1 byte and ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
@@ -337,9 +338,9 @@ export class PrivateMessaging {
       settings.sharingStrategy = this.C.CollectStrategy.identityBasedStrategy();
       for (const request of await this.machine.shareRoomKey(new this.C.RoomId(room), identities.map((id) => new this.C.UserId(matrixUser(id))), settings)) await this.outgoing(request);
       const transaction = crypto.randomUUID();
-      const plain = plainMessageSchema.parse({ msgtype: "m.text", body: text, conversation, transaction, ...(attachments.length ? { attachments } : {}) });
+      const plain = plainMessageSchema.parse({ msgtype: "m.text", body: text, conversation, transaction, ...extras, ...(attachments.length ? { attachments } : {}) });
       const content: unknown = JSON.parse(await this.machine.encryptRoomEvent(new this.C.RoomId(room), "m.room.message", JSON.stringify(plain)));
-      await dmFetch("/api/dm", { action: "send", id: conversation, input: { transactionId: transaction, content, ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}) } }, this.metadata);
+      await dmFetch("/api/dm", { action: "send", id: conversation, input: { transactionId: transaction, content, ...(extras.operation ? { kind: extras.operation.kind, targetId: extras.operation.target } : {}), ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}) } }, this.metadata);
     });
   }
   /** SDK Matrix attachment encryption (AES-CTR + SHA-256); only ciphertext leaves the browser. Key, IV, hash, name and type go into the Megolm payload. */
@@ -369,10 +370,15 @@ export class PrivateMessaging {
   /** `senders`: everyone who may have written here (the peer, or current and former group members). */
   async decrypt(envelopes: DirectEnvelope[], conversation: string, senders: string[]): Promise<PrivateMessageView[]> {
     return this.serial(async () => {
-      const result: PrivateMessageView[] = [];
+      const result: DecryptedDmEvent[] = [];
       let historyChanged = false;
       for (const envelope of envelopes) {
         const base = { id: envelope.id, own: envelope.senderId === this.userId, createdAt: envelope.createdAt, senderId: envelope.senderId };
+        if (envelope.deletedAt) {
+          // Transport metadata can withhold content, but cannot destroy authenticated recovery copies.
+          if (envelope.conversationId === conversation && [this.userId, ...senders].includes(envelope.senderId) && (!envelope.kind || envelope.kind === "message")) result.push({ ...base, body: "", attachments: [], deleted: true });
+          continue;
+        }
         let stage: DecryptionStage = "envelope";
         let shieldDiagnostic: ShieldDiagnostic | undefined;
         try {
@@ -397,22 +403,27 @@ export class PrivateMessaging {
           const plain = plainMessageSchema.parse(z.object({ content: z.unknown() }).parse(JSON.parse(decrypted.event)).content);
           stage = "message_binding";
           if (plain.conversation !== conversation || plain.transaction !== envelope.transactionId) throw new Error("Message binding mismatch.");
+          if ((plain.operation?.kind ?? "message") !== (envelope.kind ?? "message") || (plain.operation?.target ?? null) !== (envelope.targetId ?? null)) throw new Error("Message update binding mismatch.");
           stage = "history_schema";
           const verified = historyEntrySchema.parse({ envelope, message: plain, verifiedAt: new Date().toISOString() });
           stage = "replay_storage";
           await this.historyStore.acceptEvent(verified.envelope);
-          result.push({ ...base, body: plain.body, attachments: plain.attachments ?? [] });
+          result.push({ ...base, body: plain.body, attachments: plain.attachments ?? [], replyTo: plain.replyTo, operation: plain.operation });
+          if (plain.operation?.kind === "delete") {
+            const retained = pruneDeletedHistory([...this.verifiedHistory.values()], plain.operation.target, envelope.senderId);
+            if (retained.length !== this.verifiedHistory.size) { this.verifiedHistory = new Map(retained.map((entry) => [entry.envelope.id, entry])); historyChanged = true; }
+          }
           if (!this.verifiedHistory.has(envelope.id)) {
             this.verifiedHistory.set(envelope.id, verified);
             historyChanged = true;
           }
-        } catch (error: unknown) { result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.", diagnostic: decryptionDiagnostic(stage, error, this.C, shieldDiagnostic) }); }
+        } catch (error: unknown) { if (!envelope.kind || envelope.kind === "message") result.push({ ...base, body: null, error: "Cannot decrypt or authenticate this message. Verify devices, sync, or restore a trusted history backup.", diagnostic: decryptionDiagnostic(stage, error, this.C, shieldDiagnostic) }); }
       }
       if (historyChanged) {
         this.verifiedHistory = new Map(boundedHistory([...this.verifiedHistory.values()]).map((entry) => [entry.envelope.id, entry]));
         await this.historyStore.put("verified-cache", [...this.verifiedHistory.values()]);
       }
-      return result;
+      return projectDmTimeline(result);
     });
   }
   private async snapshot(id: string): Promise<RecoverySnapshot> {

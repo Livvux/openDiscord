@@ -206,10 +206,13 @@ describe("per-message processing failure boundaries", () => {
   it("keeps failures per envelope and drops their classification on a later successful refresh", async () => {
     history.acceptEvent.mockRejectedValueOnce(new Error("private storage exception"));
     const next = { ...envelope, id: randomUUID() };
+    // Timelines order by (UUIDv7) id; these fixtures use random UUIDs, so match rows by id.
     const rows = await client.decrypt([envelope, next], conversation, [peer]);
-    expect(rows[0].diagnostic).toEqual({ stage: "replay_storage", code: "unknown" });
-    expect(rows[1].body).toBe(plain.body);
-    expect(rows[1]).not.toHaveProperty("diagnostic");
+    const failed = rows.find((row) => row.id === envelope.id);
+    const ok = rows.find((row) => row.id === next.id);
+    expect(failed?.diagnostic).toEqual({ stage: "replay_storage", code: "unknown" });
+    expect(ok?.body).toBe(plain.body);
+    expect(ok).not.toHaveProperty("diagnostic");
     const [refreshed] = await client.decrypt([envelope], conversation, [peer]);
     expect(refreshed.body).toBe(plain.body);
     expect(refreshed).not.toHaveProperty("diagnostic");

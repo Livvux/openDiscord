@@ -8,6 +8,7 @@ import { errorResponse } from "@/server/http";
 import { getMessageForBroadcast, type MessageView } from "@/server/messages";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
+import { canReceiveDirectTyping } from "@/server/direct-messages";
 import { mutedCommunities, touchPresence } from "@/server/presence";
 import { excerptOf } from "@/lib/mentions";
 import type { DmCallNotice } from "@/components/app/voice/dm-call-ring";
@@ -31,7 +32,7 @@ export interface MentionNotice {
 /** A conversation changed. `senderId` is set only for a new incoming message; never any content. */
 export interface DmNotice {
   conversationId: string;
-  reason: "message" | "request" | "read";
+  reason: "message" | "request" | "read" | "update";
   senderId: string | null;
   senderName: string | null;
 }
@@ -92,6 +93,10 @@ export async function GET(request: Request) {
 
       const onEvent = async (event: HubEvent) => {
         if (event.type === "resync") return send("resync", {});
+        if (event.type === "dm.typing") {
+          if (event.expiresAt <= Date.now() || !(await sessionValid()) || !(await canReceiveDirectTyping(userId, event.senderId, event.conversationId))) return;
+          return send("typing", { conversationId: event.conversationId, senderId: event.senderId, typing: event.typing, expiresAt: event.expiresAt });
+        }
         // Ids only: the tab refetches through the normal authorized endpoints.
         if (event.type === "dm.changed") {
           if (!(await sessionValid())) return;

@@ -89,8 +89,13 @@ export const dmMessage = pgTable("dm_message", {
   deviceId: uuid("device_id").notNull().references(() => dmDevice.id, { onDelete: "cascade" }),
   transactionId: uuid("transaction_id").notNull(),
   content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+  kind: text("kind", { enum: ["message", "edit", "reaction", "delete"] }).notNull().default("message"),
+  targetId: uuid("target_id"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: created(),
-}, (t) => [index("dm_message_page_idx").on(t.conversationId, t.id), uniqueIndex("dm_message_transaction_idx").on(t.deviceId, t.transactionId)]);
+}, (t) => [index("dm_message_page_idx").on(t.conversationId, t.id), index("dm_message_target_idx").on(t.conversationId, t.targetId), uniqueIndex("dm_message_transaction_idx").on(t.deviceId, t.transactionId),
+  check("dm_message_operation_valid", sql`(${t.kind} = 'message' and ${t.targetId} is null) or (${t.kind} in ('edit', 'reaction', 'delete') and ${t.targetId} is not null)`),
+]);
 
 /** Per person and conversation: the newest message they have seen. Unread counts are derived from it. */
 export const dmReadState = pgTable("dm_read_state", {
