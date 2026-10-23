@@ -180,11 +180,11 @@ Production accounts, policy and data were unchanged.
 
 ### Current operational failures, 2026-10-21
 
-- The hourly maintenance timer is active, but its job fails because its configured migrate image
-  `compose-index-virtual-microchip-f3zupk-migrate:latest` is missing. Preserve the fail-closed behavior:
-  build and retain a reviewed compatible migrate image under the deployment procedure below,
-  record its immutable ID, and verify a bounded maintenance dry run before any separately approved
-  retention apply. Do not silently build/pull from inside the maintenance job or delete data to test it.
+- Resolved 2026-10-23: the hourly maintenance job failed from at least 2026-10-21 because Dokploy's
+  nightly unused-image prune (~23:50 UTC) removes the one-shot `compose-index-virtual-microchip-f3zupk-migrate`
+  image. The host now has the drop-in `/etc/systemd/system/opendiscord-maintenance.service.d/rebuild-migrate-image.conf`:
+  an `ExecStartPre` rebuilds the image from the deployed checkout only when it is missing and
+  `TimeoutStartSec` is 1300. `scripts/production-maintenance.sh` itself stays fail-closed and never builds.
 - No installed Voice maintenance/monitor timer was observed. Source and CI Voice tests do not prove
   production cleanup/alert activation; follow the coherent Voice activation gates below.
 - Read-only inspection found running LiveKit 1.13.10 at immutable image
