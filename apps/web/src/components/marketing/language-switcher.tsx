@@ -6,7 +6,7 @@ export function LanguageSwitcher({ locale, label }: { locale: Locale; label: str
   return (
     <details className="group relative">
       <summary
-        aria-label={`${label}: ${localeNames[locale]}`}
+        aria-label={`${label}: ${localeNames[locale]}, ${locale.toUpperCase()}`}
         className="flex h-9 cursor-pointer list-none items-center gap-1.5 rounded-lg px-2.5 transition-colors hover:bg-ink/5 [&::-webkit-details-marker]:hidden"
       >
         <Globe aria-hidden className="size-4" />

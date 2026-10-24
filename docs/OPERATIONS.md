@@ -92,10 +92,17 @@ Operator install (manual; a source merge alone does not update host scripts):
 ```sh
 apt-get install -y restic                     # Ubuntu 24.04: 0.16.4, same as the CI rehearsal
 install -d -o root -g root -m 700 /var/lib/opendiscord-backup /var/cache/opendiscord-restic
-openssl rand -hex 32 > /etc/opendiscord-backup/restic-password && chmod 600 /etc/opendiscord-backup/restic-password
-# Store the password in 1Password BEFORE the first snapshot, then initialise once:
-RCLONE_CONFIG=/etc/opendiscord-backup/rclone.conf RESTIC_PASSWORD_FILE=/etc/opendiscord-backup/restic-password \
-  restic -r rclone:opendiscord-backup:opendiscord-backups-private/restic init
+# Preserve an existing repository password; exclusive creation also rejects a concurrent installer.
+if ! test -e /etc/opendiscord-backup/restic-password; then
+  (set -C; umask 077; openssl rand -hex 32 > /etc/opendiscord-backup/restic-password) || exit 1
+fi
+test -s /etc/opendiscord-backup/restic-password || exit 1
+export RCLONE_CONFIG=/etc/opendiscord-backup/rclone.conf
+export RESTIC_PASSWORD_FILE=/etc/opendiscord-backup/restic-password
+export RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
+# Fresh, empty repository only: store this password in 1Password, then run `restic init` once.
+# Existing repositories: use the existing password from 1Password; never reinitialize or replace it.
+restic cat config > /dev/null || exit 1
 install -o root -g root -m 700 scripts/production-backup.sh scripts/backup-capacity.py /etc/opendiscord-backup/
 install -o root -g root -m 700 scripts/operator-monitor.py /etc/opendiscord-monitor/monitor.py
 install -o root -g root -m 755 scripts/operator-monitor.py /usr/local/sbin/opendiscord-operator-monitor
@@ -111,7 +118,8 @@ Never restore into the live database or bucket as a test.
 export RCLONE_CONFIG=<read-only rclone.conf> RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
 export RESTIC_PASSWORD_FILE=<password from 1Password>
 restic snapshots --host opendiscord --tag daily
-restic restore <snapshot> --target /restore
+# Stop concurrent pruning on the backup host before restoring without a repository lock.
+restic --no-lock restore <snapshot> --target /restore
 # /restore/dev/shm/opendiscord-backup/{database.dump,manifest.txt,config/}  -> pg_restore --no-owner, configuration
 # /restore/var/lib/opendiscord-backup/media/attachments/...                  -> rclone copy to the new private bucket
 ```

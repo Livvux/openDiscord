@@ -263,7 +263,8 @@ export async function persistUpload(userId: string, channelId: string | null, st
     }
     const limit = mediaStorageLimit();
     if (limit !== null) {
-      // shortcut: per-uploader lock, so parallel uploaders can overshoot by a few files; fine below the disk reserve.
+      // Serialize reservations across uploaders so the instance-wide cap cannot be oversubscribed.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"upload:instance-capacity"}, 0))`);
       const [{ stored: total }] = await tx.select({ stored: sum(attachment.size).mapWith(Number) }).from(attachment);
       if ((total ?? 0) + stored.data.byteLength > limit) {
         throw new AppError("rate_limited", "This instance has reached its storage capacity. Try again later.");

@@ -61,7 +61,8 @@ def room_for(metric: str) -> int | None:
         # Dump, restore listing and attachment extract can coexist in /dev/shm.
         return shutil.disk_usage("/dev/shm").free // 4
     if metric == "media":
-        # Already mirrored bytes are reused; only growth needs free disk beyond the reserve.
+        # Object keys are immutable; sync --delete-before frees obsolete files before transfers.
+        # Existing live bytes are reused, so only growth consumes the reserve.
         return shutil.disk_usage(MIRROR if MIRROR.exists() else MIRROR.parent).free + tree_bytes(MIRROR) - DISK_RESERVE
     return None
 

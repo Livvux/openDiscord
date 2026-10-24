@@ -204,6 +204,26 @@ describe.skipIf(!mediaEnabled)("attachments in private storage", () => {
     }
   });
 
+  it("serializes the instance storage cap across different uploaders", async () => {
+    const [{ total }] = await db.select({ total: sum(attachment.size).mapWith(Number) }).from(attachment);
+    const saved = process.env.MEDIA_STORAGE_LIMIT_BYTES;
+    const small = new Uint8Array(8);
+    try {
+      process.env.MEDIA_STORAGE_LIMIT_BYTES = String((total ?? 0) + small.byteLength);
+      const results = await Promise.allSettled([author, member].map((uploader) =>
+        uploadAttachment(uploader, channelId, "application/zip", small.byteLength, async () => small, "concurrent.zip")));
+      for (const result of results) if (result.status === "fulfilled") ids.push(result.value.id);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected?.reason).toBeInstanceOf(Error);
+      expect(rejected?.reason.message).toMatch(/storage capacity/);
+      const [{ stored }] = await db.select({ stored: sum(attachment.size).mapWith(Number) }).from(attachment);
+      expect(stored).toBe((total ?? 0) + small.byteLength);
+    } finally {
+      if (saved === undefined) delete process.env.MEDIA_STORAGE_LIMIT_BYTES; else process.env.MEDIA_STORAGE_LIMIT_BYTES = saved;
+    }
+  });
+
   it("stores nothing when the configured scanner is unreachable (fail closed)", async () => {
     const uploader = await fixtures.create("Scanned uploader");
     await acceptInvite(uploader, await createInvite(author, communityId, { maxUses: null, expiresInHours: null }));

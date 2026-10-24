@@ -52,8 +52,9 @@ PY
 source=$(cat "$work/media-source")
 rclone --config "$work/media-rclone.conf" size "$source" --json > "$work/media-size.json"
 capacity media "$(python3 -c 'import json,sys;print(int(json.load(open(sys.argv[1]))["bytes"]))' "$work/media-size.json")"
-# Incremental: only new/changed objects are fetched; deletions remain in older snapshots.
-rclone --config "$work/media-rclone.conf" sync "$source" "$mirror" --quiet
+# App object keys are immutable. Delete obsolete mirror files before transfers so the
+# capacity calculation can credit their space; older restic snapshots retain their bytes.
+rclone --config "$work/media-rclone.conf" sync "$source" "$mirror" --delete-before --quiet
 rm "$work/media-rclone.conf"
 python3 - "$work" "$mirror" <<'PY'
 import pathlib,re,sys

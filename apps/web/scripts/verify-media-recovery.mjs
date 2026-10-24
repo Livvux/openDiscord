@@ -55,6 +55,10 @@ const targetBucket = 'fixture-restored';
 const backupBucket = 'opendiscord-backups-private';
 const envFile = join(work, 'web.env');
 const s3EnvFile = join(work, 's3.env');
+const s3Config = join(work, 's3.json');
+const readOnlyConfig = join(work, 'read-only-rclone.conf');
+const readOnlyAccess = randomBytes(12).toString('hex');
+const readOnlySecret = randomBytes(32).toString('hex');
 const appDir = join(work, 'app');
 const voiceDir = join(work, 'voice');
 const localConfig = join(work, 'rclone.conf');
@@ -160,10 +164,6 @@ function restic(...args) {
 }
 const repositoryBytes = () => JSON.parse(restic('stats', '--mode', 'raw-data', '--json').toString()).total_size;
 const snapshots = () => JSON.parse(restic('snapshots', '--json').toString()).map(({ id }) => id).sort();
-function objects() {
-  return JSON.parse(rclone('lsjson', `fixture:${backupBucket}`, '--recursive', '--files-only').toString())
-    .map(({ Path, Size }) => ({ Path, Size })).sort((a, b) => a.Path.localeCompare(b.Path));
-}
 function backup() {
   return run('bash', [join(root, 'scripts/production-backup.sh')], { timeout: 600_000, env: {
     ...process.env, OPENDISCORD_DB_CONTAINER: container(sourceDB), OPENDISCORD_WEB_CONTAINER: container(sourceWeb),
@@ -184,6 +184,11 @@ try {
   writeFileSync(envFile, webEnv(5432, sourceBucket), { mode: 0o600 });
   writeFileSync(s3EnvFile, `AWS_ACCESS_KEY_ID=${access}\nAWS_SECRET_ACCESS_KEY=${secret}\nS3_BUCKET=${sourceBucket},${targetBucket},${backupBucket}\n`, { mode: 0o600 });
   writeFileSync(localConfig, `[fixture]\ntype = s3\nprovider = Other\naccess_key_id = ${access}\nsecret_access_key = ${secret}\nendpoint = ${s3}\nno_check_bucket = true\nforce_path_style = true\n`, { mode: 0o600 });
+  writeFileSync(s3Config, JSON.stringify({ identities: [
+    { name: 'backup-writer', credentials: [{ accessKey: access, secretKey: secret }], actions: ['Admin', 'Read', 'List', 'Write', 'Tagging'] },
+    { name: 'recovery-reader', credentials: [{ accessKey: readOnlyAccess, secretKey: readOnlySecret }], actions: [`Read:${backupBucket}`, `List:${backupBucket}`] },
+  ] }), { mode: 0o600 });
+  writeFileSync(readOnlyConfig, readFileSync(localConfig, 'utf8').replace('[fixture]', '[opendiscord-backup]').replace(access, readOnlyAccess).replace(secret, readOnlySecret), { mode: 0o600 });
   fixtureFile('/etc/opendiscord-backup/rclone.conf', readFileSync(localConfig).toString().replace('[fixture]', '[opendiscord-backup]'));
   fixtureFile('/etc/opendiscord-backup/restic-password', randomBytes(32).toString('hex'));
   // Synthetic recovery configuration, including optional router files. Never sourced or executed.
@@ -197,7 +202,7 @@ try {
     else writeFileSync(path, value, { mode: 0o600 });
   }
   phase = 'services';
-  start(store, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', s3EnvFile, s3Image, 'mini', '-dir=/data']);
+  start(store, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', s3EnvFile, '-v', `${s3Config}:/etc/fixture-s3.json:ro`, s3Image, 'mini', '-dir=/data', '-s3.config=/etc/fixture-s3.json']);
   await waitFor(s3);
   const dbArgs = (port) => ['--memory', '512m', '--cpus', '1', '-p', `127.0.0.1:${port}:5432`, '-e', 'POSTGRES_USER=opendiscord', '-e', `POSTGRES_PASSWORD=${password}`, '-e', 'POSTGRES_DB=opendiscord', 'postgres:18-alpine'];
   start(sourceDB, dbArgs(5432)); start(targetDB, dbArgs(5433));
@@ -251,14 +256,19 @@ try {
   // Random media does not compress: the repository really holds the incompressible bytes.
   assert(Number(firstBytes) >= attachmentBytes, 'Repository is smaller than the incompressible media');
   phase = 'incremental-backup';
+  const obsoleteMirrorFile = '/var/lib/opendiscord-backup/media/attachments/obsolete-fixture.bin';
+  writeFileSync(obsoleteMirrorFile, bulk[0]);
   backup();
+  assert(!existsSync(obsoleteMirrorFile), 'Obsolete mirror bytes survived synchronization');
   const secondBytes = repositoryBytes();
   // Unchanged media is deduplicated: a second daily snapshot adds at most a little metadata and dump.
   assert(secondBytes - Number(firstBytes) < 2 * 1024 * 1024, 'Unchanged media was stored again');
   assert.equal(snapshots().length, 2);
   phase = 'snapshot-validation';
   const extracted = join(work, 'extracted'); mkdirSync(extracted, { mode: 0o700 });
-  restic('restore', snapshotId, '--target', extracted);
+  // Recovery credentials can list/read this bucket but cannot create even a lock object.
+  assert.throws(() => run('rclone', ['--config', readOnlyConfig, '--retries', '1', '--low-level-retries', '1', 'rcat', `opendiscord-backup:${backupBucket}/restic/locks/read-only-probe`], { input: Buffer.from('denied') }));
+  run('restic', ['--no-lock', 'restore', snapshotId, '--target', extracted], { env: { ...process.env, RESTIC_REPOSITORY: repository, RESTIC_PASSWORD_FILE: '/etc/opendiscord-backup/restic-password', RCLONE_CONFIG: readOnlyConfig, RESTIC_CACHE_DIR: join(work, 'read-only-cache') }, timeout: 300_000 });
   const staged = join(extracted, 'dev/shm/opendiscord-backup');
   const mirrored = join(extracted, 'var/lib/opendiscord-backup/media');
   assert.equal(hash(readFileSync(join(staged, 'database.dump'))), dumpHash);
@@ -351,7 +361,7 @@ try {
     repositoryBytesAfterFirst: Number(firstBytes), repositoryBytesAfterUnchangedSecond: secondBytes,
     exactOperationalScript: true, separateDatabaseAndBucket: true, memberDownload: 200, largeDownloadsVerified: 3, outsiderDownload: 404,
     anonymousDownload: 401, anonymousObject: 403, tamperedPackRejected: true, missingReferenceRejected: true,
-    failurePreservedSnapshotsAndLastSuccess: true, s3Image };
+    failurePreservedSnapshotsAndLastSuccess: true, readOnlyRestore: true, readOnlyWriteDenied: true, s3Image };
 } catch (error) {
   failed = true;
   // Child errors can include env arguments, response bodies or config. Never print them.
