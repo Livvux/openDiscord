@@ -5,7 +5,7 @@ async function befriend(owner: Page, friend: Page, friendName: string, ownerName
   await owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: "Add Friend" }).click();
   await owner.getByLabel("Search your communities").fill(friendName);
   await owner.getByRole("button", { name: "Search" }).click();
-  await owner.getByRole("button", { name: `Add ${friendName} as a friend` }).click();
+  await owner.getByRole("button", { name: `Add friend: ${friendName}` }).click();
   await friend.goto("/app");
   await friend.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: /^Pending/ }).click();
   await friend.getByRole("button", { name: `Accept friend request from ${ownerName}` }).click();

@@ -25,7 +25,7 @@ test.describe("home, friends and account menu", () => {
     await owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: "Add Friend" }).click();
     await owner.getByLabel("Search your communities").fill("Finn");
     await owner.getByRole("button", { name: "Search" }).click();
-    await owner.getByRole("button", { name: "Add Finn Friend as a friend" }).click();
+    await owner.getByRole("button", { name: "Add friend: Finn Friend" }).click();
     await expect(owner.getByRole("status").filter({ hasText: "Friend request sent." })).toBeVisible();
     await expectNoA11yViolations(owner);
 

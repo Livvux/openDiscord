@@ -33,7 +33,7 @@ export function RailLink({ communityId, name, initial, muted }: RailLinkProps) {
     <Link
       href={href}
       title={name}
-      aria-label={`${name}${status}`}
+      aria-label={`${name}${status}, ${initials}`}
       aria-current={active ? "page" : undefined}
       className={`relative grid size-10 place-items-center text-sm font-semibold transition-[border-radius,background-color] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
         active ? "rounded-xl bg-primary text-primary-foreground" : `rounded-2xl bg-white/5 hover:rounded-xl hover:bg-white/10 ${muted ? "text-zinc-500" : "text-zinc-300"}`

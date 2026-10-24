@@ -75,7 +75,7 @@ test.describe("genuine Next product encrypted Voice", () => {
     assertDisposableVoiceCi({ ci: process.env.CI, githubActions: process.env.GITHUB_ACTIONS, apiKey: process.env.LIVEKIT_API_KEY, apiSecret: process.env.LIVEKIT_API_SECRET, url: process.env.LIVEKIT_URL, authUrl: process.env.BETTER_AUTH_URL });
     const verifier = new TokenVerifier("devkey", "secret");
     const pages: Page[] = [], names = ["UI Voice Publisher", "UI Voice Listener One", "UI Voice Listener Two"];
-    const runtimeErrors: string[] = [];
+    const runtimeErrors: { page: number; stage: string; name: string; frames: string[] }[] = [];
     const consoleErrors: (ReturnType<typeof classifyVoiceProductConsole> & { page: number; revoking: boolean; observed: "pending" | "ok" | "failed"; fingerprint?: string; transport: ReturnType<typeof readVoiceProductConsoleArgument>[] })[] = [];
     const consoleObservations: Promise<void>[] = [];
     let revocationDenials = 0;
@@ -99,7 +99,12 @@ test.describe("genuine Next product encrypted Voice", () => {
       await page.addInitScript(installVoiceProductObserver);
       // Firefox has no grantable media permissions; its config disables the prompt instead.
       if (page.context().browser()?.browserType().name() !== "firefox") await page.context().grantPermissions(["microphone", "camera"]);
-      page.on("pageerror", error => runtimeErrors.push(error.name));
+      page.on("pageerror", error => runtimeErrors.push({
+        page: index, stage,
+        name: ["Error", "TypeError", "ReferenceError", "RangeError", "SyntaxError"].includes(error.name) ? error.name : "other",
+        // Public chunk coordinates only; never error messages, URL queries or application values.
+        frames: [...(error.stack ?? "").matchAll(/\/_next\/static\/chunks\/([a-zA-Z0-9_.-]{1,100}\.js:\d+:\d+)/g)].slice(0, 4).map(match => match[1]),
+      }));
       page.on("console", message => {
         if (message.type() !== "error") return;
         // A genuine generation transition can return409; detailed lower-layer conflict gates remain authoritative.
@@ -307,7 +312,7 @@ test.describe("genuine Next product encrypted Voice", () => {
       for (const page of pages.slice(1)) await expect(page.getByRole("region", { name: "Video" })).toHaveCount(0);
       await Promise.all(consoleObservations);
       const summary = await Promise.all(pages.map(evidence));
-      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
+      const attached = await writeVoiceProductEvidence(testInfo, "voice-product-evidence", JSON.stringify({ exactNextProduct: true, accounts: 3, pairs: 3, separateAdmissions: 6, audienceParticipants: 3, jwtExpiredWithRenewedLease: true, leaderRetryDispatched, phaseCheckpoints, workerResponses, stats: summary.map(stats => ({ ...stats, workerUrl: undefined })), runtimeErrorCount: runtimeErrors.length, runtimeDiagnostics: runtimeErrors.slice(0, 10), consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
       expect(attached.ok).toBe(true);
       stage = "connect-revocation";
       // Real channel permission UI revokes Connect. Product heartbeat/HTTP fences every affected peer.
@@ -321,7 +326,10 @@ test.describe("genuine Next product encrypted Voice", () => {
       await Promise.all(consoleObservations);
       // The SFU removes revoked peers itself; SCTP cause 12 (user-initiated abort) is that removal, not a product fault.
       // Firefox does not expose sctpCauseCode (null), so there only the revoking window identifies it.
-      const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))));
+      // The same removal closes the signal WebSocket without a close frame. The SDK's read loop then
+      // rejects with ConnectionError(reason websocket) and logs "error reading from signal stream"
+      // when that close beats its own handling of the LeaveRequest (seen on main 2026-10-22).
+      const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))) || (entry.code === "signal-read" && entry.transport.some(part => part.name === "ConnectionError" && part.connectionReason === "websocket")));
       expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
@@ -337,7 +345,7 @@ test.describe("genuine Next product encrypted Voice", () => {
           const stats = await evidence(page);
           return { ...stats, workerUrl: undefined, ...await presentation(page), audienceVisible: await audience(page).isVisible(), rosterCount: await audience(page).getByRole("listitem", { name: /^Voice participant / }).count(), stopped: await page.getByRole("status").filter({ hasText: "Voice stopped" }).count() > 0 };
         }, { timeoutMs: 2000, stage: "diagnostic" })));
-        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
+        const attachment = await writeVoiceProductEvidence(testInfo, "voice-product-evidence-final", JSON.stringify({ stage, leaderRetryDispatched, phaseCheckpoints, observationFailed, observationFailures, diagnostics, grantCount: grants.length, runtimeErrorCount: runtimeErrors.length, runtimeDiagnostics: runtimeErrors.slice(0, 10), consoleErrorCount: consoleErrors.length, revocationDenials, consoleDiagnostics: consoleErrors.slice(0, 20) }));
         if (!attachment.ok || diagnostics.some(result => !result.ok)) cleanupFailed = true;
       }, async () => {
         commitsClosed = true;

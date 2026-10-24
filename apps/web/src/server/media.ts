@@ -33,6 +33,15 @@ export interface AttachmentView {
 const UPLOAD_LIMIT = { max: 10, windowMs: 60_000 };
 /** Bytes one account may upload per day, so files can't fill the bucket. */
 export const DAILY_UPLOAD_BYTES = 500 * 1024 * 1024;
+
+/** Instance-wide stored media cap (the capacity backups are sized for); unset means no cap. */
+export function mediaStorageLimit(): number | null {
+  const raw = process.env.MEDIA_STORAGE_LIMIT_BYTES;
+  if (!raw) return null;
+  // A typo must not silently lift the cap that backups depend on.
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error("MEDIA_STORAGE_LIMIT_BYTES must be a positive integer");
+  return Number(raw);
+}
 /**
  * Uploads are buffered in memory (up to 25 MB each), so a process only works on a few at once.
  * shortcut: per process; stream to storage instead of buffering if uploads become the bottleneck.
@@ -251,6 +260,15 @@ export async function persistUpload(userId: string, channelId: string | null, st
       .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
     if ((today ?? 0) + stored.data.byteLength > DAILY_UPLOAD_BYTES) {
       throw new AppError("rate_limited", `You can upload at most ${mb(DAILY_UPLOAD_BYTES)} per day.`);
+    }
+    const limit = mediaStorageLimit();
+    if (limit !== null) {
+      // Serialize reservations across uploaders so the instance-wide cap cannot be oversubscribed.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"upload:instance-capacity"}, 0))`);
+      const [{ stored: total }] = await tx.select({ stored: sum(attachment.size).mapWith(Number) }).from(attachment);
+      if ((total ?? 0) + stored.data.byteLength > limit) {
+        throw new AppError("rate_limited", "This instance has reached its storage capacity. Try again later.");
+      }
     }
     const [created] = await tx.insert(attachment).values({
       channelId, uploaderId: userId, key, contentType: stored.contentType, filename: stored.filename,

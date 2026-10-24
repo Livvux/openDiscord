@@ -17,7 +17,7 @@ test("friend requests and private messages reach Home live, with unread badges c
     await owner.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: "Add Friend" }).click();
     await owner.getByLabel("Search your communities").fill("Rex");
     await owner.getByRole("button", { name: "Search" }).click();
-    await owner.getByRole("button", { name: "Add Rex Reader as a friend" }).click();
+    await owner.getByRole("button", { name: "Add friend: Rex Reader" }).click();
     await expect(home.getByRole("link", { name: "Friends, 1 pending" })).toBeVisible({ timeout: 10_000 });
     await friend.getByRole("group", { name: "Filter friends" }).getByRole("button", { name: /^Pending/ }).click();
     await friend.getByRole("button", { name: "Accept friend request from Uma Unread" }).click();

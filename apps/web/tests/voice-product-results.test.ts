@@ -164,5 +164,8 @@ it("keeps bounded SDK connection reasons without exporting messages, URLs or pri
 
 it("fingerprints unknown console text by leading words with identifiers masked", () => {
   expect(fingerprintVoiceProductConsole("could not do thing for PA_x9Yz room wss://h.test/rtc?access_token=eyJ.a.b trailing words")).toBe("could not do thing for #");
-  expect(fingerprintVoiceProductConsole("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig v=0 o=- 4611731400430051336")).toBe("token # # # #");
+  expect(fingerprintVoiceProductConsole("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig v=0 o=- 4611731400430051336")).toBe("token # # # #digits");
+  // Masked words keep only a shape, never their content.
+  expect(fingerprintVoiceProductConsole("The connection to wss://h.test/rtc?access_token=eyJ.a.b was interrupted")).toBe("The connection to #ws-url was interrupted");
+  expect(fingerprintVoiceProductConsole("[livekit] Error: https://h.test/x connection to")).toBe("#bracket Error: #http-url connection to");
 });

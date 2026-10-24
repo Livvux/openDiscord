@@ -241,7 +241,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
                   <PresenceAvatar userId={p.id} name={p.name} avatar={p.avatar} size="sm" status={null} />
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   {p.relation === null || p.relation === "incoming" ? (
-                    <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add"} ${p.name} as a friend`}
+                    <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add friend"}: ${p.name}`}
                       onClick={() => send(p.id, (outcome) => setResults((rs) => rs?.map((r) => (r.id === p.id ? { ...r, relation: outcome === "sent" ? "outgoing" : outcome === "accepted" ? "friend" : r.relation } : r)) ?? null))}>
                       {p.relation === "incoming" ? "Accept" : "Add friend"}
                     </Button>
@@ -258,7 +258,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
       <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-sm">
         <span className="text-muted-foreground">Your friend code:</span>
         <code className="rounded bg-white/5 px-1.5 py-0.5 text-xs break-all">{userId}</code>
-        <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label="Copy your friend link">
+        <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label={copied ? "Copied your friend link" : "Copy link to add you as a friend"}>
           {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy link"}
         </Button>
       </div>
