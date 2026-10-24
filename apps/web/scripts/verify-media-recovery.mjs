@@ -184,10 +184,12 @@ try {
   writeFileSync(envFile, webEnv(5432, sourceBucket), { mode: 0o600 });
   writeFileSync(s3EnvFile, `AWS_ACCESS_KEY_ID=${access}\nAWS_SECRET_ACCESS_KEY=${secret}\nS3_BUCKET=${sourceBucket},${targetBucket},${backupBucket}\n`, { mode: 0o600 });
   writeFileSync(localConfig, `[fixture]\ntype = s3\nprovider = Other\naccess_key_id = ${access}\nsecret_access_key = ${secret}\nendpoint = ${s3}\nno_check_bucket = true\nforce_path_style = true\n`, { mode: 0o600 });
+  // The image drops to its seaweed user; the bind-mounted file must be readable by that UID.
+  // Its host parent remains 0700, keeping these disposable credentials private on the runner.
   writeFileSync(s3Config, JSON.stringify({ identities: [
     { name: 'backup-writer', credentials: [{ accessKey: access, secretKey: secret }], actions: ['Admin', 'Read', 'List', 'Write', 'Tagging'] },
     { name: 'recovery-reader', credentials: [{ accessKey: readOnlyAccess, secretKey: readOnlySecret }], actions: [`Read:${backupBucket}`, `List:${backupBucket}`] },
-  ] }), { mode: 0o600 });
+  ] }), { mode: 0o644 });
   writeFileSync(readOnlyConfig, readFileSync(localConfig, 'utf8').replace('[fixture]', '[opendiscord-backup]').replace(access, readOnlyAccess).replace(secret, readOnlySecret), { mode: 0o600 });
   fixtureFile('/etc/opendiscord-backup/rclone.conf', readFileSync(localConfig).toString().replace('[fixture]', '[opendiscord-backup]'));
   fixtureFile('/etc/opendiscord-backup/restic-password', randomBytes(32).toString('hex'));
@@ -201,13 +203,15 @@ try {
     if (paths.some((directory) => path.startsWith(`${directory}/`))) fixtureFile(path, value);
     else writeFileSync(path, value, { mode: 0o600 });
   }
-  phase = 'services';
+  phase = 'services-s3';
   start(store, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', s3EnvFile, '-v', `${s3Config}:/etc/fixture-s3.json:ro`, s3Image, 'mini', '-dir=/data', '-s3.config=/etc/fixture-s3.json']);
   await waitFor(s3);
+  phase = 'services-db';
   const dbArgs = (port) => ['--memory', '512m', '--cpus', '1', '-p', `127.0.0.1:${port}:5432`, '-e', 'POSTGRES_USER=opendiscord', '-e', `POSTGRES_PASSWORD=${password}`, '-e', 'POSTGRES_DB=opendiscord', 'postgres:18-alpine'];
   start(sourceDB, dbArgs(5432)); start(targetDB, dbArgs(5433));
   await dbReady(5432); await dbReady(5433);
   run('pnpm', ['db:migrate'], { cwd: root, env: { ...process.env, DATABASE_URL: `postgres://opendiscord:${password}@127.0.0.1:5432/opendiscord` } });
+  phase = 'services-web';
   start(sourceWeb, ['--network', 'host', '--memory', '768m', '--cpus', '1', '--env-file', envFile, '-e', 'PORT=3200', image]);
   await waitFor(`${base}/sign-in`);
   phase = 'source-browser';
