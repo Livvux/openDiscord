@@ -24,43 +24,56 @@ PLENTY = 64 * 1024 * MiB
 
 
 class BudgetTests(unittest.TestCase):
-    def test_limits_match_previous_inline_checks(self):
-        # Previously: size*4 > free or size > 512 MiB (database), size*3 (media), remote+bundle > 1 GiB.
-        for free in (PLENTY, 1000 * MiB, 1000 * MiB + 3):
-            for metric, copies in (("database", 4), ("media", 3)):
-                limit = capacity.limit_for(metric, free)
-                for size in (limit - 1, limit, limit + 1):
-                    old = size * copies > free or size > 512 * MiB
-                    self.assertEqual(capacity.record({}, metric, size, free)[1] is not None, old, (metric, free, size))
-        self.assertIsNone(capacity.record({}, "encrypted_total", 1024 * MiB, 0)[1])
-        self.assertEqual(capacity.record({}, "encrypted_total", 1024 * MiB + 1, 0)[1], "1 GiB encrypted backup budget reached")
+    def test_database_is_bounded_by_ram_and_shared_tmpfs(self):
+        for room in (None, 100 * MiB):
+            limit = capacity.limit_for("database", room)
+            self.assertEqual(limit, 512 * MiB if room is None else 100 * MiB)
+            self.assertIsNone(capacity.record({}, "database", limit, room)[1])
+            self.assertEqual(capacity.record({}, "database", limit + 1, room)[1], "Database exceeds safe in-memory backup budget")
 
-    def test_advisory_metrics_never_fail_the_backup(self):
-        for metric in ("dm_ciphertext", "retention_projection"):
-            state, error = capacity.record({}, metric, 10 * 1024 * MiB, PLENTY)
-            self.assertIsNone(error)
-            self.assertFalse(state["metrics"][metric]["enforced"])
+    def test_media_is_bounded_by_approved_capacity_and_disk_reserve(self):
+        self.assertEqual(capacity.limit_for("media", PLENTY), capacity.MEDIA_BUDGET)
+        self.assertEqual(capacity.limit_for("media", 3 * capacity.GiB), 3 * capacity.GiB)
+        self.assertEqual(capacity.limit_for("media", -1), 0)
+        self.assertIsNotNone(capacity.record({}, "media", 50 * capacity.GiB + 1, PLENTY)[1])
+        self.assertIsNone(capacity.record({}, "repository", 80 * capacity.GiB, None)[1])
+        self.assertEqual(capacity.record({}, "repository", 80 * capacity.GiB + 1, None)[1], "80 GiB encrypted backup repository budget reached")
+
+    def test_room_counts_existing_mirror_and_keeps_disk_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            mirror = Path(directory) / "media"
+            (mirror / "attachments").mkdir(parents=True)
+            (mirror / "attachments" / "a.bin").write_bytes(b"x" * 1000)
+            usage = type("U", (), {"free": capacity.DISK_RESERVE + 5 * capacity.GiB})
+            with patch.object(capacity, "MIRROR", mirror), patch.object(capacity.shutil, "disk_usage", return_value=usage):
+                self.assertEqual(capacity.room_for("media"), 5 * capacity.GiB + 1000)
+                self.assertIsNone(capacity.room_for("repository"))
+
+    def test_advisory_metric_never_fails_the_backup(self):
+        state, error = capacity.record({}, "dm_ciphertext", 100 * capacity.GiB, PLENTY)
+        self.assertIsNone(error)
+        self.assertFalse(state["metrics"]["dm_ciphertext"]["enforced"])
 
     def test_record_is_immutable_and_validated(self):
         original = {"at": "x", "metrics": {}}
         updated, _ = capacity.record(original, "media", 1, PLENTY)
         self.assertEqual(original["metrics"], {})
         self.assertEqual(updated["at"], "x")
-        for metric, size in (("unknown", 1), ("media", -1)):
+        for metric, size in (("unknown", 1), ("media", -1), ("retention_projection", 1)):
             with self.assertRaises(ValueError):
                 capacity.record({}, metric, size, PLENTY)
 
     def test_cli_records_before_failing_closed(self):
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(capacity.shutil, "disk_usage", return_value=type("U", (), {"free": PLENTY})):
+                patch.object(capacity, "room_for", return_value=PLENTY):
             path = Path(directory) / "capacity.json"
             capacity.main(["x", str(path), "reset"])
-            capacity.main(["x", str(path), "retention_projection", str(DM_MESSAGE)])
+            capacity.main(["x", str(path), "dm_ciphertext", str(DM_MESSAGE)])
             with self.assertRaisesRegex(SystemExit, "Media exceeds"):
-                capacity.main(["x", str(path), "media", str(512 * MiB + 1)])
+                capacity.main(["x", str(path), "media", str(capacity.MEDIA_BUDGET + 1)])
             metrics = json.loads(path.read_text())["metrics"]
-            self.assertEqual(metrics["media"], {"bytes": 512 * MiB + 1, "limit": 512 * MiB, "enforced": True})
-            self.assertEqual(metrics["retention_projection"]["bytes"], 31 * DM_MESSAGE)
+            self.assertEqual(metrics["media"], {"bytes": capacity.MEDIA_BUDGET + 1, "limit": capacity.MEDIA_BUDGET, "enforced": True})
+            self.assertEqual(metrics["dm_ciphertext"]["bytes"], DM_MESSAGE)
 
 
 class MonitorCapacityTests(unittest.TestCase):
@@ -87,23 +100,23 @@ class MonitorCapacityTests(unittest.TestCase):
         return state
 
     def test_small_instance_is_healthy(self):
-        self.assertIsNone(self.check(self.record(("database", 11 * MiB), ("media", 5 * MiB),
-                                                 ("retention_projection", 31 * 8 * MiB), ("encrypted_total", 100 * MiB))))
+        self.assertIsNone(self.check(self.record(("database", 11 * MiB), ("media", 5 * MiB), ("repository", 100 * MiB))))
 
-    def test_one_large_dm_message_warns_long_before_the_aggregate_budget_fails(self):
-        # ~100 MB bundles x 31 retained exceed 1 GiB within ~10 days; warn on the first day.
-        record = self.record(("media", DM_MESSAGE), ("dm_ciphertext", DM_MESSAGE),
-                             ("retention_projection", 31 * DM_MESSAGE), ("encrypted_total", DM_MESSAGE))
-        self.assertEqual(self.check(record), "backup-capacity-warning")
+    def test_large_dm_messages_no_longer_exhaust_the_budget(self):
+        # Incremental snapshots store a 100 MB message once, not once per retained daily bundle.
+        record = self.record(("media", 10 * DM_MESSAGE), ("dm_ciphertext", 10 * DM_MESSAGE), ("repository", 11 * DM_MESSAGE))
+        self.assertIsNone(self.check(record))
 
     def test_eighty_percent_threshold(self):
-        self.assertIsNone(self.check(self.record(("media", int(0.79 * 512 * MiB)))))
-        self.assertEqual(self.check(self.record(("media", int(0.8 * 512 * MiB) + 1))), "backup-capacity-warning")
+        GiB = capacity.GiB
+        self.assertIsNone(self.check(self.record(("media", 39 * GiB))))
+        self.assertEqual(self.check(self.record(("media", 40 * GiB + 1))), "backup-capacity-warning")
+        self.assertEqual(self.check(self.record(("repository", 65 * GiB))), "backup-capacity-warning")
 
     def test_budget_failure_is_named(self):
-        self.assertEqual(self.check(self.record(("media", 512 * MiB + 1)), job="exit-code"), "backup-capacity-exceeded")
-        # An over-budget projection alone did not fail the job: other failures keep their own name.
-        self.assertEqual(self.check(self.record(("retention_projection", 2048 * MiB)), job="exit-code"), "backup-job-failed")
+        self.assertEqual(self.check(self.record(("repository", 80 * capacity.GiB + 1)), job="exit-code"), "backup-capacity-exceeded")
+        # An over-budget advisory metric alone did not fail the job: other failures keep their own name.
+        self.assertEqual(self.check(self.record(("dm_ciphertext", 60 * capacity.GiB)), job="exit-code"), "backup-job-failed")
 
     def test_missing_stale_or_invalid_record_fails_closed(self):
         stale = {**self.record(("media", 1)), "at": "2026-10-18T00:00:00Z"}

@@ -26,83 +26,101 @@ Required automated gates include lint, typecheck, migrations, integration tests,
 
 For an operational handover, record deployment revision, external health/readiness checks, maintenance scheduling and last successful execution, last encrypted off-host backup, alert delivery and an isolated restore date. Do not call scheduling or off-host backup delivery complete solely because the scripts or this document exist.
 
-## Encrypted production recovery bundles
+## Encrypted production recovery snapshots
 
-`scripts/production-backup.sh` is a Linux operator job for the Dokploy installation. It captures a
-PostgreSQL custom dump, private object-storage media and recovery configuration (including secrets).
-Plaintext is held only in a restrictive `/dev/shm` temporary directory, removed on exit, and streamed
-through `age` before upload to a dedicated private bucket. The uploader holds only the public age
-recipient; the separate recovery identity is in the operator's 1Password vault. Backup credentials
-are bucket-scoped and live outside Git in `/etc/opendiscord-backup/rclone.conf` (mode 600).
+`scripts/production-backup.sh` is a Linux operator job for the Dokploy installation. It writes a
+PostgreSQL custom dump, all private object-storage media and recovery configuration (including
+secrets) as one snapshot into an encrypted, deduplicating [restic](https://restic.net) repository at
+`opendiscord-backups-private/restic` (rclone backend, bucket-scoped credentials in
+`/etc/opendiscord-backup/rclone.conf`, mode 600). restic encrypts client-side (AES-256 +
+Poly1305). The repository password is `/etc/opendiscord-backup/restic-password` (mode 600); its
+recovery copy is in the operator's 1Password item "openDiscord Private Backup Recovery". Without that
+copy a lost host makes the repository unreadable.
+
+- The database dump and configuration are staged only in `/dev/shm/opendiscord-backup` and removed on exit.
+- Media is mirrored incrementally (`rclone sync`) to `/var/lib/opendiscord-backup/media` (root-only, on
+  the same disk as the PostgreSQL volume that already holds the same personal data). Only new
+  objects are downloaded; restic uploads only new chunks. Deleted media stays in older snapshots.
+- Every attachment reference in this exact dump must exist in the mirror, or the run fails before the
+  snapshot. A concurrent attachment deletion therefore fails the run instead of accepting a gap.
+- After the snapshot the job reads back the dump and manifest from the repository and compares
+  them, runs `forget --keep-daily 30 --prune`, and `check --read-data-subset=N/30` (a rotating
+  thirtieth: all pack data is re-read and verified about once a month). Only then is
+  `/var/backups/opendiscord/last-success` updated (`<time> restic:<snapshot> <repo bytes> <dump sha256>`).
 
 Set `OPENDISCORD_DB_CONTAINER`, `OPENDISCORD_WEB_CONTAINER`, `OPENDISCORD_COMPOSE_DIR` and
 `OPENDISCORD_VOICE_COMPOSE_DIR` to the verified deployed resources. Run only with an outer deadline:
-`timeout --kill-after=30s 1800 scripts/production-backup.sh`, or systemd `TimeoutStartSec=1800` and
-`KillMode=control-group`. The dump has a 30-second lock-wait timeout. The script checks RAM/storage
-budgets, verifies every archived attachment reference exists in the copied media, and compares a full
-readback SHA-256 of the encrypted off-host object before updating `/var/backups/opendiscord/last-success`.
-A concurrent attachment deletion makes the run fail rather than accepting an incomplete bundle.
+systemd `TimeoutStartSec=1800` and `KillMode=control-group`. The dump has a 30-second lock-wait timeout.
 
-The dedicated bucket retains daily recovery bundles for 30 days. The 1 GiB aggregate budget fails
-closed and needs an operator capacity review if reached; there is no automatic unlimited growth.
+Encrypted age bundles written before 2026-10-22 under `daily/` stay untouched and expire through
+the existing 30-day lifecycle rule; their age identity stays in 1Password. **No lifecycle rule may
+match the `restic/` prefix**: expiring repository objects corrupts every snapshot.
 
 #### Backup capacity budgets and early warning
 
-The budgets live in `scripts/backup-capacity.py`, a sibling of the backup script like
-`capture-scanner-recovery.py`. Each run records every measurement (byte counts and limits, never
-content) in `/var/backups/opendiscord/capacity.json` before checking it, so a run that fails at a
-budget still leaves the numbers behind:
+The owner approved an Open Beta capacity of **50 GiB stored media** on 2026-10-22. The app
+refuses uploads beyond `MEDIA_STORAGE_LIMIT_BYTES` (hosted default in `docker-compose.dokploy.yml`:
+53687091200), so accepted uploads cannot exceed what backups are sized for. The budgets live in
+`scripts/backup-capacity.py`. Each run records every measurement (byte counts and limits, never
+content) in `/var/backups/opendiscord/capacity.json` before checking it:
 
 | Metric | Limit | Enforced |
 | --- | --- | --- |
 | `database` (`pg_database_size`) | 512 MiB, and at most 1/4 of free `/dev/shm` | yes |
-| `media` (whole media bucket) | 512 MiB, and at most 1/3 of free `/dev/shm` | yes |
+| `media` (whole media bucket) | 50 GiB, and at most free disk + already mirrored bytes − 20 GiB reserve | yes |
 | `dm_ciphertext` (E2EE DM attachments in this dump, part of `media`) | same as `media` | no, shown separately |
-| `encrypted_total` (bucket contents + this bundle) | 1 GiB | yes |
-| `retention_projection` (this bundle × 31 retained dailies) | 1 GiB | no, early warning |
+| `repository` (restic raw data after prune) | 80 GiB | yes |
 
-Media must sit in RAM because community attachments are plaintext and are copied, checked against
-the dump's attachment references and tarred into the age stream without touching disk. E2EE DM
-attachments are already ciphertext (up to 4 × 25 MB per message, counted against the existing 500 MB
-per-user daily upload quota). They are still copied into each bundle, so the bundle is complete
-without depending on another copy. The server never decrypts them. Ciphertext does not compress.
-Because every daily bundle holds all media, the aggregate budget reaches a steady state of about
-31 × bundle size. One maximum-size DM message (~100 MB) is enough to exhaust 1 GiB within about ten
-days. `retention_projection` reports that on the first day.
+Incremental snapshots store each object once, so retained dailies no longer multiply media: a
+repository holds roughly current media + media deleted within 30 days + 30 compressed dumps.
+The 20 GiB disk reserve protects PostgreSQL on the shared root disk. Raising the media capacity
+requires raising `MEDIA_STORAGE_LIMIT_BYTES`, `MEDIA_BUDGET`/`REPOSITORY_BUDGET` and disk together.
 
 The `backup` monitor mode reads the record after the job checks. It raises
 `backup-capacity-warning` once any metric reaches 80% of its limit (the backups keep succeeding),
 `backup-capacity-exceeded` when a failed run had reached an enforced budget, and
-`backup-capacity-unavailable` if the record is missing, invalid or older than 30 hours. When warned,
-review capacity before the job starts to fail: raise the budgets together with the backup bucket
-quota and host RAM, shorten retention, or move media to incremental off-host copies. Never exclude
-media from the bundle without a verified replacement copy.
+`backup-capacity-unavailable` if the record is missing, invalid or older than 30 hours.
+Never exclude media from backups without a verified replacement copy.
 
 It also checks `opendiscord-maintenance.service` and its timer: the last completion must have
 `Result=success`, a nonzero monotonic completion time no more than 90 minutes old, and an active
 hourly timer. A fresh backup cannot hide `maintenance-job-failed`, `maintenance-stale`,
-`maintenance-timer-inactive` or `maintenance-status-unavailable`. Install the updated monitor at
-both operator paths above; a source merge alone does not update host scripts.
+`maintenance-timer-inactive` or `maintenance-status-unavailable`.
 
-Operator install (manual; update the backup script, helper and monitor together, or the monitor
-reports `backup-capacity-unavailable`). The backup monitor is `opendiscord-monitor.service` (timer
-`opendiscord-monitor.timer`, every five minutes) running `/etc/opendiscord-monitor/monitor.py` with
-`/etc/opendiscord-monitor/config.json`. The scanner and voice monitor units run the same script from
-`/usr/local/sbin/opendiscord-operator-monitor`, so install it to both paths to keep them identical:
+Operator install (manual; a source merge alone does not update host scripts):
 
 ```sh
+apt-get install -y restic                     # Ubuntu 24.04: 0.16.4, same as the CI rehearsal
+install -d -o root -g root -m 700 /var/lib/opendiscord-backup /var/cache/opendiscord-restic
+openssl rand -hex 32 > /etc/opendiscord-backup/restic-password && chmod 600 /etc/opendiscord-backup/restic-password
+# Store the password in 1Password BEFORE the first snapshot, then initialise once:
+RCLONE_CONFIG=/etc/opendiscord-backup/rclone.conf RESTIC_PASSWORD_FILE=/etc/opendiscord-backup/restic-password \
+  restic -r rclone:opendiscord-backup:opendiscord-backups-private/restic init
 install -o root -g root -m 700 scripts/production-backup.sh scripts/backup-capacity.py /etc/opendiscord-backup/
 install -o root -g root -m 700 scripts/operator-monitor.py /etc/opendiscord-monitor/monitor.py
 install -o root -g root -m 755 scripts/operator-monitor.py /usr/local/sbin/opendiscord-operator-monitor
-systemctl start opendiscord-backup.service   # writes the first capacity.json
-cat /var/backups/opendiscord/capacity.json
+systemctl start opendiscord-backup.service && cat /var/backups/opendiscord/last-success
 systemctl start opendiscord-monitor.service && journalctl -u opendiscord-monitor.service -n 3   # expect "status": "healthy"
 ```
-Monitor both failed jobs and backup freshness. A verified ciphertext upload is not yet an isolated
-production-data restore; record the recovery rehearsal separately. Never restore a recovery bundle
-into the live database as a test. Local-volume attachments require extending this S3-oriented job
-before changing the production storage backend.
 
+### Restoring a snapshot (isolated host only)
+
+Never restore into the live database or bucket as a test.
+
+```sh
+export RCLONE_CONFIG=<read-only rclone.conf> RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
+export RESTIC_PASSWORD_FILE=<password from 1Password>
+restic snapshots --host opendiscord --tag daily
+restic restore <snapshot> --target /restore
+# /restore/dev/shm/opendiscord-backup/{database.dump,manifest.txt,config/}  -> pg_restore --no-owner, configuration
+# /restore/var/lib/opendiscord-backup/media/attachments/...                  -> rclone copy to the new private bucket
+```
+
+The CI workflow `media-recovery.yml` rehearses exactly this with the unchanged script: 60 MiB of
+incompressible attachments, a second unchanged snapshot that must add less than 2 MiB, restore into
+a separate database and bucket, table digests, authenticated large-file downloads through the
+restored app, a missing-reference failure that preserves snapshots and `last-success`, and a
+tampered pack that `restic check --read-data` must reject.
 
 ## Operator alerts
 
@@ -195,12 +213,9 @@ Production accounts, policy and data were unchanged.
   configuration is not changed by this file or a source merge. Do not toggle a live legacy issuer
   independently of the coherent rollout below. TURN is enabled with internal TLS port 5349;
   that observation alone does not prove public TCP443 traversal.
-- The current 1 GiB aggregate full-snapshot budget remains inadequate for increased media traffic.
-  The warning/projection is diagnostic, not a capacity solution. Before opening admissions, the
-  operator must approve either an encrypted incremental off-host media design with retention and
-  isolated recovery proof, or a funded full-bundle budget covering at least 31 worst-case bundles
-  plus database growth and RAM headroom. Keep the 30-day recovery policy unless explicitly changed
-  with privacy/legal review. Keep uploads/admissions bounded while this remains unresolved.
+- (Superseded 2026-10-22) The 1 GiB aggregate full-snapshot budget was replaced by incremental
+  encrypted restic snapshots and an owner-approved 50 GiB upload-enforced media capacity; see
+  [recovery snapshots](#encrypted-production-recovery-snapshots).
 - A test alert was accepted by SMTP on this date. The operator explicitly confirmed receipt in the
   designated inbox on 2026-10-21. This proves this test-mail delivery, not user verification/reset
   email, Web Push or safe failure/recovery notification acceptance.
