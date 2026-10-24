@@ -258,7 +258,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
       <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-sm">
         <span className="text-muted-foreground">Your friend code:</span>
         <code className="rounded bg-white/5 px-1.5 py-0.5 text-xs break-all">{userId}</code>
-        <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label="Copy your friend link">
+        <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label={copied ? "Copied your friend link" : "Copy link to add you as a friend"}>
           {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy link"}
         </Button>
       </div>
