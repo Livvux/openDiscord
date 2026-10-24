@@ -29,7 +29,8 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   const appPath = new URL(owner.url()).pathname;
   const id = appPath.split("/").pop()!;
   await member.goto(appPath);
-  await expect(member.getByText(/Public channel: your display name/)).toBeVisible();
+  // React streams the resolved boundary into a hidden node before swapping it in; assert the shown notice.
+  await expect(member.getByText(/Public channel: your display name/).filter({ visible: true })).toBeVisible();
   const composer = member.getByRole("textbox", { name: "Message #public-workshop", exact: true });
   await composer.fill("Hello from the explicitly public workshop <script>alert('no')</script>");
   await expect(member.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
