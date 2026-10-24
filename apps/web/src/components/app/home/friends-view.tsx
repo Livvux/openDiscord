@@ -241,7 +241,7 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
                   <PresenceAvatar userId={p.id} name={p.name} avatar={p.avatar} size="sm" status={null} />
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   {p.relation === null || p.relation === "incoming" ? (
-                    <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add"} ${p.name} as a friend`}
+                    <Button size="sm" disabled={busy} aria-label={`${p.relation === "incoming" ? "Accept" : "Add friend"}: ${p.name}`}
                       onClick={() => send(p.id, (outcome) => setResults((rs) => rs?.map((r) => (r.id === p.id ? { ...r, relation: outcome === "sent" ? "outgoing" : outcome === "accepted" ? "friend" : r.relation } : r)) ?? null))}>
                       {p.relation === "incoming" ? "Accept" : "Add friend"}
                     </Button>
