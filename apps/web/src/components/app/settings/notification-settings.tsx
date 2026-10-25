@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore, useState } from "react";
 import { Switch } from "@/components/ui/switch";
+import { SOUNDS_KEY, soundsEnabled } from "@/lib/sounds/app-sounds";
 import { DESKTOP_NOTIFICATIONS_KEY } from "../notifications-provider";
 
 const supported = () => typeof Notification !== "undefined";
@@ -38,6 +39,19 @@ export function NotificationSettings() {
         Shown while openDiscord is open in a tab, for this browser only. They include the sender, channel and the start of the message.
       </p>
       {message && <p role="alert" className="text-sm text-destructive">{message}</p>}
+      <SoundSettings />
     </div>
+  );
+}
+
+/** Call and message sounds; stored per browser, on by default. */
+function SoundSettings() {
+  const stored = useSyncExternalStore(subscribeStorage, soundsEnabled, () => true);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  return (
+    <label className="flex items-center gap-3 text-sm">
+      <Switch checked={enabled ?? stored} onCheckedChange={(next) => { localStorage.setItem(SOUNDS_KEY, next ? "on" : "off"); setEnabled(next); }} />
+      Sounds for calls, direct messages and mentions
+    </label>
   );
 }

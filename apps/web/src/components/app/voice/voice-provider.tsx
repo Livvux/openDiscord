@@ -6,7 +6,11 @@ import { CallSession, VoiceCallSessionError, type VoiceCallView } from "@/lib/vo
 import { VOICE_LIMITS } from "@/lib/voice/contracts";
 import type { VoiceSource } from "@/lib/voice/media-session";
 import { voiceFrameTransform } from "@/lib/voice/support";
+import { playAppSound } from "@/lib/sounds/app-sounds";
+import { useRepeatingSound } from "@/lib/sounds/use-repeating-sound";
+import { RING_TIMEOUT_MS } from "./dm-call-ring";
 import { prepareCurrentVoiceAudience } from "./voice-audience";
+import { ringingBack, voiceSoundsFor } from "./voice-sounds";
 import { automaticVoiceVerificationSteps } from "./voice-verification";
 
 /** A community voice channel, or with `dm` a direct-message conversation (same encrypted call, different authorization). */
@@ -187,6 +191,9 @@ export function VoiceProvider({ accountId, sessionId, children }: { accountId: s
     } catch (error) { if (mine === revision.current && mounted.current) setError(voiceErrorText(error, source)); }
     finally { if (mine === revision.current && mounted.current) { sourceFlights.current.delete(source); setPendingSources([...sourceFlights.current]); } }
   };
+  const heard = useRef<VoiceCallView | null>(null);
+  useEffect(() => { for (const sound of voiceSoundsFor(heard.current, view)) playAppSound(sound); heard.current = view; }, [view]);
+  useRepeatingSound(ringingBack(!!channel?.dm, view), "ring", RING_TIMEOUT_MS, -10);
   const mountVideo = useCallback((id: string, element: HTMLVideoElement) => {
     try { return current.current?.mountVideo(id, element) ?? (() => {}); }
     catch { return () => {}; } // A synchronous fence can invalidate a rendered tile before its effect runs.
