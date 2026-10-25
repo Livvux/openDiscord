@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DESKTOP_NOTIFICATIONS_KEY } from "@/components/app/notifications-provider";
-import { applyCallNotice, dismissRing, DM_CALL_EVENT, expireRings, type DmCallNotice, type Ring } from "./dm-call-ring";
+import { playAppSound } from "@/lib/sounds/app-sounds";
+import { useRepeatingSound } from "@/lib/sounds/use-repeating-sound";
+import { applyCallNotice, dismissRing, DM_CALL_EVENT, expireRings, RING_TIMEOUT_MS, type DmCallNotice, type Ring } from "./dm-call-ring";
 import { useVoice } from "./voice-provider";
 
 const conversationHref = (id: string) => `/app/messages?c=${encodeURIComponent(id)}`;
@@ -24,6 +26,7 @@ export function DmCallRinger() {
     const onCall = (event: Event) => {
       const notice = (event as CustomEvent<DmCallNotice>).detail;
       setRings((current) => applyCallNotice(current, notice, Date.now(), activeCall.current));
+      if (notice.state === "declined") playAppSound("declined");
       // A background tab still announces the call (sender name only), if the person opted in.
       if (notice.state === "ringing" && document.visibilityState !== "visible" && typeof Notification !== "undefined" && Notification.permission === "granted" && localStorage.getItem(DESKTOP_NOTIFICATIONS_KEY) === "on") {
         const n = new Notification(notice.callerName ?? "Private call", { body: "Incoming call", tag: `call:${notice.conversationId}` });
@@ -35,6 +38,7 @@ export function DmCallRinger() {
     return () => { window.removeEventListener(DM_CALL_EVENT, onCall); window.clearInterval(timer); };
   }, [router]);
   const visible = rings.filter((ring) => ring.conversationId !== activeId || ring.state === "declined");
+  useRepeatingSound(visible.some((ring) => ring.state === "ringing"), "ring", RING_TIMEOUT_MS);
   if (!visible.length) return null;
   return <section aria-label="Calls" className="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 grid w-80 max-w-[calc(100vw-2rem)] gap-2">
     {visible.map((ring) => ring.state === "ringing"

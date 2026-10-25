@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { DmNotice, MentionNotice } from "@/app/api/me/events/route";
 import type { DirectConversation } from "@/lib/dm/contracts";
 import { DM_CALL_EVENT } from "@/components/app/voice/dm-call-ring";
+import { playAppSound } from "@/lib/sounds/app-sounds";
 
 export interface UnreadSummary {
   unread: boolean;
@@ -150,7 +151,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       const watching = window.location.pathname === "/app/messages" && (params.get("to") === notice.senderId || params.get("c") === notice.conversationId) && document.visibilityState === "visible";
       // ?c= opens 1:1 conversations and groups alike.
       const url = `/app/messages?c=${encodeURIComponent(notice.conversationId)}`;
-      if (!watching && !quiet.current) desktopNotifyDm(notice, () => router.push(url));
+      if (!watching && !quiet.current) { playAppSound("message"); desktopNotifyDm(notice, () => router.push(url)); }
     });
     es.addEventListener("call", (e) => window.dispatchEvent(new CustomEvent(DM_CALL_EVENT, { detail: JSON.parse((e as MessageEvent<string>).data) })));
     es.addEventListener("typing", (e) => window.dispatchEvent(new CustomEvent(DM_TYPING_EVENT, { detail: JSON.parse((e as MessageEvent<string>).data) })));
@@ -161,7 +162,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       // Read at event time; usePathname would force this app-wide provider into a Suspense boundary.
       const path = window.location.pathname;
       const watching = path === channelPath && document.visibilityState === "visible";
-      if (!watching && !notice.muted && !quiet.current) desktopNotify(notice, () => router.push(channelPath));
+      if (!watching && !notice.muted && !quiet.current) { playAppSound("mention"); desktopNotify(notice, () => router.push(channelPath)); }
       // The open community counts its own mentions from its stream; others are bumped here.
       if (!path.startsWith(`/app/c/${notice.communityId}`)) {
         setLive((m) => {
