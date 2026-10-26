@@ -8,6 +8,7 @@ import { listBlocked } from "@/server/blocks";
 import { homeFriends } from "@/server/home";
 import { listPublicChannels } from "@/server/public-channels";
 import { requirePageUser } from "@/server/session";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export const metadata: Metadata = { title: "Friends" };
 
@@ -20,7 +21,7 @@ export default function AppHome({ searchParams }: PageProps<"/app">) {
         <UsersIcon aria-hidden className="size-5 text-zinc-400" />
         <h1 className="px-1 font-semibold">Friends</h1>
       </header>
-      <Suspense fallback={<p className="m-auto text-muted-foreground">Loading…</p>}>
+      <Suspense fallback={<div className="m-auto text-primary"><DiamondOrbitSmoothLoader /></div>}>
         <Friends searchParams={searchParams} />
       </Suspense>
     </main>

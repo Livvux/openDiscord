@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { listChannelOverrides, setChannelOverride } from "@/app/app/actions";
 import type { ChannelOverrideView } from "@/server/communities";
 import { Permission } from "@/server/permissions";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 const COLUMNS = {
   text: [
@@ -65,7 +66,7 @@ export function ChannelPermissions({ channelId, kind }: { channelId: string; kin
           : "Set View to Deny for everyone to make this channel private."}{" "}
         Owners and administrators always have access.
       </p>
-      {!rows && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {!rows && !error && <div className="text-primary"><DiamondOrbitSmoothLoader dotSize={4} gap={3} /></div>}
       {rows && (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import "gif-picker-react/style.css";
+import { themeScript } from "@/lib/themes";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -26,7 +27,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" data-scroll-behavior="smooth" className={`${inter.variable} ${geistMono.variable} dark h-full antialiased`}>
+    // suppressHydrationWarning: themeScript sets data-theme on <html> before React hydrates.
+    <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning className={`${inter.variable} ${geistMono.variable} dark h-full antialiased`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="flex min-h-full flex-col bg-background font-sans text-foreground">{children}</body>
     </html>
   );

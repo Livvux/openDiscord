@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { MessagePage, MessageView } from "@/server/messages";
 import { ChannelChat } from "./channel-chat";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 type ThreadPanelProps = Omit<React.ComponentProps<typeof ChannelChat>, "initialPage" | "threadRoot"> & {
   root: MessageView;
@@ -48,7 +49,7 @@ export function ThreadPanel({ root, onClose, ...chat }: ThreadPanelProps) {
         </Button>
       </header>
       {error && <p role="alert" className="p-4 text-sm text-destructive">{error}</p>}
-      {!page && !error && <p className="p-4 text-sm text-muted-foreground">Loading…</p>}
+      {!page && !error && <div className="p-4 text-primary"><DiamondOrbitSmoothLoader dotSize={4} gap={3} /></div>}
       {page && <ChannelChat {...chat} initialPage={page} threadRoot={root} />}
     </aside>
   );

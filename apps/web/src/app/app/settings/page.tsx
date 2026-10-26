@@ -10,6 +10,7 @@ import { AvatarSettings } from "@/components/app/settings/avatar-settings";
 import { ownAvatar } from "@/server/avatars";
 import { mediaEnabled } from "@/server/media";
 import { PasskeySettings } from "@/components/app/settings/passkey-settings";
+import { ThemeSettings } from "@/components/app/settings/theme-settings";
 import { Sessions } from "@/components/app/settings/sessions";
 import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings";
 import { SignOutButton } from "@/app/app/sign-out-button";
@@ -22,6 +23,7 @@ import { PushSettings } from "@/components/app/settings/push-settings";
 import { PresenceSettings } from "@/components/app/settings/presence-settings";
 import { requirePageUser } from "@/server/session";
 import { mailEnabled } from "@/lib/mail";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export const metadata: Metadata = { title: "Account settings" };
 
@@ -32,7 +34,7 @@ export default function AccountSettingsPage() {
         <MobileNavToggle />
         <h1 className="font-semibold">Account settings</h1>
       </header>
-      <Suspense fallback={<p className="p-6 text-muted-foreground">Loading…</p>}>
+      <Suspense fallback={<div className="p-6 text-primary"><DiamondOrbitSmoothLoader /></div>}>
         <Settings />
       </Suspense>
     </main>
@@ -66,6 +68,9 @@ async function Settings() {
       <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />
+      </Section>
+      <Section title="Theme">
+        <ThemeSettings />
       </Section>
       <Section title="Email address" description="Changes require a recent sign-in and verification. Your email is never shown to other members.">
         {mailEnabled ? <EmailSettings email={user.email} /> : <p className="text-sm text-muted-foreground">Email changes are unavailable because this instance has not configured email delivery.</p>}

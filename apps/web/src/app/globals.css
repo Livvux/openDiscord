@@ -181,6 +181,96 @@ html {
   --panel: color-mix(in oklab, var(--color-brand-charcoal) 98%, white);
 }
 
+/* Color themes (src/lib/themes.ts) override the surfaces and accent of the default theme above.
+   Primaries keep white text above 4.5:1 (WCAG AA). */
+.dark[data-theme="discord"] {
+  --background: #313338;
+  --foreground: #dbdee1;
+  --card: #2b2d31;
+  --card-foreground: #dbdee1;
+  --popover: #111214;
+  --popover-foreground: #dbdee1;
+  --primary: #5865f2;
+  --muted-foreground: #b5bac1;
+  --ring: #5865f2;
+  --sidebar: #1e1f22;
+  --sidebar-foreground: #dbdee1;
+  --sidebar-primary: #5865f2;
+  --sidebar-ring: #5865f2;
+  --success: #23a55a;
+  --panel: #2b2d31;
+}
+
+.dark[data-theme="midnight"] {
+  --background: #000000;
+  --card: #0a0a0a;
+  --popover: #121212;
+  --primary: #2563eb; /* blue-600 */
+  --ring: #3b82f6;
+  --sidebar: #000000;
+  --sidebar-primary: #2563eb;
+  --sidebar-ring: #3b82f6;
+  --panel: #0a0a0a;
+}
+
+.dark[data-theme="forest"] {
+  --background: #0c1411;
+  --card: #111b17;
+  --popover: #15211c;
+  --primary: #047857; /* emerald-700 */
+  --ring: #10b981;
+  --sidebar: #08100d;
+  --sidebar-primary: #047857;
+  --sidebar-ring: #10b981;
+  --panel: #0f1814;
+}
+
+.dark[data-theme="rose"] {
+  --background: #1c1917; /* stone-900 */
+  --card: #221e1c;
+  --popover: #292524;
+  --primary: #e11d48; /* rose-600 */
+  --muted-foreground: #a8a29e;
+  --ring: #f43f5e;
+  --sidebar: #141110;
+  --sidebar-primary: #e11d48;
+  --sidebar-ring: #f43f5e;
+  --panel: #201c1a;
+}
+
+/* Dot-matrix loaders from atomloader.roothq.tech (MIT); the registry items ship without their CSS. */
+.dot-loader {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 5), var(--dot-size, 5px));
+  grid-template-rows: repeat(var(--rows, 5), var(--dot-size, 5px));
+  gap: var(--gap, 4px);
+  width: max-content;
+  height: max-content;
+}
+.dot-loader span {
+  grid-column: var(--x);
+  grid-row: var(--y);
+  width: var(--dot-size, 5px);
+  height: var(--dot-size, 5px);
+  border-radius: 50%;
+  background: var(--dot-bg, var(--dot-color, currentColor));
+  opacity: var(--idle-opacity, 0.08);
+}
+.dot-loader span.active {
+  animation: dot-orbit var(--speed, 1.2s) ease-in-out var(--delay, 0ms) infinite;
+}
+.dot-loader.has-bloom span.active {
+  filter: drop-shadow(0 0 3px var(--dot-bg, var(--dot-color, currentColor)));
+}
+@keyframes dot-orbit {
+  0%, 100% { opacity: 0.15; transform: scale(0.8); }
+  20% { opacity: 1; transform: scale(1.2); }
+  60% { opacity: 0.35; transform: scale(0.95); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot-loader span.active { opacity: 0.95; }
+}
+
 /* Keep native scrolling and dragging, with a narrow track matching the app. */
 .dark * {
   scrollbar-width: thin;
