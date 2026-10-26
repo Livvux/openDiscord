@@ -22,6 +22,7 @@ import { listAuditLog, listBans, listMembers, listRoles, type AuditEntry } from 
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
 import { requirePageUser } from "@/server/session";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export const metadata: Metadata = { title: "Community settings" };
 
@@ -78,7 +79,7 @@ export default function CommunitySettingsPage({ params }: PageProps<"/app/c/[com
         <MobileNavToggle />
         <h1 className="font-semibold">Community settings</h1>
       </header>
-      <Suspense fallback={<p className="p-6 text-muted-foreground">Loading…</p>}>
+      <Suspense fallback={<div className="p-6 text-primary"><DiamondOrbitSmoothLoader /></div>}>
         <Settings params={params} />
       </Suspense>
     </main>

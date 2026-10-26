@@ -11,10 +11,11 @@ import { blockedIds } from "@/server/blocks";
 import { listMembers } from "@/server/moderation";
 import { loadCommunityView } from "@/server/pages";
 import { requirePageUser } from "@/server/session";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export default function CommunityLayout({ params, children }: LayoutProps<"/app/c/[communityId]">) {
   return (
-    <Suspense fallback={<p className="m-auto text-muted-foreground">Loading…</p>}>
+    <Suspense fallback={<div className="m-auto text-primary"><DiamondOrbitSmoothLoader /></div>}>
       <CommunityShell params={params}>{children}</CommunityShell>
     </Suspense>
   );

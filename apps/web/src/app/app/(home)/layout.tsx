@@ -8,6 +8,7 @@ import { MobilePanel } from "@/components/app/mobile-nav";
 import type { PresenceStatus } from "@/lib/presence";
 import { homeConversations, homeFriends } from "@/server/home";
 import { requirePageUser } from "@/server/session";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export default function HomeLayout({ children }: LayoutProps<"/app">) {
   return (
@@ -16,7 +17,7 @@ export default function HomeLayout({ children }: LayoutProps<"/app">) {
         <header className="flex h-12 items-center border-b border-white/5 px-5">
           <h2 className="font-semibold text-zinc-100">Home</h2>
         </header>
-        <Suspense fallback={<p className="p-4 text-xs text-muted-foreground">Loading…</p>}>
+        <Suspense fallback={<div className="p-4 text-primary"><DiamondOrbitSmoothLoader dotSize={4} gap={3} /></div>}>
           <HomeSidebar />
         </Suspense>
       </MobilePanel>

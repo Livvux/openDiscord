@@ -4,10 +4,11 @@ import { BanAppealForm } from "@/components/app/ban-appeals";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { listOwnAppealHistory, listOwnRestrictions } from "@/server/community-trust";
 import { requirePageUser } from "@/server/session";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 export const metadata: Metadata = { title: "Your community restrictions" };
 export default function RestrictionsPage() {
-  return <main className="min-w-0 flex-1 overflow-y-auto"><header className="flex min-h-12 items-center gap-2 border-b px-3"><MobileNavToggle /><h1 className="font-semibold">Your community restrictions</h1></header><Suspense fallback={<p className="p-6">Loading…</p>}><Restrictions /></Suspense></main>;
+  return <main className="min-w-0 flex-1 overflow-y-auto"><header className="flex min-h-12 items-center gap-2 border-b px-3"><MobileNavToggle /><h1 className="font-semibold">Your community restrictions</h1></header><Suspense fallback={<div className="p-6 text-primary"><DiamondOrbitSmoothLoader /></div>}><Restrictions /></Suspense></main>;
 }
 async function Restrictions() {
   const user = await requirePageUser();

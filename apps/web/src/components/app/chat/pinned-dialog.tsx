@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import type { MessageView } from "@/server/messages";
 import { MessageContent } from "./message-item";
+import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
@@ -31,7 +32,7 @@ export function PinnedDialog({ channelId, channelName }: { channelId: string; ch
           <DialogTitle>Pinned in #{channelName}</DialogTitle>
         </DialogHeader>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        {!messages && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {!messages && !error && <div className="text-primary"><DiamondOrbitSmoothLoader dotSize={4} gap={3} /></div>}
         {messages?.length === 0 && <p className="text-sm text-muted-foreground">Nothing pinned yet. Moderators can pin messages from their menu.</p>}
         {messages && messages.length > 0 && (
           <ol className="divide-y rounded-lg border">
