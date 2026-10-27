@@ -47,8 +47,9 @@ test.describe("communities", () => {
     // Members can't moderate: no kick/ban controls, no channel management.
     await expect(member.getByRole("button", { name: "Create channel" })).toHaveCount(0);
     await member.getByRole("link", { name: "Community info" }).click();
+    await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Members", exact: true }).click();
     await expect(member.getByRole("button", { name: /^Kick / })).toHaveCount(0);
-    await member.getByRole("link", { name: "general" }).click();
+    await member.getByRole("button", { name: "Close settings" }).click();
     await expect(member.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
 
     // The owner removes the member's message; it disappears for the member live.
@@ -62,8 +63,10 @@ test.describe("communities", () => {
     // The owner kicks the member, who is sent out of the community.
     await owner.getByRole("link", { name: "Community settings" }).click();
     owner.once("dialog", (d) => d.accept("testing kicks"));
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Members", exact: true }).click();
     await owner.getByRole("button", { name: "Kick Max Member" }).click();
     await expect(member).toHaveURL(/\/app$/);
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Audit log", exact: true }).click();
     await expect(owner.getByText("testing kicks")).toBeVisible();
 
     // Their old channel URL now shows "not found" (streamed, so the HTTP status is already sent).
@@ -186,6 +189,7 @@ test.describe("communities", () => {
     await sendMessage(page, "exported words");
 
     await openAccountSettings(page);
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Your data", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("link", { name: "Download my data" }).click();
     const download = await downloadPromise;
@@ -194,17 +198,20 @@ test.describe("communities", () => {
     expect(exported.messages.map((m: { content: string }) => m.content)).toContain("exported words");
     expect(JSON.stringify(exported)).not.toMatch(/password/i);
 
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Delete account", exact: true }).click();
     // Deletion is blocked while owning a community.
     await expect(page.getByText(/You own Temporary/)).toBeVisible();
     await expectNoA11yViolations(page);
 
-    await page.getByRole("link", { name: "Temporary" }).click();
+    await page.getByRole("button", { name: "Close settings" }).click();
     await page.getByRole("link", { name: "Community settings" }).click();
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Delete community", exact: true }).click();
     await page.getByLabel("Type the community name to confirm").fill("Temporary");
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page).toHaveURL(/\/app$/);
 
     await openAccountSettings(page);
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Delete account", exact: true }).click();
     await page.getByLabel("Confirm with your password").fill(PASSWORD);
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Delete my account" }).click();

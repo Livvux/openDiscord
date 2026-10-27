@@ -24,7 +24,7 @@ export function RailHomeLink({ initialUnread = 0 }: { initialUnread?: number }) 
         className={railTile(active)}
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- static SVG, no optimisation needed */}
-        <img src="/brand/symbol-flat.svg" alt="" width={28} height={28} />
+        <img src="/brand/symbol-white.svg" alt="" width={28} height={28} />
         <RailBadge count={unread} data="data-home-unread" />
       </Link>
     </div>

@@ -24,6 +24,7 @@ test.describe("member list", () => {
 
     // Opting in moves the member to the online group on a later load.
     await member.goto("/app/settings");
+    await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Online status", exact: true }).click();
     await member.getByRole("switch", { name: /when I'm online/ }).click();
     await expect(member.getByRole("switch", { name: /when I'm online/ })).toBeChecked();
     await member.goBack();

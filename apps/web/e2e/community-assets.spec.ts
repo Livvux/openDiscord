@@ -17,6 +17,7 @@ test.describe("private community images", () => {
     const channelUrl = page.url();
     const communityId = /\/c\/([^/]+)/.exec(channelUrl)![1];
     await page.goto(`/app/c/${communityId}/settings`);
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Emoji and stickers", exact: true }).click();
     const imageLibrary = page.getByRole("region", { name: "Emoji and stickers", exact: true });
     await expect(imageLibrary).toBeVisible();
     for (const kind of ["emoji", "sticker"]) {
@@ -75,6 +76,7 @@ test.describe("private community images", () => {
     const imageUrl = await log.getByRole("img", { name: ":test_emoji:", exact: true }).first().getAttribute("src");
     expect((await chat.request.get(imageUrl!)).headers()["cache-control"]).toBe("private, no-store");
     await page.goto(`/app/c/${communityId}/settings`);
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Export", exact: true }).click();
     const archiveLink = page.getByRole("link", { name: "Download archive with files", exact: true });
     const archiveResponse = await page.request.get((await archiveLink.getAttribute("href"))!);
     expect(archiveResponse.status()).toBe(200);
@@ -87,6 +89,7 @@ test.describe("private community images", () => {
     await expect(page.getByRole("log").getByRole("img", { name: ":test_emoji:", exact: true })).toBeVisible();
     expect(await page.getByRole("log").getByRole("img", { name: ":test_emoji:", exact: true }).getAttribute("src")).not.toBe(imageUrl);
     await page.goto(`/app/c/${communityId}/settings`);
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Emoji and stickers", exact: true }).click();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete test_emoji", exact: true }).click();
     await expect(page.getByRole("button", { name: "Delete test_emoji", exact: true })).toHaveCount(0);

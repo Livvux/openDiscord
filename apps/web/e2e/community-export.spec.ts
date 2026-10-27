@@ -16,6 +16,7 @@ test.describe("community export and import", () => {
     await expect(owner.getByRole("log").locator("strong", { hasText: "First" })).toBeVisible();
 
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Export", exact: true }).click();
     const downloadEvent = owner.waitForEvent("download");
     await owner.getByRole("link", { name: "Download community export" }).click();
     const file = await (await downloadEvent).path();
@@ -23,6 +24,7 @@ test.describe("community export and import", () => {
     expect(data.format).toBe("opendiscord.community-export");
     expect(data.messages).toHaveLength(1);
 
+    await owner.getByRole("button", { name: "Close settings" }).click();
     await owner.getByRole("button", { name: "Create a community" }).first().click();
     await expectNoA11yViolations(owner);
     await withCommunityImport(async () => {
@@ -76,10 +78,10 @@ test("the owner migrates a complete archive with private image and binary files"
     await expect.poll(async () => await settings.isVisible() || await toggle.isVisible()).toBe(true);
     if (!await settings.isVisible()) await toggle.click();
     await settings.click();
-    await closeNavigation();
     await expect(owner).toHaveTitle("Community settings · openDiscord");
     await expectNoA11yViolations(owner);
     expect(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Export", exact: true }).click();
     const downloadEvent = owner.waitForEvent("download");
     await owner.getByRole("link", { name: "Download archive with files", exact: true }).click();
     const download = await downloadEvent;
@@ -88,6 +90,7 @@ test("the owner migrates a complete archive with private image and binary files"
     if (!path) throw new Error("Archive download missing");
     const archive = await readFile(path);
     expect([...archive.subarray(0, 2)]).toEqual([31, 139]);
+    await owner.getByRole("button", { name: "Close settings" }).click();
     const create = owner.getByRole("button", { name: "Create a community", exact: true }).first();
     if (!await create.isVisible()) await toggle.click();
     await create.click();
@@ -113,7 +116,7 @@ test("the owner migrates a complete archive with private image and binary files"
     expect(await readFile(filePath)).toEqual(binary);
     expect(await owner.evaluate(() => "archiveMustNotExecute" in window)).toBe(false);
     await expectNoA11yViolations(owner);
-    await expect(owner.getByRole("button", { name: "Send message", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(owner.getByRole("textbox", { name: "Message #general", exact: true })).toBeInViewport({ ratio: 1 });
     expect(await message.locator("time").evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(32);
     await owner.screenshot({ path: info.outputPath("complete-community-archive.png"), fullPage: true });
     expect(errors).toEqual([]);

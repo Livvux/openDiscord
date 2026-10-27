@@ -12,6 +12,7 @@ test.describe("web push", () => {
     await page.context().grantPermissions(["notifications"]);
     await signUp(page, "Pat Push");
     await page.goto("/app/settings");
+    await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Notifications", exact: true }).click();
     const toggle = page.getByRole("switch", { name: /Push notifications for mentions/ });
     await expectNoA11yViolations(page);
     await toggle.click();

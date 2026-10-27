@@ -27,6 +27,7 @@ test.describe("unread state and mentions", () => {
       Object.assign(window, { Notification: FakeNotification });
     });
     await member.goto("/app/settings");
+    await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Notifications", exact: true }).click();
     await member.getByRole("switch", { name: /Desktop notifications/ }).click();
     await expect(member.getByRole("switch", { name: /Desktop notifications/ })).toBeChecked();
     await expectNoA11yViolations(member);

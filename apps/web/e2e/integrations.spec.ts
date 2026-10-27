@@ -12,6 +12,7 @@ test.describe("bots and webhooks", () => {
     const member = await joinAsNewUser(browser, "Jo Joiner", invitePath);
 
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Bots and webhooks", exact: true }).click();
     await owner.getByLabel("New webhook").fill("CI");
     await owner.getByRole("button", { name: "Create webhook" }).click();
     const url = await owner.getByLabel(/Webhook URL/).inputValue();
@@ -20,7 +21,7 @@ test.describe("bots and webhooks", () => {
     const posted = await request.post(url, { data: { content: "Deploy **finished**" } });
     expect(posted.status()).toBe(201);
     const msg = member.getByRole("log").getByRole("listitem").filter({ hasText: "Deploy finished" });
-    await expect(msg.getByText("BOT")).toBeVisible();
+    await expect(msg.getByText("APP", { exact: true })).toBeVisible();
     await expect(msg.locator("strong", { hasText: "finished" })).toBeVisible();
     expect((await request.post(url.replace(/[^/]+$/, `od_wh_${"x".repeat(43)}`), { data: { content: "forged" } })).status()).toBe(404);
 
