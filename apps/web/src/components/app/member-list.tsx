@@ -25,9 +25,10 @@ interface MemberListProps {
 const STORAGE_KEY = "member-list-hidden";
 const DESKTOP = "(min-width: 1024px)";
 const DOCKED_EVENT = "member-list-docked";
-const MemberListContext = createContext<{ shown: boolean; toggle: (trigger: HTMLElement) => void }>({ shown: false, toggle: () => {} });
+const MemberListContext = createContext<{ shown: boolean; toggle: (trigger: HTMLElement) => void; panel: React.ReactNode; members: ListedMember[] }>({ shown: false, toggle: () => {}, panel: null, members: [] });
 
-/** Right-hand member list: docked from lg up (remembered per browser), an overlay below. */
+/** Right-hand member list: docked from lg up (remembered per browser), an overlay below. The state lives with the
+ * community; the channel page places it under its header with `MemberListPanel`, as Discord does. */
 export function MemberListProvider({ members, currentUserId, blockedIds, children }: MemberListProps & { children: React.ReactNode }) {
   const [overlay, setOverlay] = useState(false);
   const overlayTrigger = useRef<HTMLElement | null>(null);
@@ -61,17 +62,18 @@ export function MemberListProvider({ members, currentUserId, blockedIds, childre
   };
 
   return (
-    <MemberListContext.Provider value={{ shown: desktop ? docked : overlay, toggle }}>
+    <MemberListContext.Provider value={{ shown: desktop ? docked : overlay, toggle, members, panel: inChannel && (
+      <>
+        {overlay && <div aria-hidden className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={closeOverlay} />}
+        <aside
+          aria-label="Members"
+          className={`w-66 shrink-0 flex-col overflow-y-auto border-l bg-panel ${docked ? "lg:flex" : "lg:hidden"} ${overlay ? "max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:flex max-lg:pt-[env(safe-area-inset-top)] max-lg:pb-[env(safe-area-inset-bottom)]" : "max-lg:hidden"}`}
+        >
+          <MemberGroups members={members} currentUserId={currentUserId} blockedIds={blockedIds} />
+        </aside>
+      </>
+    ) }}>
       {children}
-      {inChannel && overlay && <div aria-hidden className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={closeOverlay} />}
-      {inChannel && (
-      <aside
-        aria-label="Members"
-        className={`w-60 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-panel ${docked ? "lg:flex" : "lg:hidden"} ${overlay ? "max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:flex max-lg:pt-[env(safe-area-inset-top)] max-lg:pb-[env(safe-area-inset-bottom)]" : "max-lg:hidden"}`}
-      >
-        <MemberGroups members={members} currentUserId={currentUserId} blockedIds={blockedIds} />
-      </aside>
-      )}
     </MemberListContext.Provider>
   );
 }
@@ -99,10 +101,10 @@ function MemberGroups({ members, currentUserId, blockedIds }: MemberListProps) {
     { label: "Offline", members: members.filter((m) => !online.has(m.userId)) },
   ].filter((g) => g.members.length > 0);
   return (
-    <div className="flex flex-col gap-4 p-3">
+    <div className="flex flex-col px-2 pb-4">
       {groups.map((group) => (
         <section key={group.label} aria-label={`${group.label} members`}>
-          <h2 className="mb-1 px-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
+          <h2 className="px-2 pt-5 pb-1 text-sm font-medium text-muted-foreground">
             {group.label} — {group.members.length}
           </h2>
           <ul>
@@ -110,11 +112,10 @@ function MemberGroups({ members, currentUserId, blockedIds }: MemberListProps) {
               <UserContextMenu key={m.userId} userId={m.userId} name={m.name} currentUserId={currentUserId} blocked={blocked.has(m.userId)}>
                 <li className="rounded-md focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
                   <UserProfilePopover userId={m.userId} currentUserId={currentUserId} render={
-                    <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring">
-                      <span className={group.label === "Offline" ? "opacity-50" : undefined}>
-                        <PresenceAvatar userId={m.userId} name={m.name} avatar={m.avatar} size="sm" announce />
-                      </span>
-                      <span className={`truncate text-sm ${group.label === "Offline" ? "text-zinc-400" : "text-zinc-200"}`}>{m.name}</span>
+                    <button type="button" className="group/member flex h-[42px] w-full items-center gap-3 rounded-lg px-2 text-left hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:outline-ring data-popup-open:bg-white/10">
+                      {/* Discord dims offline members; only the avatar fades so the name keeps AA contrast. */}
+                      <span className={group.label === "Offline" ? "opacity-40 group-hover/member:opacity-100" : undefined}><PresenceAvatar userId={m.userId} name={m.name} avatar={m.avatar} announce /></span>
+                      <span className="truncate text-base font-medium text-muted-foreground">{m.name}</span>
                       {m.isOwner && <CrownIcon aria-label="Owner" className="size-3.5 shrink-0 text-amber-400" />}
                     </button>
                   } />
@@ -126,6 +127,16 @@ function MemberGroups({ members, currentUserId, blockedIds }: MemberListProps) {
       ))}
     </div>
   );
+}
+
+/** Display names of the community's members, for typing notices. */
+export function useMemberNames(ids: string[]): string[] {
+  const { members } = useContext(MemberListContext);
+  return ids.map((id) => members.find((m) => m.userId === id)?.name ?? "Someone");
+}
+
+export function MemberListPanel() {
+  return useContext(MemberListContext).panel;
 }
 
 export function MemberListToggle() {

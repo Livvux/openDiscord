@@ -17,6 +17,12 @@ function needsNativeMenu(event: React.SyntheticEvent<HTMLElement>) {
     || (target instanceof Element && !!target.closest("input, textarea, select, [contenteditable]"));
 }
 
+/** Opens the enclosing context menu from an ordinary button, below it (Discord's server "⌄" and message "…"). */
+export function openContextMenuFrom(button: HTMLElement) {
+  const rect = button.getBoundingClientRect();
+  button.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left, clientY: rect.bottom + 4 }));
+}
+
 function ContextMenuTrigger({ onKeyDown, onContextMenuCapture, onTouchStartCapture, onTouchEnd, tabIndex = 0, ...props }: ContextMenuPrimitive.Trigger.Props) {
   return (
     <ContextMenuPrimitive.Trigger

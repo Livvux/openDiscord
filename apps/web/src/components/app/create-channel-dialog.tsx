@@ -33,7 +33,7 @@ export function CreateChannelDialog({ communityId, voiceEnabled, isOwner }: { co
 
   return (
     <Dialog open={open} onOpenChange={(o) => (setOpen(o), setError(null))}>
-      <DialogTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Create channel" />}>
+      <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Create channel" title="Create channel" className="text-muted-foreground hover:text-sidebar-foreground" />}>
         <PlusIcon />
       </DialogTrigger>
       <DialogContent className="max-h-[85dvh] overflow-y-auto">

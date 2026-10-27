@@ -183,22 +183,26 @@ html {
 
 /* Color themes (src/lib/themes.ts) override the surfaces and accent of the default theme above.
    Primaries keep white text above 4.5:1 (WCAG AA). */
+/* Discord's 2025 dark palette, sampled from discord.com: one shell tone for title bar, rail and channel list,
+   a lighter chat surface, and raised cards for the user panel, composer and popouts. */
 .dark[data-theme="discord"] {
-  --background: #313338;
-  --foreground: #dbdee1;
-  --card: #2b2d31;
-  --card-foreground: #dbdee1;
-  --popover: #111214;
-  --popover-foreground: #dbdee1;
+  --background: #323339;
+  --foreground: #f2f3f5;
+  --card: #393a41;
+  --card-foreground: #f2f3f5;
+  --popover: #393a41;
+  --popover-foreground: #f2f3f5;
   --primary: #5865f2;
-  --muted-foreground: #b5bac1;
+  --muted-foreground: #abacb2;
+  --border: rgb(151 151 159 / 12%);
   --ring: #5865f2;
-  --sidebar: #1e1f22;
-  --sidebar-foreground: #dbdee1;
+  --sidebar: #2c2d32;
+  --sidebar-foreground: #f2f3f5;
   --sidebar-primary: #5865f2;
+  --sidebar-border: rgb(151 151 159 / 12%);
   --sidebar-ring: #5865f2;
   --success: #23a55a;
-  --panel: #2b2d31;
+  --panel: #2c2d32;
 }
 
 .dark[data-theme="midnight"] {
@@ -270,6 +274,23 @@ html {
 @media (prefers-reduced-motion: reduce) {
   .dot-loader span.active { opacity: 0.95; }
 }
+
+/* Discord's shell: 72px server rail, a resizable-looking channel column, and the user panel floating across both. */
+[data-app-shell] {
+  --rail-w: 72px;
+  --sidebar-w: 240px;
+}
+@media (width >= 48rem) {
+  [data-app-shell] { --sidebar-w: 300px; }
+}
+/* Status dots cut out of whatever surface the avatar sits on. */
+[data-app-shell] { --avatar-ring: var(--background); }
+[data-sidebar], aside[aria-label="Members"] { --avatar-ring: var(--panel); }
+
+/* Pages without a channel column (settings, admin) shrink the panel to the avatar. */
+[data-user-panel] { width: calc(var(--rail-w) - 16px); }
+[data-app-shell]:has([data-sidebar]) [data-user-panel] { width: calc(var(--rail-w) + var(--sidebar-w) - 16px); }
+[data-app-shell]:not(:has([data-sidebar])) [data-user-panel-wide] { display: none; }
 
 /* Keep native scrolling and dragging, with a narrow track matching the app. */
 .dark * {

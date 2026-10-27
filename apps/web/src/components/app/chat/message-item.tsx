@@ -2,21 +2,20 @@
 
 import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
 
-import { CopyIcon, CornerUpLeftIcon, FileDownIcon, FlagIcon, HashIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
+import { CopyIcon, CornerUpLeftIcon, EllipsisIcon, FileDownIcon, FlagIcon, HashIcon, MailIcon, MessagesSquareIcon, PencilIcon, PinIcon, PinOffIcon, SmilePlusIcon, Trash2Icon, UserXIcon } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import { useId, useRef, useState, useTransition } from "react";
 import { blockUser, deleteMessage, editMessage, setPinned, toggleReaction } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLinkItem, ContextMenuSeparator, ContextMenuTrigger, openContextMenuFrom } from "@/components/ui/context-menu";
+import Link from "next/link";
 import { MESSAGE_MAX_LENGTH } from "@/lib/limits";
 import { shortFilename } from "@/lib/filename";
 import { renderMarkdown } from "@/lib/markdown";
 import { decodeMentions, encodeMentions, type Mention } from "@/lib/mentions";
 import type { MessageView } from "@/server/messages";
 import { ReportDialog } from "../report-dialog";
-import { nameColor } from "../avatar";
-import { PresenceAvatar } from "../presence-avatar";
+import { Avatar, nameColor } from "../avatar";
 import { UserContextMenu } from "../user-context-menu";
 
 import { assetText, assetTokens, decodeAssetTokens, encodeAssetShortcodes, type AssetView } from "@/lib/community-assets";
@@ -27,7 +26,20 @@ import { GifEmbed } from "../gif-embed";
 import { gifSource } from "@/lib/gifs";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short" });
+const DAY_MS = 86_400_000;
+
+const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
+/** Discord's message stamp: "Today at 08:07", "Yesterday at 20:55", otherwise the date and time. */
+export function messageTimestamp(date: Date, now = new Date()): string {
+  const days = Math.round((dayStart(now) - dayStart(date)) / DAY_MS);
+  const time = timeFormat.format(date);
+  if (days === 0) return `Today at ${time}`;
+  if (days === 1) return `Yesterday at ${time}`;
+  return `${dateFormat.format(date)} ${time}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -42,7 +54,7 @@ export function MessageContent({ content, mentions, currentUserId, assets = [] }
   return renderMarkdown(content, (id, key) => (
     <span
       key={key}
-      className={`rounded px-0.5 font-medium ${id === currentUserId ? "bg-amber-400/25 text-amber-100" : "bg-primary/20 text-indigo-200"}`}
+      className={`rounded-[3px] px-0.5 font-medium ${id === currentUserId ? "bg-amber-400/25 text-amber-100" : "bg-primary/25 text-[#c9cdfb] hover:bg-primary hover:text-white"}`}
     >
       @{names.get(id) ?? "unknown member"}
     </span>
@@ -150,8 +162,8 @@ export function MessageItem(props: MessageItemProps) {
 
   if (blocked && !revealed) {
     return (
-      <li className={`flex gap-3 px-5 py-0.5 text-sm text-zinc-400 ${grouped ? "" : "mt-4"}`}>
-        <div className="w-8 shrink-0" />
+      <li className={`flex gap-4 px-4 py-0.5 text-sm text-muted-foreground ${grouped ? "" : "mt-[17px]"}`}>
+        <div className="w-10 shrink-0" />
         <p>
           Message from a blocked person.{" "}
           <button type="button" aria-label="Show blocked message" className="underline hover:text-zinc-200" onClick={() => setRevealed(true)}>Show</button>
@@ -165,42 +177,47 @@ export function MessageItem(props: MessageItemProps) {
     <ContextMenuTrigger render={<li />}
       data-message-id={message.id}
       tabIndex={0}
-      className={`group relative flex gap-3 px-5 outline-none hover:bg-white/[0.03] focus-within:bg-white/[0.03] [content-visibility:auto] ${grouped ? "py-0.5" : "mt-4 py-0.5"} ${mentionsMe ? "border-l-2 border-amber-400 bg-amber-400/[0.07]" : ""}`}
+      className={`group relative flex gap-4 py-0.5 pr-12 pl-4 outline-none hover:bg-black/[0.06] focus-within:bg-black/[0.06] ${grouped ? "" : "mt-[17px]"} ${mentionsMe ? "bg-amber-400/[0.08] shadow-[inset_2px_0_0_var(--color-amber-400)] hover:bg-amber-400/[0.11]" : ""}`}
       aria-busy={pending || undefined}
     >
-      <div className="w-8 shrink-0">
-        {!grouped && (message.authorImported ? <PresenceAvatar userId={message.authorId} name={message.authorName} avatar={message.authorAvatar} /> : (
+      <div className={`w-10 shrink-0 ${message.replyTo && !grouped ? "pt-[22px]" : "pt-0.5"}`}>
+        {grouped ? (
+          <time dateTime={message.createdAt} aria-hidden className="-mx-2 block w-14 pt-0.5 text-center text-[11px] leading-5 whitespace-nowrap text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" suppressHydrationWarning>
+            {timeFormat.format(created)}
+          </time>
+        ) : message.authorImported ? <Avatar name={message.authorName} avatar={message.authorAvatar} size="chat" /> : (
           <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} profileOnClick>
-            <button type="button" aria-label={`View profile of ${message.authorName}`} className="rounded-full focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={message.authorId} name={message.authorName} avatar={message.authorAvatar} /></button>
+            <button type="button" aria-label={`View profile of ${message.authorName}`} className="rounded-full focus-visible:outline-2 focus-visible:outline-ring active:translate-y-px"><Avatar name={message.authorName} avatar={message.authorAvatar} size="chat" /></button>
           </UserContextMenu>
-        ))}
+        )}
       </div>
       <div className="min-w-0 flex-1">
         {message.replyTo && (
           <button
             type="button"
             onClick={(e) => jumpToReply(e, message.replyTo!.id)}
-            className="flex max-w-full items-center gap-1 truncate text-left text-xs text-zinc-400 hover:text-zinc-200"
+            className="relative mb-0.5 flex h-[18px] max-w-full items-center gap-1 text-left text-sm text-muted-foreground hover:text-foreground"
           >
-            <CornerUpLeftIcon aria-hidden className="size-3 shrink-0" />
+            {/* Discord's reply spine, from above the avatar to the quoted line. */}
+            <span aria-hidden className="absolute top-[9px] right-[calc(100%+4px)] h-3 w-[34px] rounded-tl-md border-t-2 border-l-2 border-muted-foreground/40" />
             <span className="sr-only">Reply to </span>
-            <span className={`font-medium ${nameColor(message.replyTo.authorImported ? message.replyTo.authorName : message.replyTo.authorId)}`}>{message.replyTo.authorName}</span>
+            <span className={`shrink-0 font-medium ${nameColor(message.replyTo.authorImported ? message.replyTo.authorName : message.replyTo.authorId)}`}><span aria-hidden>@</span>{message.replyTo.authorName}</span>
             {message.replyTo.authorImported && <span className="text-[10px] text-zinc-500">(imported)</span>}
             <span className="truncate">{replyBlocked ? "Message from a blocked person" : message.replyTo.excerpt || "an image"}</span>
           </button>
         )}
         {!grouped && (
-          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <p className="flex flex-wrap items-baseline gap-x-2 leading-[1.375rem]">
             {/* Imported authors share the importer's account, so colour them by name instead. */}
-            {message.authorImported ? <span className={`font-medium ${nameColor(message.authorName)}`}>{message.authorName}</span> : (
+            {message.authorImported ? <span className={`text-base font-medium ${nameColor(message.authorName)}`}>{message.authorName}</span> : (
               <UserContextMenu userId={message.authorId} name={message.authorName} currentUserId={currentUserId} blocked={blocked} onError={setError} profileOnClick>
-                <button type="button" aria-label={`View profile of ${message.authorName}`} className={`min-h-6 rounded text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring ${nameColor(message.authorId)}`}>{message.authorName}</button>
+                <button type="button" aria-label={`View profile of ${message.authorName}`} className={`rounded text-left text-base font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring ${nameColor(message.authorId)}`}>{message.authorName}</button>
               </UserContextMenu>
             )}
-            {message.authorBot && <span className="rounded bg-primary/30 px-1 text-[10px] font-semibold text-indigo-100">BOT</span>}
+            {message.authorBot && <span className="self-center rounded bg-primary px-1 text-[10px] leading-4 font-semibold text-primary-foreground">APP</span>}
             {message.authorImported && <span className="rounded bg-white/10 px-1 text-[10px] font-semibold text-zinc-300" title="Imported from another instance">IMPORTED</span>}
-            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="shrink-0 text-[11px] whitespace-nowrap text-zinc-400" suppressHydrationWarning>
-              {dateTimeFormat.format(created)}
+            <time dateTime={message.createdAt} title={dateTimeFormat.format(created)} className="shrink-0 text-xs whitespace-nowrap text-muted-foreground" suppressHydrationWarning>
+              {messageTimestamp(created)}
             </time>
             {message.pinned && <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-400"><PinIcon aria-hidden className="size-3" />Pinned</span>}
           </p>
@@ -210,9 +227,9 @@ export function MessageItem(props: MessageItemProps) {
           <EditForm isPublic={!!publicGeneration} initial={decodeAssetTokens(decodeMentions(message.content, message.mentions))} pending={pending} onSave={onSaveEdit} onCancel={() => setEditing(false)} />
         ) : (
           (message.content || message.editedAt) && (
-            <div className="break-words whitespace-pre-wrap text-zinc-300">
+            <div className="text-base leading-[1.375rem] break-words whitespace-pre-wrap text-foreground">
               <MessageContent content={message.content} mentions={message.mentions} assets={message.assets} currentUserId={currentUserId} />
-              {message.editedAt && <span className="ml-1 text-[11px] text-zinc-400">(edited)</span>}
+              {message.editedAt && <span className="ml-1 text-[11px] text-muted-foreground">(edited)</span>}
             </div>
           )
         )}
@@ -270,7 +287,7 @@ export function MessageItem(props: MessageItemProps) {
                     aria-label={`${assetText(r.emoji)} ${r.userIds.length} ${r.userIds.length === 1 ? "reaction" : "reactions"}${mine ? ", including you" : ""}`}
                     disabled={!canReact || pending}
                     onClick={() => react(r.emoji)}
-                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ring-1 ${mine ? "bg-primary/25 text-indigo-100 ring-primary/60" : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"}`}
+                    className={`flex h-[26px] items-center gap-1.5 rounded-lg border px-1.5 text-sm font-semibold ${mine ? "border-primary bg-primary/15 text-foreground" : "border-transparent bg-white/[0.06] text-muted-foreground hover:border-white/15"}`}
                   >
                     <span aria-hidden>{r.asset ? <CommunityAssetImage asset={r.asset} /> : <EmojiText text={assetText(r.emoji)} />}</span>
                     <span aria-hidden>{r.userIds.length}</span>
@@ -291,52 +308,33 @@ export function MessageItem(props: MessageItemProps) {
             <span className="font-normal text-zinc-400" suppressHydrationWarning>· last {timeFormat.format(new Date(message.thread.lastAt))}</span>
           </button>
         )}
+        <ReportDialog messageId={message.id} open={reportOpen} onOpenChange={setReportOpen} hideTrigger />
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
       {!editing && (
-        <div className="absolute top-0 right-4 flex rounded-md border bg-popover opacity-0 shadow-sm group-focus-within:opacity-100 group-hover:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none">
+        <div className="absolute -top-4 right-4 z-10 flex rounded-lg border bg-card p-0.5 opacity-0 shadow-md shadow-black/20 group-focus-within:opacity-100 group-hover:opacity-100 has-data-popup-open:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none [&_button]:text-muted-foreground [&_button:hover]:text-foreground">
           {canReact && (
-            <Button variant="ghost" size="icon-sm" aria-label="Reply" onClick={() => onReply(message)}>
+            <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react} open={reactionOpen} onOpenChange={setReactionOpen}
+              trigger={<Button variant="ghost" size="icon-sm" aria-label="Add reaction" title="Add reaction" disabled={pending}><SmilePlusIcon /></Button>} />
+          )}
+          {canEdit && (
+            <Button variant="ghost" size="icon-sm" aria-label="Edit message" title="Edit" onClick={() => setEditing(true)}>
+              <PencilIcon />
+            </Button>
+          )}
+          {canReact && (
+            <Button variant="ghost" size="icon-sm" aria-label="Reply" title="Reply" onClick={() => onReply(message)}>
               <CornerUpLeftIcon />
             </Button>
           )}
           {canReact && onOpenThread && !message.thread && (
-            <Button variant="ghost" size="icon-sm" aria-label="Start a thread" onClick={() => onOpenThread(message)}>
+            <Button variant="ghost" size="icon-sm" aria-label="Start a thread" title="Create thread" onClick={() => onOpenThread(message)}>
               <MessagesSquareIcon />
             </Button>
           )}
-          {canReact && (
-            <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react} open={reactionOpen} onOpenChange={setReactionOpen}
-              trigger={<Button variant="ghost" size="icon-sm" aria-label="Add reaction" disabled={pending}><SmilePlusIcon /></Button>} />
-          )}
-          {canPin && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={message.pinned ? "Unpin message" : "Pin message"}
-              disabled={pending}
-              onClick={() => run(() => setPinned(message.id, !message.pinned))}
-            >
-              {message.pinned ? <PinOffIcon /> : <PinIcon />}
-            </Button>
-          )}
-          <ReportDialog messageId={message.id} open={reportOpen} onOpenChange={setReportOpen} />
-          {message.authorId !== currentUserId && !message.authorImported && !blocked && <Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} aria-label={`Message ${message.authorName} privately`} className="rounded px-2 py-1 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">Message</Link>}
-          {message.authorId !== currentUserId && !message.authorImported && !blocked && (
-            <Button variant="ghost" size="icon-sm" aria-label={`Block ${message.authorName}`} onClick={onBlock} disabled={pending}>
-              <UserXIcon />
-            </Button>
-          )}
-          {canEdit && (
-            <Button variant="ghost" size="icon-sm" aria-label="Edit message" onClick={() => setEditing(true)}>
-              <PencilIcon />
-            </Button>
-          )}
-          {canDelete && (
-            <Button variant="ghost" size="icon-sm" aria-label="Delete message" onClick={onDelete} disabled={pending}>
-              <Trash2Icon />
-            </Button>
-          )}
+          <Button variant="ghost" size="icon-sm" aria-label="More message actions" title="More" aria-haspopup="menu" onClick={(e) => openContextMenuFrom(e.currentTarget)}>
+            <EllipsisIcon />
+          </Button>
         </div>
       )}
       </div>
@@ -351,7 +349,9 @@ export function MessageItem(props: MessageItemProps) {
       <ContextMenuSeparator />
       {canEdit && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setEditing(true))}><PencilIcon aria-hidden />Edit message</ContextMenuItem>}
       {canPin && <ContextMenuItem disabled={pending} onClick={() => run(() => setPinned(message.id, !message.pinned))}>{message.pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}{message.pinned ? "Unpin message" : "Pin message"}</ContextMenuItem>}
+      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuLinkItem render={<Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} />}><MailIcon aria-hidden />Message {message.authorName} privately</ContextMenuLinkItem>}
       <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReportOpen(true))}><FlagIcon aria-hidden />Report message</ContextMenuItem>
+      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuItem disabled={pending} onClick={onBlock}><UserXIcon aria-hidden />Block {message.authorName}</ContextMenuItem>}
       {canDelete && <><ContextMenuSeparator /><ContextMenuItem variant="destructive" disabled={pending} onClick={onDelete}><Trash2Icon aria-hidden />Delete message</ContextMenuItem></>}
     </ContextMenuContent>
     </ContextMenu>
@@ -398,9 +398,9 @@ function EditForm({ initial, pending, onSave, onCancel, isPublic }: { isPublic: 
 
 export function PendingItem({ content, mentions, images }: { content: string; mentions: Mention[]; images: number }) {
   return (
-    <li className="flex gap-3 px-5 py-0.5 opacity-60" aria-label="Sending">
-      <div className="w-8 shrink-0" />
-      <div className="min-w-0 flex-1 break-words whitespace-pre-wrap text-zinc-300">
+    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label="Sending">
+      <div className="w-10 shrink-0" />
+      <div className="min-w-0 flex-1 text-base leading-[1.375rem] break-words whitespace-pre-wrap text-foreground">
         <MessageContent content={content} mentions={mentions} />
         {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 attachment" : `${images} attachments`}…</span>}
       </div>

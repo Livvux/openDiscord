@@ -51,11 +51,11 @@ export function GifSelector({ onPick, returnFocusTo, disabled = false }: {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={
-        <Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose GIF" disabled={disabled}>
-          <span aria-hidden className="text-[11px] font-bold tracking-tight">GIF</span>
+        <Button type="button" variant="ghost" size="icon" className="mt-2 shrink-0 text-muted-foreground hover:text-foreground" aria-label="Choose GIF" disabled={disabled}>
+          <span aria-hidden className="rounded-[4px] border-2 border-current px-0.5 text-[9px] leading-3 font-extrabold">GIF</span>
         </Button>
       } />
-      <PopoverContent side="top" align="start" className="w-[370px] max-w-[calc(100vw-1rem)] gap-2 p-2" finalFocus={returnFocusTo}>
+      <PopoverContent side="top" align="end" className="w-[370px] max-w-[calc(100vw-1rem)] gap-2 p-2" finalFocus={returnFocusTo}>
         <PopoverTitle className="sr-only">Choose GIF</PopoverTitle>
         {open && <GifPickerContent keys={config} onPick={(url) => { onPick(url); setOpen(false); }} />}
       </PopoverContent>

@@ -31,7 +31,7 @@ interface AccountMenuProps {
   customStatus: string;
 }
 
-/** Bottom of the rail: who you are, how you appear, and the way to settings and sign-out. */
+/** The user panel's name tag: who you are, how you appear, and the way to settings and sign-out. */
 export function AccountMenu({ userId, name, avatar, presence, customStatus }: AccountMenuProps) {
   const router = useRouter();
   const id = useId();
@@ -83,14 +83,21 @@ export function AccountMenu({ userId, name, avatar, presence, customStatus }: Ac
   return (
     <>
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        aria-label={`Account menu for ${name}, ${PRESENCE_LABEL[choice]}`}
-        className="relative mb-4 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        <Avatar name={name} avatar={avatar} />
-        <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-sidebar ${PRESENCE_DOT[choice]}`} />
-      </PopoverTrigger>
-      <PopoverContent side="right" align="end" sideOffset={10} aria-label="Account menu" className="w-72 gap-1 p-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 hover:bg-white/[0.06] has-data-popup-open:bg-white/[0.06]">
+        <PopoverTrigger
+          aria-label={`Account menu for ${name}, ${PRESENCE_LABEL[choice]}`}
+          className="relative shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <Avatar name={name} avatar={avatar} />
+          <span aria-hidden className={`absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full ring-[3px] ring-card ${PRESENCE_DOT[choice]}`} />
+        </PopoverTrigger>
+        {/* Discord's name tag also opens the menu; the avatar button above is the accessible control. */}
+        <div data-user-panel-wide aria-hidden onClick={() => setOpen(true)} className="min-w-0 flex-1 cursor-pointer leading-tight">
+          <span className="block truncate text-sm font-semibold text-sidebar-foreground">{name}</span>
+          <span className="block truncate text-xs text-muted-foreground">{status || PRESENCE_LABEL[choice]}</span>
+        </div>
+      </div>
+      <PopoverContent side="top" align="start" sideOffset={14} aria-label="Account menu" className="w-72 gap-1 p-2">
         <div className="flex items-center gap-3 px-2 pt-1 pb-2">
           <Avatar name={name} avatar={avatar} />
           <div className="min-w-0">

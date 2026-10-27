@@ -55,7 +55,8 @@ test.describe("communities", () => {
     const memberMessage = owner.getByRole("log").getByRole("listitem").filter({ hasText: "Happy to be here" });
     await memberMessage.hover();
     owner.once("dialog", (d) => d.accept());
-    await memberMessage.getByRole("button", { name: "Delete message" }).click();
+    await memberMessage.getByRole("button", { name: "More message actions" }).click();
+    await owner.getByRole("menuitem", { name: "Delete message" }).click();
     await expect(member.getByRole("log").getByText("Happy to be here")).toHaveCount(0);
 
     // The owner kicks the member, who is sent out of the community.

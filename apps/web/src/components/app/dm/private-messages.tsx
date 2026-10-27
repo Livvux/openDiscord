@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FileIcon, PaperclipIcon, SendHorizontalIcon, ShieldCheckIcon, SmilePlusIcon, XIcon } from "lucide-react";
+import { BanIcon, CirclePlusIcon, FileIcon, SearchIcon, SendHorizontalIcon, SettingsIcon, ShieldCheckIcon, SmileIcon, UserPlusIcon, XIcon } from "lucide-react";
 import { EmojiSelector } from "../emoji-selector";
 import { GifSelector } from "../gif-selector";
 import { insertEmoji } from "@/lib/emoji";
@@ -283,7 +283,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   }, []);
   return <div className="flex min-h-0 flex-1">
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2 md:pl-4">
         <MobileNavToggle />
         {active && group ? <>
           <GroupAvatars members={active.members} />
@@ -292,22 +292,22 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           <UserContextMenu userId={active.peerId} name={active.peerName} currentUserId={userId} blocked={active.ownBlocked} onChanged={() => void refresh()} onError={setError} profileOnClick>
             <button type="button" aria-label={`View profile of ${active.peerName}`} className="flex min-h-6 min-w-0 items-center gap-2 rounded px-1 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="sm" status={null} /></button>
           </UserContextMenu>
-          <h1 className="min-w-0 truncate font-semibold">{active.peerName}</h1>
+          <h1 className="min-w-0 truncate text-base font-semibold">{active.peerName}</h1>
           {peerVerified && <span className="inline-flex items-center gap-1 text-xs text-brand-mint"><ShieldCheckIcon aria-hidden className="size-3.5" />Verified</span>}
         </> : <h1 className="font-semibold">Private messages</h1>}
         <div className="ml-auto flex items-center gap-1">
-          {friends.length >= 2 && <Button variant="ghost" size="sm" aria-expanded={creatingGroup} onClick={() => setCreatingGroup((v) => !v)}>New group</Button>}
+          {active?.status === "accepted" && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" title="Search this conversation" aria-expanded={searchOpen} onClick={() => { setSearchOpen((open) => !open); if (searchOpen) { scan.current++; scanning.current = false; setSearching(false); setSearchQuery(""); } }}><SearchIcon aria-hidden /><span className="sr-only">Search this conversation</span></Button>}
+          {friends.length >= 2 && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" title="New group" aria-expanded={creatingGroup} onClick={() => setCreatingGroup((v) => !v)}><UserPlusIcon aria-hidden /><span className="sr-only">New group</span></Button>}
           {active?.status === "accepted" && !active.blocked && <DmCallButton conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id} onToggle={() => setCallFor((id) => (id === active.id ? null : active.id))} />}
-          {active && group && <Button variant="ghost" size="sm" aria-expanded={groupSettings} onClick={() => setGroupSettings((v) => !v)}>Group settings</Button>}
-          <Button variant="ghost" size="sm" aria-expanded={security} onClick={toggleSecurity}><ShieldCheckIcon aria-hidden /><span className="max-sm:sr-only">Devices and recovery</span></Button>
-          {active && !group && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}>{active.ownBlocked ? "Unblock person" : "Block person"}</Button>}
+          {active && group && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" title="Group settings" aria-expanded={groupSettings} onClick={() => setGroupSettings((v) => !v)}><SettingsIcon aria-hidden /><span className="sr-only">Group settings</span></Button>}
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" title="Devices and recovery" aria-expanded={security} onClick={toggleSecurity}><ShieldCheckIcon aria-hidden /><span className="sr-only">Devices and recovery</span></Button>
+          {active && !group && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" title={active.ownBlocked ? "Unblock person" : "Block person"} disabled={busy} onClick={() => void run(async () => { const result = await (active.ownBlocked ? unblockUser(active.peerId) : blockUser(active.peerId)); if (!result.ok) throw new Error(result.error); })}><BanIcon aria-hidden /><span className="sr-only">{active.ownBlocked ? "Unblock person" : "Block person"}</span></Button>}
         </div>
       </header>
       <div className="border-b px-4 py-1.5"><p className="text-xs text-muted-foreground" role="status">{status}</p>{unverifiedBrowser && <p className="mt-1 text-sm" data-unverified-browser>This browser is a new device on your account. Until you verify it from your other signed-in device in Devices and recovery, it can’t send messages and others’ messages can’t be read here.</p>}{error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}{!client && error && <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.location.reload()}>Retry encryption</Button><Button variant="outline" disabled={busy} onClick={() => { if (window.confirm("Enroll a new encryption device? This revokes this browser's old device. Recover history with your private recovery file or another verified device. Existing contacts must verify the new device.")) void run(async () => { await enrollNewDmDevice(userId); window.location.reload(); }); }}>Enroll a new browser device</Button></div>}</div>
       {active && <DmCallPanel key={active.id} conversation={{ id: active.id, name: active.peerName }} open={callFor === active.id && active.status === "accepted" && !active.blocked} />}
-      {active?.status === "accepted" && <div className="border-b px-4 py-2">
-        <Button type="button" size="sm" variant="ghost" aria-expanded={searchOpen} onClick={() => { setSearchOpen((open) => !open); if (searchOpen) { scan.current++; scanning.current = false; setSearching(false); setSearchQuery(""); } }}>Search this conversation</Button>
-        {searchOpen && <div className="grid gap-2 py-2"><label className="text-sm">Search private messages<input autoFocus type="search" className={field} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></label>
+      {active?.status === "accepted" && searchOpen && <div className="border-b px-4 py-2">
+        {<div className="grid gap-2 py-2"><label className="text-sm">Search private messages<input autoFocus type="search" className={field} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></label>
           <p role="status" className="text-xs text-muted-foreground">{searchDmTimeline(messages, searchQuery).length} results in {messages.length} loaded messages. {searchComplete || !hasMore ? "Entire available history searched." : searching ? "Loading and searching earlier encrypted history…" : "Earlier history has not been searched yet."} Search stays in this browser.</p>
           {hasMore && !searching && <Button type="button" size="sm" variant="outline" onClick={() => void searchHistory()}>Search entire history</Button>}
           {searching && <Button type="button" size="sm" variant="outline" onClick={() => { scan.current++; scanning.current = false; setSearching(false); }}>Stop loading history</Button>}
@@ -351,8 +351,8 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
         {active && <>
           {active.status === "pending" && <div className="grid gap-3 p-4"><p>{active.requestedBy === userId ? "Your message request is waiting for acceptance." : "Accept this request to begin an encrypted conversation."}</p>{active.requestedBy !== userId && <div className="flex gap-2">{(["accepted", "rejected"] as const).map((s) => <Button key={s} disabled={busy || active.blocked} variant={s === "accepted" ? "default" : "outline"} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "respond", id: active.id, status: s }); })}>{s === "accepted" ? "Accept message request" : "Decline request"}</Button>)}</div>}</div>}
           {hasMore && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void run(loadEarlier)}>Load earlier encrypted messages</Button>}
-          {active.status === "accepted" && group && <div className="grid gap-2 px-4 pt-6 pb-2"><GroupAvatars members={active.members} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of the end-to-end encrypted group with {active.members.filter((m) => !m.left).map((m) => m.name).join(", ")}. People added later cannot read earlier messages; people who leave cannot read later ones.</p></div>}
-          {active.status === "accepted" && !group && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="lg" status={null} /><h2 className="text-2xl font-semibold text-zinc-50">{active.peerName}</h2><p className="text-sm text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
+          {active.status === "accepted" && group && <div className="grid gap-2 px-4 pt-6 pb-2"><GroupAvatars members={active.members} /><h2 className="text-[32px] leading-10 font-bold text-foreground">{active.peerName}</h2><p className="text-base text-muted-foreground">This is the beginning of the end-to-end encrypted group with {active.members.filter((m) => !m.left).map((m) => m.name).join(", ")}. People added later cannot read earlier messages; people who leave cannot read later ones.</p></div>}
+          {active.status === "accepted" && !group && <div className="grid gap-2 px-4 pt-6 pb-2"><PresenceAvatar userId={active.peerId} name={active.peerName} avatar={active.peerAvatar} size="lg" status={null} /><h2 className="text-[32px] leading-10 font-bold text-foreground">{active.peerName}</h2><p className="text-base text-muted-foreground">This is the beginning of your end-to-end encrypted conversation with {active.peerName}.{peerVerified ? "" : " Verify their device in Devices and recovery to confirm nobody is in between."}</p></div>}
           <div role="log" aria-label={group ? `Group conversation ${active.peerName}` : `Private conversation with ${active.peerName}`}><ol className="grid py-2">{(searchOpen ? searchDmTimeline(messages, searchQuery) : messages).map((m) => <PrivateMessageItem key={m.id} message={m} userId={userId} disabled={busy || active.blocked || unverifiedBrowser} reply={messages.find((message) => message.id === m.replyTo)}
             onReply={() => { setReplyTo(m); textarea.current?.focus(); }}
             onEdit={(body) => updateMessage(active, { kind: "edit", target: m.id }, body)}
@@ -362,11 +362,10 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
         </>}
         {report && <section role="dialog" aria-modal="false" aria-label="Report private message" className="m-4 grid gap-3 rounded-lg border p-4"><h2 className="font-semibold">Report private message</h2><p>Your reason is shared with instance moderators. Including the selected message is optional and explicitly discloses that text.</p><label>Reason<textarea ref={reportTextarea} autoFocus className={field} maxLength={512} value={reportReason} onChange={(e) => setReportReason(e.target.value)} /></label>{!!report.body && <label className="flex gap-2"><input type="checkbox" checked={reportDisclose} onChange={(e) => setReportDisclose(e.target.checked)} />Include this selected message</label>}{reportDisclose && <blockquote className="whitespace-pre-wrap break-words rounded border p-3">{report.body}</blockquote>}<div className="flex gap-2"><Button disabled={busy || reportReason.trim().length < 3} onClick={() => void run(async () => { await dmFetch("/api/dm", { action: "report", id: report.id, reason: reportReason, excerpt: reportDisclose && report.body ? report.body : null }); setReport(null); })}>Submit report</Button><Button variant="outline" onClick={() => setReport(null)}>Cancel</Button></div></section>}
       </div>
-      {active?.status === "accepted" && !active.blocked && <form className="px-4 pb-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && (text.trim() || files.length)) void run(async () => { await sendNow(active, text, files, replyTo ? { replyTo: replyTo.id } : {}); setReplyTo(null); setText(""); setFiles([]); refocus.current = true; }); }}>
-        <p role="status" className="min-h-5 text-xs text-muted-foreground">{typing.people.filter((id) => active.members.some((m) => m.id === id && !m.left && !m.blocked)).map((id) => authorOf(id)?.name).join(", ")}{typing.people.length ? " is typing…" : ""}</p>
-        {replyTo && <div className="flex items-center gap-2 border-l-2 px-2 py-1 text-xs"><span className="min-w-0 flex-1 truncate">Replying to {replyTo.own ? "yourself" : authorOf(replyTo.senderId)?.name}: {messages.find((m) => m.id === replyTo.id)?.deleted ? "Deleted message" : replyTo.body}</span><Button type="button" size="icon-xs" variant="ghost" aria-label="Cancel reply" onClick={() => setReplyTo(null)}><XIcon /></Button></div>}
+      {active?.status === "accepted" && !active.blocked && <form className="px-4" onSubmit={(e) => { e.preventDefault(); if (client && !busy && (text.trim() || files.length)) void run(async () => { await sendNow(active, text, files, replyTo ? { replyTo: replyTo.id } : {}); setReplyTo(null); setText(""); setFiles([]); refocus.current = true; }); }}>
+        {replyTo && <div className="flex items-center gap-2 rounded-t-lg border border-b-0 bg-sidebar px-4 py-2 text-sm text-muted-foreground"><span className="min-w-0 flex-1 truncate">Replying to {replyTo.own ? "yourself" : authorOf(replyTo.senderId)?.name}: {messages.find((m) => m.id === replyTo.id)?.deleted ? "Deleted message" : replyTo.body}</span><Button type="button" size="icon-xs" variant="ghost" aria-label="Cancel reply" onClick={() => setReplyTo(null)}><XIcon /></Button></div>}
         {files.length > 0 && <ul aria-label="Encrypted attachments" className="flex flex-wrap gap-2 pb-2">{files.map((file, index) => <li key={`${file.name}:${index}`} className="flex max-w-60 items-center gap-1 rounded-md bg-white/5 py-1 pr-1 pl-2 text-xs"><FileIcon aria-hidden className="size-4 shrink-0" /><span className="min-w-0 break-all">{shortFilename(file.name, 32)}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${file.name}`} disabled={busy} onClick={() => setFiles((list) => list.filter((_, i) => i !== index))}><XIcon /></Button></li>)}</ul>}
-        <div className="flex items-end gap-1 rounded-lg bg-white/5 px-2 py-1.5">
+        <div className={`flex items-start gap-1 border bg-card px-2 ${replyTo ? "rounded-b-lg" : "rounded-lg"}`}>
           {attachmentsEnabled && <>
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => {
               const picked = [...(e.target.files ?? [])];
@@ -375,25 +374,26 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
               if (rejected) { setError(`${rejected.name}: files must be between 1 byte and ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`); return; }
               setFiles((list) => [...list, ...picked].slice(0, DM_MAX_ATTACHMENTS));
             }} />
-            <Button type="button" variant="ghost" size="icon" aria-label={`Attach encrypted files (up to ${DM_MAX_ATTACHMENTS}, ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB each)`} disabled={!client || busy || files.length >= DM_MAX_ATTACHMENTS} onClick={() => fileInput.current?.click()}><PaperclipIcon /></Button>
+            <Button type="button" variant="ghost" size="icon" className="mt-2 text-muted-foreground hover:text-foreground" aria-label={`Attach encrypted files (up to ${DM_MAX_ATTACHMENTS}, ${DM_MAX_ATTACHMENT_BYTES / 1024 / 1024} MB each)`} disabled={!client || busy || files.length >= DM_MAX_ATTACHMENTS} onClick={() => fileInput.current?.click()}><CirclePlusIcon className="size-6" /></Button>
           </>}
-          <EmojiSelector returnFocusTo={textarea}
-            trigger={<Button type="button" variant="ghost" size="icon" aria-label="Choose emoji" disabled={!client || busy}><SmilePlusIcon /></Button>}
-            onPick={(emoji) => {
-              const result = insertEmoji(text, emoji, textarea.current?.selectionStart ?? text.length, textarea.current?.selectionEnd ?? text.length, DM_MAX_TEXT);
-              if (result) { pendingCaret.current = result.caret; setText(result.value); }
-            }} />
+          <label className="sr-only" htmlFor="private-message">Encrypted message</label>
+          <textarea ref={textarea} id="private-message" rows={1} className="field-sizing-content max-h-[50dvh] min-h-[54px] flex-1 resize-none bg-transparent px-1 py-4 text-base leading-[1.375rem] outline-none placeholder:text-muted-foreground" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => { setText(e.target.value); typing.changed(!!e.target.value.trim()); }} onBlur={typing.stop}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
+            disabled={!client || busy} placeholder={group ? `Message ${active.peerName}` : `Message @${active.peerName}`} />
           <GifSelector returnFocusTo={textarea} disabled={!client || busy}
             onPick={(url) => {
               if (!client || busy) return;
               void run(() => sendNow(active, url));
             }} />
-          <label className="sr-only" htmlFor="private-message">Encrypted message</label>
-          <textarea ref={textarea} id="private-message" rows={1} className="max-h-48 min-h-8 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-zinc-500" maxLength={DM_MAX_TEXT} value={text} onChange={(e) => { setText(e.target.value); typing.changed(!!e.target.value.trim()); }} onBlur={typing.stop}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
-            disabled={!client || busy} placeholder={group ? `Message ${active.peerName}` : `Message @${active.peerName}`} />
-          <Button type="submit" variant="ghost" size="icon" disabled={!client || busy || (!text.trim() && !files.length)}><SendHorizontalIcon aria-hidden /><span className="sr-only">Send encrypted message</span></Button>
+          <EmojiSelector returnFocusTo={textarea}
+            trigger={<Button type="button" variant="ghost" size="icon" className="mt-2 text-muted-foreground hover:text-foreground" aria-label="Choose emoji" disabled={!client || busy}><SmileIcon className="size-6" /></Button>}
+            onPick={(emoji) => {
+              const result = insertEmoji(text, emoji, textarea.current?.selectionStart ?? text.length, textarea.current?.selectionEnd ?? text.length, DM_MAX_TEXT);
+              if (result) { pendingCaret.current = result.caret; setText(result.value); }
+            }} />
+          <Button type="submit" variant="ghost" size="icon" className="mt-2 text-muted-foreground hover:text-foreground disabled:hidden" disabled={!client || busy || (!text.trim() && !files.length)}><SendHorizontalIcon aria-hidden /><span className="sr-only">Send encrypted message</span></Button>
         </div>
+        <p role="status" className="h-6 truncate px-1 pt-0.5 text-xs text-muted-foreground"><span className="font-semibold text-foreground">{typing.people.filter((id) => active.members.some((m) => m.id === id && !m.left && !m.blocked)).map((id) => authorOf(id)?.name).join(", ")}</span>{typing.people.length ? " is typing…" : ""}</p>
       </form>}
     </section>
     {active && !group && <PeerProfile userId={userId} peerId={active.peerId} />}

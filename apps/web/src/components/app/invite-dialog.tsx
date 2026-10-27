@@ -30,10 +30,12 @@ interface InviteDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   hideTrigger?: boolean;
+  /** A bare person-plus icon, as in Discord's server header. */
+  iconTrigger?: boolean;
   finalFocus?: React.ComponentProps<typeof DialogContent>["finalFocus"];
 }
 
-export function InviteDialog({ communityId, communityName, open, onOpenChange, hideTrigger = false, finalFocus }: InviteDialogProps) {
+export function InviteDialog({ communityId, communityName, open, onOpenChange, hideTrigger = false, iconTrigger = false, finalFocus }: InviteDialogProps) {
   const id = useId();
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +81,12 @@ export function InviteDialog({ communityId, communityName, open, onOpenChange, h
         onOpenChange?.(next);
       }}
     >
-      {!hideTrigger && (
+      {!hideTrigger && iconTrigger && (
+        <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Invite people" title="Invite people" className="text-muted-foreground hover:text-sidebar-foreground" />}>
+          <UserPlusIcon />
+        </DialogTrigger>
+      )}
+      {!hideTrigger && !iconTrigger && (
         <DialogTrigger render={<Button variant="secondary" className="w-full" />}>
           <UserPlusIcon /> Invite people
         </DialogTrigger>

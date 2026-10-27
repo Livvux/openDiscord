@@ -31,10 +31,10 @@ export function CategoryGroup({ id, name, hrefs, children }: { id: string; name:
           type="button"
           aria-expanded={!collapsed}
           onClick={toggle}
-          className="flex w-full items-center gap-1 rounded px-1 pt-4 pb-1 text-left text-[11px] tracking-widest text-zinc-400 uppercase hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-ring"
+          className="flex w-full items-center gap-0.5 rounded px-2 pt-4 pb-1 text-left text-sm font-medium text-muted-foreground hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring"
         >
-          <ChevronDownIcon aria-hidden className={`size-3 transition-transform motion-reduce:transition-none ${collapsed ? "-rotate-90" : ""}`} />
           <span className="truncate">{name}</span>
+          <ChevronDownIcon aria-hidden className={`size-3.5 shrink-0 transition-transform motion-reduce:transition-none ${collapsed ? "-rotate-90" : ""}`} />
         </button>
       </h3>
       <ul className="space-y-0.5">{children.filter((_, i) => !collapsed || hrefs[i] === pathname)}</ul>

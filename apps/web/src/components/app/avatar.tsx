@@ -3,10 +3,10 @@
 import Image from "next/image";
 import { useState } from "react";
 
-const SIZES = { sm: { className: "size-7 text-[11px]", px: 28 }, md: { className: "size-8 text-xs", px: 32 }, lg: { className: "size-20 text-3xl", px: 80 } };
+const SIZES = { sm: { className: "size-7 text-[11px]", px: 28 }, md: { className: "size-8 text-xs", px: 32 }, chat: { className: "size-10 text-base", px: 40 }, lg: { className: "size-20 text-3xl", px: 80 } };
 
 /** The profile picture (served only through the access-checked route), else the initial on a translucent disc. */
-export function Avatar({ name, avatar = null, size = "md" }: { name: string; avatar?: string | null; size?: "sm" | "md" | "lg" }) {
+export function Avatar({ name, avatar = null, size = "md" }: { name: string; avatar?: string | null; size?: keyof typeof SIZES }) {
   // Remembers which picture failed, so a newer one is tried again.
   const [failed, setFailed] = useState<string | null>(null);
   const { className, px } = SIZES[size];

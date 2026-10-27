@@ -60,6 +60,8 @@ vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.
 vi.mock("@/components/app/realtime-provider", () => ({ useRealtime: () => ({ state: "open" }) }));
 vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread }));
 vi.mock("@/components/app/chat/use-channel-messages", () => ({ useChannelMessages: () => harness.messages }));
+vi.mock("@/components/app/chat/use-channel-typing", () => ({ useChannelTyping: () => ({ changed: () => {}, stop: () => {}, typing: [] }) }));
+vi.mock("@/components/app/member-list", () => ({ useMemberNames: () => [] }));
 vi.mock("@/components/ui/button", () => ({ Button: "button" }));
 vi.mock("@/components/app/chat/composer", () => ({ Composer: () => null }));
 vi.mock("@/components/app/chat/message-item", () => ({ MessageItem: () => null, PendingItem: () => null }));

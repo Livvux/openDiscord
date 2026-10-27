@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, CopyIcon, MessageSquareIcon, SearchIcon, UserMinusIcon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, MessageCircleIcon, SearchIcon, UserMinusIcon, UsersIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useId, useState, useTransition } from "react";
 import { blockUser, removeFriend, respondToFriendRequest, searchPeople, sendFriendRequest } from "@/app/app/actions";
@@ -14,6 +14,7 @@ import { GettingStarted } from "./getting-started";
 import { PresenceAvatar } from "../presence-avatar";
 import { UserContextMenu } from "../user-context-menu";
 import { UserProfilePopover } from "../user-profile";
+import { MobileNavToggle } from "../mobile-nav";
 
 type Filter = "online" | "all" | "pending" | "blocked" | "add";
 type Notice = { ok: boolean; text: string } | null;
@@ -29,14 +30,17 @@ interface FriendsViewProps {
   blocked: BlockedUser[];
   initialCode: string;
   hasPublicChannels?: boolean;
+  /** The "Active Now" column, beside the list under the shared header. */
+  aside?: React.ReactNode;
 }
 
-export function FriendsView({ userId, friends, blocked, initialCode, hasPublicChannels = false }: FriendsViewProps) {
+export function FriendsView({ userId, friends, blocked, initialCode, hasPublicChannels = false, aside }: FriendsViewProps) {
   const accepted = friends.filter((f) => f.state === "friend");
   const pending = friends.filter((f) => f.state !== "friend");
   const [filter, setFilter] = useState<Filter>(initialCode ? "add" : pending.some((f) => f.state === "incoming") ? "pending" : "all");
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, startTransition] = useTransition();
+  const [search, setSearch] = useState("");
 
   function act(fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, success?: string) {
     startTransition(async () => {
@@ -45,7 +49,8 @@ export function FriendsView({ userId, friends, blocked, initialCode, hasPublicCh
     });
   }
 
-  const shown = filter === "pending" ? pending : filter === "online" ? accepted.filter((f) => f.presence) : accepted;
+  const listed = filter === "pending" ? pending : filter === "online" ? accepted.filter((f) => f.presence) : accepted;
+  const shown = search.trim() ? listed.filter((f) => f.name.toLowerCase().includes(search.trim().toLowerCase())) : listed;
   const tabs: { id: Filter; label: string; count: number }[] = [
     { id: "online", label: "Online", count: accepted.filter((f) => f.presence).length },
     { id: "all", label: "All", count: accepted.length },
@@ -54,35 +59,46 @@ export function FriendsView({ userId, friends, blocked, initialCode, hasPublicCh
   ];
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="grid gap-4 p-4 md:px-6">
-        <div role="group" aria-label="Filter friends" className="flex flex-wrap items-center gap-1">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-2 py-2 md:pl-4">
+        <MobileNavToggle />
+        <h1 className="flex items-center gap-2 text-base font-semibold"><UsersIcon aria-hidden className="size-5 text-muted-foreground" />Friends</h1>
+        <span aria-hidden className="mx-1 size-1 rounded-full bg-muted-foreground/50" />
+        <div role="group" aria-label="Filter friends" className="flex flex-wrap items-center gap-2">
           {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
               aria-pressed={filter === t.id}
               onClick={() => setFilter(t.id)}
-              className={`min-h-8 rounded-md px-3 py-1 text-sm focus-visible:outline-2 focus-visible:outline-ring ${filter === t.id ? "bg-white/10 text-zinc-50" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
+              className={`h-8 rounded-lg px-3 text-base font-medium focus-visible:outline-2 focus-visible:outline-ring ${filter === t.id ? "bg-white/10 text-foreground" : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"}`}
             >
-              {t.label} <span className="text-muted-foreground">{t.count}</span>
+              {t.label}{t.id === "pending" && t.count > 0 ? <span className="ml-1.5 inline-block min-w-4 rounded-full bg-[#dc2626] px-1 text-center text-xs leading-4 font-bold text-white">{t.count}</span> : <span className="sr-only"> {t.count}</span>}
             </button>
           ))}
           <button
             type="button"
             aria-pressed={filter === "add"}
             onClick={() => setFilter("add")}
-            className={`min-h-8 rounded-md px-3 py-1 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring ${filter === "add" ? "bg-transparent text-brand-mint" : "bg-emerald-700 text-white hover:bg-emerald-600"}`}
+            className={`h-8 rounded-lg px-3 text-base font-medium focus-visible:outline-2 focus-visible:outline-ring ${filter === "add" ? "bg-primary/15 text-[#8ca0fd]" : "bg-primary text-primary-foreground hover:bg-primary/85"}`}
           >
             Add Friend
           </button>
         </div>
-
+      </header>
+      <div className="flex min-h-0 flex-1">
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="grid gap-4 px-4 pt-4 pb-6 md:px-6">
         {friends.length === 0 && (filter === "all" || filter === "online") && <GettingStarted onAddFriend={() => setFilter("add")} hasPublicChannels={hasPublicChannels} />}
 
         {filter === "add" ? <AddFriend userId={userId} initialCode={initialCode} /> : filter === "blocked" ? <BlockedList blocked={blocked} currentUserId={userId} /> : (
         <section aria-label="Your friends" className="grid gap-3">
-          <h2 className="text-xs font-semibold tracking-widest text-zinc-400 uppercase">
+          <label className="relative block">
+            <span className="sr-only">Search friends</span>
+            <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" className="h-9 w-full rounded-lg bg-sidebar pr-9 pl-3 text-base text-foreground ring-1 ring-border outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" />
+            <SearchIcon aria-hidden className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          </label>
+          <h2 className="pt-2 text-sm font-medium text-muted-foreground">
             {tabs.find((t) => t.id === filter)!.label} — {shown.length}
           </h2>
           {notice && (
@@ -94,28 +110,28 @@ export function FriendsView({ userId, friends, blocked, initialCode, hasPublicCh
                 {filter === "pending" ? "No pending requests." : filter === "online" ? "No friends online right now." : "No friends yet. Choose Add Friend to find someone."}
               </p>
             ) : (
-              <ul className="divide-y divide-white/5 rounded-xl border border-white/5">
+              <ul className="-mx-2.5">
                 {shown.map((f) => (
                   <UserContextMenu key={f.id} userId={f.id} name={f.name} currentUserId={userId} relation={f.state} disabled={busy} onChanged={() => setNotice(null)} onError={(error) => setNotice({ ok: false, text: error })}>
-                    <li className="flex items-center gap-3 px-3 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
+                    <li className="group/friend flex h-[62px] items-center gap-3 rounded-lg border-t px-2.5 hover:border-transparent hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring [&:hover+li]:border-transparent">
                       <UserProfilePopover userId={f.id} currentUserId={userId} render={
                         <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring">
                           <PresenceAvatar userId={f.id} name={f.name} avatar={f.avatar} status={f.presence} announce />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium text-zinc-100">{f.name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">
+                            <span className="block truncate text-base font-semibold text-foreground">{f.name}</span>
+                            <span className="block truncate text-sm text-muted-foreground">
                               {f.state === "incoming" ? "Incoming friend request" : f.state === "outgoing" ? "Outgoing friend request" : f.customStatus || f.bio || (f.presence ? "Online" : "Offline")}
                             </span>
                           </span>
                         </button>
                       } />
-                      <div className="flex shrink-0 gap-1">
+                      <div className="flex shrink-0 gap-2.5 [&_button]:rounded-full">
                         {f.state === "friend" && (
                           <>
-                            <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} title="Message" className="grid size-8 place-items-center rounded-lg text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring">
-                              <MessageSquareIcon className="size-4" />
+                            <Link href={`/app/messages?to=${encodeURIComponent(f.id)}`} aria-label={`Message ${f.name}`} title="Message" className="grid size-9 place-items-center rounded-full bg-sidebar text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+                              <MessageCircleIcon className="size-5" />
                             </Link>
-                            <Button variant="ghost" size="icon" disabled={busy} aria-label={`Remove ${f.name} as a friend`} title="Remove friend"
+                            <Button variant="ghost" size="icon" className="size-9 bg-sidebar text-muted-foreground hover:text-[#dc2626]" disabled={busy} aria-label={`Remove ${f.name} as a friend`} title="Remove friend"
                               onClick={() => window.confirm(`Remove ${f.name} as a friend? They won't be notified.`) && act(() => removeFriend(f.id))}>
                               <UserMinusIcon />
                             </Button>
@@ -149,6 +165,9 @@ export function FriendsView({ userId, friends, blocked, initialCode, hasPublicCh
           </div>
         </section>
         )}
+      </div>
+    </div>
+      {aside}
       </div>
     </div>
   );
@@ -194,9 +213,9 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
   }
 
   return (
-    <section aria-labelledby={`${id}-heading`} className="grid gap-4 rounded-xl border border-white/5 bg-panel/60 p-4">
+    <section aria-labelledby={`${id}-heading`} className="grid gap-4">
       <div>
-        <h2 id={`${id}-heading`} className="font-semibold">Add a friend</h2>
+        <h2 id={`${id}-heading`} className="text-xl font-semibold">Add Friend</h2>
         <p className="text-sm text-muted-foreground">There is no public directory. Find people from communities you share, or use a friend code they gave you.</p>
       </div>
 

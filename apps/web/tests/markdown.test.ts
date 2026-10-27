@@ -70,4 +70,26 @@ describe("emoji rendering", () => {
     expect(out).not.toContain("<img");
     expect(out).toContain('href="https://example.com/😀"');
   });
+
+  it("renders Discord's underline and spoilers", () => {
+    const out = html("__under__ and ||secret||");
+    expect(out).toContain('<u>under</u>');
+    expect(out).toContain("data-spoiler");
+    expect(out).toContain("secret");
+    expect(html("snake__case__name")).not.toContain("<u>");
+  });
+
+  it("renders headings, subtext and lists as blocks", () => {
+    const out = html("# Big\n## Mid\n### Small\n-# fine print\n- one\n- two\n1. first\nplain");
+    expect(out).toContain('data-md="h1"');
+    expect(out).toContain('data-md="h2"');
+    expect(out).toContain('data-md="h3"');
+    expect(out).toContain('data-md="subtext"');
+    expect(out).toMatch(/<ul[^>]*><li>one<\/li><li>two<\/li><\/ul>/);
+    expect(out).toMatch(/<ol[^>]*><li>first<\/li><\/ol>/);
+    expect(out).toContain("plain");
+    // A hash without a space is ordinary text (channel names, hashtags).
+    expect(html("#general")).not.toContain("data-md");
+  });
 });
+

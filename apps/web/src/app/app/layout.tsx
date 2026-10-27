@@ -2,6 +2,7 @@ import { requirePageUser } from "@/server/session";
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
 import { CommunityRail } from "@/components/app/community-rail";
+import { Titlebar } from "@/components/app/titlebar";
 import { MobileNavProvider, MobilePanel } from "@/components/app/mobile-nav";
 import { NotificationsProvider } from "@/components/app/notifications-provider";
 import { ServiceWorkerRegistration } from "@/components/app/service-worker";
@@ -24,16 +25,23 @@ async function AuthenticatedShell({ children }: { children: React.ReactNode }) {
     <MobileNavProvider>
       <ServiceWorkerRegistration />
       <DmCallRinger />
-      <div data-app-shell className="flex h-dvh overflow-hidden bg-background pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] text-sm text-foreground">
-        <MobilePanel
-          label="Communities"
-          className="flex w-16 shrink-0 flex-col items-center border-r border-sidebar-border bg-sidebar max-md:left-0"
-        >
-          <Suspense fallback={<div className="py-3 text-xs text-muted-foreground">…</div>}>
-            <CommunityRail />
-          </Suspense>
-        </MobilePanel>
-        <div className="flex min-w-0 flex-1">{children}</div>
+      <div data-app-shell className="relative flex h-dvh flex-col overflow-hidden bg-sidebar pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] text-sm text-foreground">
+        <Suspense fallback={<div className="h-8 shrink-0 max-md:hidden" />}>
+          <Titlebar />
+        </Suspense>
+        <div className="flex min-h-0 flex-1">
+          <MobilePanel
+            label="Communities"
+            elevated
+            className="flex w-(--rail-w) shrink-0 flex-col items-center bg-sidebar max-md:left-0"
+          >
+            <Suspense fallback={<div className="py-3 text-xs text-muted-foreground">…</div>}>
+              <CommunityRail />
+            </Suspense>
+          </MobilePanel>
+          {/* Discord's content sheet: one rounded corner and hairline where the channel list meets the rail. */}
+          <div className="flex min-w-0 flex-1 overflow-hidden md:rounded-tl-lg md:border-t md:border-l">{children}</div>
+        </div>
       </div>
     </MobileNavProvider>
     </VoiceProvider>

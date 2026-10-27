@@ -40,15 +40,17 @@ function CloseOnNavigation({ close }: { close: () => void }) {
   return null;
 }
 
-/** Wraps a sidebar: always visible from md up, an overlay panel below when opened. */
-export function MobilePanel({ className, children, label }: { className: string; children: React.ReactNode; label: string }) {
+/** Wraps a sidebar: always visible from md up, an overlay panel below when opened. `elevated` stacks it above the
+ * channel list, for the rail's user panel that spans both. */
+export function MobilePanel({ className, children, label, elevated = false, ...data }: { className: string; children: React.ReactNode; label: string; elevated?: boolean; "data-sidebar"?: boolean }) {
   const { open, setOpen } = useContext(MobileNavContext);
   return (
     <nav
       aria-label={label}
       // Close the overlay once a link inside it is followed.
+      {...data}
       onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}
-      className={`${className} ${open ? "max-md:fixed max-md:inset-y-0 max-md:z-40 max-md:flex max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]" : "max-md:hidden"}`}
+      className={`${className} ${open ? `max-md:fixed max-md:inset-y-0 ${elevated ? "max-md:z-50" : "max-md:z-40"} max-md:flex max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]` : "max-md:hidden"}`}
     >
       {children}
     </nav>

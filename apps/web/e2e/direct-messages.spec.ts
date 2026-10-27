@@ -68,8 +68,11 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await bob.goto(invite);
   await bob.getByRole("button", { name: "Accept invite", exact: true }).click();
   await sendMessage(bob, "Find my community profile here.");
-  await expect(alice.getByRole("link", { name: "Message Private Bob privately" })).toBeVisible();
-  await alice.getByRole("link", { name: "Message Private Bob privately" }).click();
+  const bobMessage = alice.getByRole("log").getByRole("listitem").filter({ hasText: "Find my community profile here." });
+  await expect(bobMessage).toBeVisible();
+  await bobMessage.hover();
+  await bobMessage.getByRole("button", { name: "More message actions" }).click();
+  await alice.getByRole("menuitem", { name: "Message Private Bob privately" }).click();
   await expect(alice.getByRole("button", { name: "Send message request", exact: true })).toBeEnabled({ timeout: 30_000 });
   await alice.getByRole("button", { name: "Send message request", exact: true }).click();
   await bob.goto("/app/messages");

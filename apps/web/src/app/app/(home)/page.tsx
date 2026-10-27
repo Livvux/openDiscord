@@ -16,12 +16,7 @@ export const metadata: Metadata = { title: "Friends" };
 export default function AppHome({ searchParams }: PageProps<"/app">) {
   return (
     <main className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-        <MobileNavToggle />
-        <UsersIcon aria-hidden className="size-5 text-zinc-400" />
-        <h1 className="px-1 font-semibold">Friends</h1>
-      </header>
-      <Suspense fallback={<div className="m-auto text-primary"><DiamondOrbitSmoothLoader /></div>}>
+      <Suspense fallback={<><header className="flex h-12 shrink-0 items-center gap-2 border-b px-2 md:pl-4"><MobileNavToggle /><UsersIcon aria-hidden className="size-5 text-muted-foreground" /><h1 className="text-base font-semibold">Friends</h1></header><div className="m-auto text-primary"><DiamondOrbitSmoothLoader /></div></>}>
         <Friends searchParams={searchParams} />
       </Suspense>
     </main>
@@ -36,9 +31,7 @@ async function Friends({ searchParams }: Pick<PageProps<"/app">, "searchParams">
   // Only newcomers see the getting-started links; skip the query for everyone else.
   const hasPublicChannels = friends.length === 0 && (await listPublicChannels()).channels.length > 0;
   return (
-    <div className="flex min-h-0 flex-1">
-      <FriendsView key={add} userId={user.id} friends={friends} blocked={blocked} initialCode={add} hasPublicChannels={hasPublicChannels} />
-      <ActiveNow userId={user.id} friends={friends.filter((f) => f.state === "friend" && f.presence)} />
-    </div>
+    <FriendsView key={add} userId={user.id} friends={friends} blocked={blocked} initialCode={add} hasPublicChannels={hasPublicChannels}
+      aside={<ActiveNow userId={user.id} friends={friends.filter((f) => f.state === "friend" && f.presence)} />} />
   );
 }

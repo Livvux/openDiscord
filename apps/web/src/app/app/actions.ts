@@ -84,6 +84,13 @@ export const markChannelRead = async (channelId: string, messageId: string) =>
     await unread.markChannelRead(user.id, channelId, messageId);
   });
 
+// Ephemeral and frequent: its own rate limit (in the service), no router refresh, no mutation burst.
+export const setChannelTyping = async (channelId: string, typing: boolean) =>
+  toResult(async () => {
+    const user = await requireUser();
+    await messages.publishChannelTyping(user.id, channelId, typing);
+  });
+
 export const blockUser = async (userId: string) => run((u) => blocks.blockUser(u, userId));
 export const unblockUser = async (userId: string) => run((u) => blocks.unblockUser(u, userId));
 export const updateCommunitySafety = async (communityId: string, input: Partial<communities.CommunitySafety>) =>
