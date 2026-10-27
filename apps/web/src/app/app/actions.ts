@@ -7,6 +7,7 @@ import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
 import * as trust from "@/server/community-trust";
 import * as communities from "@/server/communities";
+import * as discovery from "@/server/discovery";
 import * as friends from "@/server/friends";
 import * as integrations from "@/server/integrations";
 import { toResult, type ActionResult } from "@/server/errors";
@@ -57,6 +58,9 @@ export const createInvite = async (communityId: string, options: { expiresInHour
   run((u) => communities.createInvite(u, communityId, options), false);
 export const revokeInvite = async (code: string) => run((u) => communities.revokeInvite(u, code));
 export const acceptInvite = async (code: string, rulesVersion?: number) => run((u) => communities.acceptInvite(u, code, rulesVersion), false);
+export const joinDiscoverable = async (communityId: string, rulesVersion?: number) => run((u) => communities.joinDiscoverable(u, communityId, rulesVersion), false);
+export const updateListing = async (communityId: string, input: { discoverable: boolean; description: string }) =>
+  run((u) => discovery.updateListing(u, communityId, input));
 
 // Messages update the UI through the realtime stream, so they skip the router refresh.
 export const sendMessage = async (

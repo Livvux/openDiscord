@@ -393,42 +393,62 @@ export async function acceptInvite(userId: string, rawCode: unknown, acceptedRul
     await lockCommunity(tx, ref.communityId);
     const [row] = await tx.select().from(invite).where(eq(invite.code, code)).for("update");
     if (!row || !isUsable(row)) throw notFound("This invite is invalid or has expired.");
-    const [c] = await tx.select().from(community).where(and(eq(community.id, row.communityId), isNull(community.suspendedAt)));
-    if (!c) throw notFound("Community not found.");
-    const [banned] = await tx
-      .select({ userId: ban.userId })
-      .from(ban)
-      .where(and(eq(ban.communityId, row.communityId), eq(ban.userId, userId)));
-    if (banned) throw new AppError("forbidden", "You are banned from this community.");
-    const [existing] = await tx.select({ userId: member.userId }).from(member)
-      .where(and(eq(member.communityId, row.communityId), eq(member.userId, userId)));
-    // Already a member: nothing to check and don't burn a use.
-    if (existing) return { communityId: row.communityId };
-    if (c.rulesRequired && acceptedRulesVersion !== c.rulesVersion) throw forbidden("Read and acknowledge the current community rules before joining.");
-    if (c.invitesPausedAt) throw forbidden(PAUSED_MESSAGE);
-    if (c.minAccountAgeHours > 0) {
-      const [me] = await tx.select({ createdAt: user.createdAt }).from(user).where(eq(user.id, userId));
-      if (me && me.createdAt.getTime() > Date.now() - c.minAccountAgeHours * 3_600_000) {
-        throw forbidden("Your account is too new to join this community. Try again later.");
-      }
-    }
-    if (c.raidJoinLimit > 0) {
-      const since = new Date(Date.now() - RAID_WINDOW_MINUTES * 60_000);
-      const [{ recent }] = await tx.select({ recent: count() }).from(member)
-        .where(and(eq(member.communityId, c.id), gt(member.joinedAt, since), ne(member.userId, c.ownerId)));
-      if (recent >= c.raidJoinLimit) {
-        await tx.update(community).set({ invitesPausedAt: new Date() }).where(eq(community.id, c.id));
-        await tx.insert(auditLog).values({ communityId: c.id, actorId: null, action: "invites.auto_pause", reason: `${recent} joins in ${RAID_WINDOW_MINUTES} minutes` });
-        // Returned, not thrown, so the pause commits.
-        return { raid: true as const };
-      }
-    }
-    await tx.insert(member).values({ communityId: row.communityId, userId, rulesAcceptedVersion: c.rulesRequired ? c.rulesVersion : 0 });
+    const joined = await joinLocked(tx, row.communityId, userId, acceptedRulesVersion);
+    // Already a member or raid-paused: don't burn a use.
+    if (joined !== "joined") return joined === "raid" ? { raid: true as const } : { communityId: row.communityId };
     await tx.update(invite).set({ uses: sql`${invite.uses} + 1` }).where(eq(invite.code, code));
     return { communityId: row.communityId };
   });
   if ("raid" in result) throw forbidden(PAUSED_MESSAGE);
   return result.communityId;
+}
+
+/** Every join check, shared by invites and Discover. Caller holds lockCommunity. */
+async function joinLocked(tx: Db, communityId: string, userId: string, acceptedRulesVersion: unknown, where = isNull(community.suspendedAt)): Promise<"joined" | "member" | "raid"> {
+  const [c] = await tx.select().from(community).where(and(eq(community.id, communityId), where));
+  if (!c) throw notFound("Community not found.");
+  const [banned] = await tx
+    .select({ userId: ban.userId })
+    .from(ban)
+    .where(and(eq(ban.communityId, communityId), eq(ban.userId, userId)));
+  if (banned) throw new AppError("forbidden", "You are banned from this community.");
+  const [existing] = await tx.select({ userId: member.userId }).from(member)
+    .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+  if (existing) return "member";
+  if (c.rulesRequired && acceptedRulesVersion !== c.rulesVersion) throw forbidden("Read and acknowledge the current community rules before joining.");
+  if (c.invitesPausedAt) throw forbidden(PAUSED_MESSAGE);
+  if (c.minAccountAgeHours > 0) {
+    const [me] = await tx.select({ createdAt: user.createdAt }).from(user).where(eq(user.id, userId));
+    if (me && me.createdAt.getTime() > Date.now() - c.minAccountAgeHours * 3_600_000) {
+      throw forbidden("Your account is too new to join this community. Try again later.");
+    }
+  }
+  if (c.raidJoinLimit > 0) {
+    const since = new Date(Date.now() - RAID_WINDOW_MINUTES * 60_000);
+    const [{ recent }] = await tx.select({ recent: count() }).from(member)
+      .where(and(eq(member.communityId, c.id), gt(member.joinedAt, since), ne(member.userId, c.ownerId)));
+    if (recent >= c.raidJoinLimit) {
+      await tx.update(community).set({ invitesPausedAt: new Date() }).where(eq(community.id, c.id));
+      await tx.insert(auditLog).values({ communityId: c.id, actorId: null, action: "invites.auto_pause", reason: `${recent} joins in ${RAID_WINDOW_MINUTES} minutes` });
+      // Returned, not thrown, so the pause commits.
+      return "raid";
+    }
+  }
+  await tx.insert(member).values({ communityId, userId, rulesAcceptedVersion: c.rulesRequired ? c.rulesVersion : 0 });
+  return "joined";
+}
+
+/** Join a community its owner listed in Discover; same checks as an invite. */
+export async function joinDiscoverable(userId: string, rawCommunityId: unknown, acceptedRulesVersion?: unknown): Promise<string> {
+  await assertActiveUser(userId);
+  await assertInvitesAllowed();
+  const communityId = parse(uuid, rawCommunityId);
+  const joined = await db.transaction(async (tx) => {
+    await lockCommunity(tx, communityId);
+    return joinLocked(tx, communityId, userId, acceptedRulesVersion, and(isNull(community.suspendedAt), eq(community.discoverable, true)));
+  });
+  if (joined === "raid") throw forbidden(PAUSED_MESSAGE);
+  return communityId;
 }
 
 // --- Safety settings --------------------------------------------------------

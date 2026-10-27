@@ -56,7 +56,7 @@ export function GettingStarted({ onAddFriend, hasPublicChannels }: GettingStarte
         <CreateCommunityDialog trigger="button" />
         <Button variant="outline" size="lg" onClick={onAddFriend}><UserPlusIcon aria-hidden />Add a friend</Button>
         {hasPublicChannels && (
-          <Link href="/discover" className={buttonVariants({ variant: "outline", size: "lg" })}><CompassIcon aria-hidden />Browse public channels</Link>
+          <Link href="/app/discover" className={buttonVariants({ variant: "outline", size: "lg" })}><CompassIcon aria-hidden />Discover communities</Link>
         )}
       </div>
     </section>

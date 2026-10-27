@@ -68,3 +68,22 @@ export function RailLink({ communityId, name, initial, muted }: RailLinkProps) {
     </div>
   );
 }
+
+/** Discord's compass: green tile, filled while browsing Discover. */
+export function RailDiscoverLink({ children }: { children: React.ReactNode }) {
+  const active = usePathname().startsWith("/app/discover");
+  return (
+    <div className="group/rail relative">
+      <RailPill active={active} unread={false} />
+      <Link
+        href="/app/discover"
+        aria-label="Discover communities"
+        aria-current={active ? "page" : undefined}
+        title="Discover"
+        className={`grid size-12 place-items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${active ? "bg-[#23a55a] text-white" : "bg-white/[0.08] text-[#23a55a] hover:bg-[#23a55a] hover:text-white"}`}
+      >
+        {children}
+      </Link>
+    </div>
+  );
+}

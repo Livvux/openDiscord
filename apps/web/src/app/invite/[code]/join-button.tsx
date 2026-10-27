@@ -2,10 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { acceptInvite } from "@/app/app/actions";
+import { acceptInvite, joinDiscoverable } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 
-export function JoinButton({ code, rulesVersion, rulesRequired }: { code: string; rulesVersion: number; rulesRequired: boolean }) {
+/** Joins by invite `code`, or a Discover-listed `communityId`. */
+export function JoinButton({ code, communityId, rulesVersion, rulesRequired }: { code?: string; communityId?: string; rulesVersion: number; rulesRequired: boolean }) {
   const router = useRouter();
   const [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,14 +19,15 @@ export function JoinButton({ code, rulesVersion, rulesRequired }: { code: string
         disabled={pending || (rulesRequired && !acknowledged)}
         onClick={() =>
           startTransition(async () => {
-            const result = await acceptInvite(code, acknowledged ? rulesVersion : undefined);
+            const accepted = acknowledged ? rulesVersion : undefined;
+            const result = communityId ? await joinDiscoverable(communityId, accepted) : await acceptInvite(code!, accepted);
             if (!result.ok) return setError(result.error);
             router.push(`/app/c/${result.data}`);
             router.refresh();
           })
         }
       >
-        {pending ? "Joining…" : "Accept invite"}
+        {pending ? "Joining…" : communityId ? "Join community" : "Accept invite"}
       </Button>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </div>
