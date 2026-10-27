@@ -14,8 +14,8 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 // Edge-to-edge on notched phones (the shell pads itself with the safe-area insets) and a status bar matching the app.
 export const viewport: Viewport = { themeColor: "#0f172a", viewportFit: "cover" };
 
-export default function AppLayout({ children }: LayoutProps<"/app">) {
-  return <Suspense fallback={<div role="status" className="p-4">Opening your account…</div>}><AuthenticatedShell>{children}</AuthenticatedShell></Suspense>;
+export default function AppLayout({ children, settings }: LayoutProps<"/app">) {
+  return <Suspense fallback={<div role="status" className="p-4">Opening your account…</div>}><AuthenticatedShell>{children}{settings}</AuthenticatedShell></Suspense>;
 }
 async function AuthenticatedShell({ children }: { children: React.ReactNode }) {
   const { id, sessionId } = await requirePageUser();

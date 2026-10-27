@@ -15,7 +15,8 @@ test.describe("safety controls", () => {
     const spam = owner.getByRole("log").getByRole("listitem").filter({ hasText: "buy cheap followers" });
     await spam.hover();
     owner.once("dialog", (d) => d.accept());
-    await spam.getByRole("button", { name: "Block Toby Troll" }).click();
+    await spam.getByRole("button", { name: "More message actions" }).click();
+    await owner.getByRole("menuitem", { name: "Block Toby Troll" }).click();
     await expect(owner.getByText("Message from a blocked person.")).toBeVisible();
     await expect(owner.getByRole("log").getByText("buy cheap followers")).toHaveCount(0);
     await owner.getByRole("button", { name: "Show blocked message" }).click();
@@ -26,9 +27,11 @@ test.describe("safety controls", () => {
 
     // Pause invites: the link stops working for newcomers.
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Safety", exact: true }).click();
     await owner.getByRole("switch", { name: /Pause invites/ }).click();
     await owner.getByRole("button", { name: "Save safety settings" }).click();
     await expect(owner.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Audit log", exact: true }).click();
     await expect(owner.getByText("paused invites")).toBeVisible();
     await expectNoA11yViolations(owner);
 
@@ -40,6 +43,7 @@ test.describe("safety controls", () => {
 
     // Unblock from account settings.
     await owner.goto("/app/settings");
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Blocked people", exact: true }).click();
     await owner.getByRole("button", { name: "Unblock Toby Troll" }).click();
     await expect(owner.getByText("You haven't blocked anyone.")).toBeVisible();
   });

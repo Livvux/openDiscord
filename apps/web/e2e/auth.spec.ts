@@ -24,6 +24,7 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
   await openAccountSettings(page);
+  await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Devices", exact: true }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
   await finishSignOut(page);
 

@@ -10,6 +10,7 @@ test.describe("AutoMod", () => {
     await createCommunity(owner, "Clean Chat");
     const invitePath = await createInviteLink(owner);
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "AutoMod", exact: true }).click();
     await owner.getByLabel("Blocked words").fill("crypto giveaway");
     await owner.getByRole("button", { name: "Save AutoMod rules" }).click();
     await expect(owner.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
@@ -26,6 +27,7 @@ test.describe("AutoMod", () => {
     await owner.reload();
     // Role queries skip React's hidden streaming container (<div hidden id="S:n">), which can briefly
     // hold a second copy of the server-rendered section; exactly one entry was audited.
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Audit log", exact: true }).click();
     const audit = owner.getByRole("region", { name: "Audit log" });
     await expect(audit.getByRole("listitem").filter({ hasText: "had a message blocked by AutoMod" })).toHaveCount(1);
   });

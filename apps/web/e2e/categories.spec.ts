@@ -12,11 +12,13 @@ test.describe("categories", () => {
     const member = await joinAsNewUser(browser, "Dan Dweller", invitePath);
 
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Categories", exact: true }).click();
     await owner.getByLabel("New category").fill("Projects");
     await owner.getByRole("button", { name: "Create", exact: true }).click();
     await expect(owner.getByLabel("Name of category Projects")).toBeVisible();
     await expectNoA11yViolations(owner);
 
+    await owner.getByRole("button", { name: "Close settings" }).click();
     await createChannel(owner, "roadmap");
     await owner.getByRole("button", { name: "Channel settings" }).click();
     await owner.getByRole("dialog").getByLabel("Category", { exact: true }).selectOption({ label: "Projects" });

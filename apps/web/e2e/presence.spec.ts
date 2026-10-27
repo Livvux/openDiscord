@@ -14,10 +14,12 @@ test.describe("presence and notification level", () => {
 
     // Not shown before opting in.
     await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Members", exact: true }).click();
     await expect(owner.getByText("Pia Present")).toBeVisible();
     await expect(owner.getByText("(online)")).toHaveCount(0);
 
     await member.goto("/app/settings");
+    await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Online status", exact: true }).click();
     await member.getByRole("switch", { name: /when I'm online/ }).click();
     await expect(member.getByRole("switch", { name: /when I'm online/ })).toBeChecked();
     await expectNoA11yViolations(member);
@@ -31,10 +33,12 @@ test.describe("presence and notification level", () => {
 
     // The member mutes the community; only their rail shows it.
     await member.getByRole("link", { name: "Community info" }).click();
+    await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Notifications", exact: true }).click();
     await member.getByRole("radio", { name: /Muted/ }).click();
     await expect(member.getByRole("radio", { name: /Muted/ })).toBeChecked();
     await expect(member.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
     await member.reload();
+    await member.getByRole("button", { name: "Close settings" }).click();
     await expect(member.getByRole("link", { name: /Lounge.*muted/ })).toBeVisible();
     await expect(owner.getByRole("link", { name: /Lounge.*muted/ })).toHaveCount(0);
   });

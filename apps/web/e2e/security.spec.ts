@@ -5,7 +5,7 @@ import { expectNoA11yViolations, finishSignOut, newUserPage, PASSWORD, signUp } 
 test.skip(({ isMobile }) => isMobile, "desktop flow");
 
 async function signOut(page: Page) {
-  await page.goto("/app/settings");
+  await page.goto("/app/settings#Sessions-heading");
   await page.getByRole("button", { name: "Sign out" }).click();
   await finishSignOut(page);
 }
@@ -20,13 +20,13 @@ async function signInWithPassword(page: Page, email: string) {
 test("authenticator app (TOTP) two-factor sign-in with backup code fallback", async ({ browser }) => {
   const page = await newUserPage(browser);
   const email = await signUp(page, "Tara Totp");
-  await page.goto("/app/settings");
+  await page.goto("/app/settings#Authenticator%20app-heading");
 
   await page.getByLabel("Confirm your password").fill(PASSWORD);
   await page.getByRole("button", { name: "Set up" }).click();
   await expect(page.getByRole("img", { name: "QR code for your authenticator app" })).toBeVisible();
   const secret = (await page.locator("code").first().textContent())!.trim();
-  const backupCode = (await page.getByRole("listitem").filter({ hasText: /^[\w-]{6,}$/ }).first().textContent())!.trim();
+  const backupCode = (await page.getByRole("region", { name: "Authenticator app", exact: true }).getByRole("listitem").filter({ hasText: /^[\w-]{6,}$/ }).first().textContent())!.trim();
   await expectNoA11yViolations(page);
 
   // A wrong code doesn't enable it.
@@ -68,7 +68,7 @@ test("passkey registration and passwordless sign-in", async ({ browser }) => {
   });
 
   await signUp(page, "Pat Passkey");
-  await page.goto("/app/settings");
+  await page.goto("/app/settings#Passkeys-heading");
   await page.getByLabel("Name (optional)").fill("Test laptop");
   await page.getByRole("button", { name: "Add passkey" }).click();
   await expect(page.getByText("Test laptop")).toBeVisible();
@@ -77,7 +77,7 @@ test("passkey registration and passwordless sign-in", async ({ browser }) => {
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
-  await page.goto("/app/settings");
+  await page.goto("/app/settings#Passkeys-heading");
   await page.getByRole("button", { name: "Remove passkey Test laptop" }).click();
   await expect(page.getByText("No passkeys yet.")).toBeVisible();
 });

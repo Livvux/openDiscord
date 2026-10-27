@@ -28,7 +28,8 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await showNavigationFor(owner, "Invite people");
   const invitePath = await createInviteLink(owner);
   await owner.goto(settingsPath);
-  const rules = owner.getByRole("main").locator('section[aria-labelledby="community-rules"]:visible');
+  await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Community rules", exact: true }).click();
+  const rules = owner.getByRole("dialog").getByRole("region", { name: "Community rules", exact: true });
   await rules.getByRole("textbox", { name: "Community rules", exact: true }).fill("Be respectful. <b>Plain text rules</b>");
   await rules.getByRole("checkbox", { name: "Require acknowledgement before joining or sending messages", exact: true }).check();
   await rules.getByRole("button", { name: "Save community rules" }).click();
@@ -57,6 +58,7 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await expectNoA11yViolations(member);
 
   await owner.reload();
+  await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Members", exact: true }).click();
   owner.once("dialog", (dialog) => dialog.accept("Repeated disruption <b>text only</b>"));
   await owner.getByRole("button", { name: "Ban Trust Appellant", exact: true }).click();
   await expect(owner.getByRole("button", { name: "Ban Trust Appellant", exact: true })).toHaveCount(0);
@@ -69,7 +71,8 @@ test("rules join, updated acknowledgement and private ban appeal review", async 
   await member.screenshot({ path: testInfo.outputPath("own-restriction.png"), fullPage: true });
 
   await owner.reload();
-  const reviews = owner.getByRole("main").locator('section[aria-labelledby="ban-appeals"]:visible');
+  await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Ban appeals", exact: true }).click();
+  const reviews = owner.getByRole("dialog").getByRole("region", { name: "Ban appeals", exact: true });
   await expect(reviews.getByText("I understand; please review <script>as text</script>.", { exact: true })).toBeVisible();
   await reviews.getByLabel("Decision").selectOption("unban");
   await reviews.getByLabel("Reply to appellant (optional)").fill("You can rejoin.");
