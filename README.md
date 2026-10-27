@@ -6,7 +6,7 @@ Open-source community platform you can host yourself. *Communities belong to eve
 [opendiscord.app](https://opendiscord.app); every self-hosted install runs the same release
 and works without it.
 
-> **Status: closed alpha.** Communities with private channels and role permissions, realtime chat with
+> **Status: open alpha.** Communities with private channels and role permissions, realtime chat with
 > mentions, unread state, replies, reactions, pins, threads, Markdown, search, images and files, voice and
 > video channels with screen sharing (optional LiveKit), presence, notifications (in-app, desktop, Web Push),
 > blocking, AutoMod, anti-raid controls, bots, webhooks and a public API, community export/import, GDPR
