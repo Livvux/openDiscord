@@ -30,7 +30,7 @@ test("global administration works without 2FA and applies reports and suspension
     // Test-only role fixture. Runtime grants are exposed exclusively through authenticated admin actions.
     await db.query("insert into instance_admin (user_id) values ($1)", [adminId]);
     await page.goto("/app/admin");
-    await expect(page.getByRole("heading", { name: "Instance control" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Instance administration" })).toBeVisible();
     await expect(page.getByLabel("Authenticator code")).toHaveCount(0);
     await expectNoA11yViolations(page);
 

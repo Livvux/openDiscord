@@ -23,6 +23,7 @@ export const suspendCommunity = async (id: string, suspended: boolean, reason: s
 export const verifyCommunity = async (id: string, verified: boolean, reason: string) => run((a) => admin.setCommunityVerified(a, id, verified, reason));
 export const transferCommunity = async (id: string, email: string, reason: string) => run((a) => admin.transferCommunity(a, id, email, reason));
 export const setAdmin = async (id: string, enabled: boolean, reason: string) => run((a) => admin.setInstanceAdmin(a, id, enabled, reason));
+export const setBadge = async (id: string, badge: "hypesquad", enabled: boolean, reason: string) => run((a) => admin.setUserBadge(a, id, badge, enabled, reason));
 export const setApproval = async (id: string, decision: "approved" | "rejected", reason: string) => run((a) => admin.setApproval(a, id, decision, reason));
 export const setClosedAlpha = async (enabled: boolean, reason: string) => run((a) => admin.setClosedAlpha(a, enabled, reason));
 export const saveSettings = async (settings: z.infer<typeof admin.settingsInput>, reason: string) => run((a) => admin.updateInstanceSettings(a, settings, reason));

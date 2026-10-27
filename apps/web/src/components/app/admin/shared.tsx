@@ -1,7 +1,38 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import type { AdminDashboard } from "@/server/instance-admin";
 
-export type AdminUser = AdminDashboard["users"][number];
+export type AdminUser = AdminDashboard["users"]["items"][number];
+
+/** Admin URLs only carry the parameters that matter; empty values are dropped. */
+export function adminHref(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams(Object.entries(params).filter((e): e is [string, string | number] => e[1] !== undefined && e[1] !== "" && e[1] !== 1).map(([k, v]) => [k, String(v)]));
+  return `/app/admin?${query}`;
+}
+
+export function FilterChips<T extends string>({ label, options, current, href }: { label: string; options: readonly (readonly [T, string])[]; current: T; href: (value: T) => string }) {
+  return (
+    <nav aria-label={label} className="flex flex-wrap gap-1.5">
+      {options.map(([value, text]) => (
+        <Link key={value} href={href(value)} aria-current={value === current ? "page" : undefined} className="rounded-full border px-3 py-1 text-sm text-zinc-300 hover:bg-muted aria-[current=page]:border-brand-indigo aria-[current=page]:bg-brand-indigo/15 aria-[current=page]:text-zinc-100">
+          {text}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+export function Pager({ page, hasMore, href }: { page: number; hasMore: boolean; href: (page: number) => string }) {
+  if (page === 1 && !hasMore) return null;
+  const link = "rounded-lg border px-3 py-1 text-sm text-zinc-300 hover:bg-muted";
+  return (
+    <nav aria-label="Pages" className="flex items-center justify-between gap-3 border-t py-3 text-sm text-muted-foreground">
+      {page > 1 ? <Link href={href(page - 1)} className={link}>Previous</Link> : <span />}
+      <span>Page {page}</span>
+      {hasMore ? <Link href={href(page + 1)} className={link}>Next</Link> : <span />}
+    </nav>
+  );
+}
 
 /** Deterministic (server and client render the same string), unambiguous across time zones. */
 export const formatDate = (value: Date | string) => new Date(value).toISOString().replace("T", " ").slice(0, 16) + " UTC";

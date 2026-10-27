@@ -1,10 +1,11 @@
 import { consumeVoiceRooms } from "./voice-sfu";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
-import { and, count, desc, eq, gt, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "@/db";
-import { abuseReport, channel, community, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userSuspension } from "@/db/schema";
+import { abuseReport, channel, community, dmReport, instanceAdmin, instanceAuditLog, instanceSettings, member, message, session, user, userBadge, userSuspension } from "@/db/schema";
 import type { Db } from "./access";
 import { AppError, forbidden, notFound } from "./errors";
 import { sendMail } from "@/lib/mail";
@@ -56,33 +57,60 @@ const userFilterWhere: Record<UserFilter, SQL | undefined> = {
   admins: isNotNull(instanceAdmin.userId),
 };
 
-export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "", rawStatus: unknown = "open", rawFilter: unknown = "all") {
+export const AUDIT_AREAS = ["all", "user", "community", "report", "instance"] as const;
+export type AuditArea = (typeof AUDIT_AREAS)[number];
+/** Admin rights and encryption identity resets are account changes, so they show up under "user". */
+const auditAreaWhere: Record<AuditArea, SQL | undefined> = {
+  all: undefined,
+  user: or(ilike(instanceAuditLog.action, "user.%"), ilike(instanceAuditLog.action, "admin.%"), ilike(instanceAuditLog.action, "dm.identity.%")),
+  community: ilike(instanceAuditLog.action, "community.%"),
+  report: or(ilike(instanceAuditLog.action, "report.%"), ilike(instanceAuditLog.action, "dm.report.%")),
+  instance: ilike(instanceAuditLog.action, "instance.%"),
+};
+export const PAGE_SIZE = 50;
+const AUDIT_PAGE_SIZE = 100;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** One extra row tells whether there is a next page, without a count query. */
+const pageOf = <T>(rows: T[], size: number) => ({ items: rows.slice(0, size), hasMore: rows.length > size });
+
+export interface DashboardQuery { search?: unknown; status?: unknown; filter?: unknown; area?: unknown; page?: unknown }
+export async function adminDashboard(actor: AdminActor, query: DashboardQuery = {}) {
   await requireInstanceAdmin(actor);
-  const search = parse(z.string().trim().max(100), rawSearch);
-  const status = parse(z.enum(["open", "dismissed", "removed"]), rawStatus);
-  const filter = parse(z.enum(USER_FILTERS), rawFilter);
+  const search = parse(z.string().trim().max(100), query.search ?? "");
+  const status = parse(z.enum(["open", "dismissed", "removed", "private"]), query.status ?? "open");
+  const filter = parse(z.enum(USER_FILTERS), query.filter ?? "all");
+  const area = parse(z.enum(AUDIT_AREAS), query.area ?? "all");
+  const page = parse(z.number().int().min(1).max(1000), query.page ?? 1);
   const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+  const reporter = alias(user, "reporter");
   const [users, pending, communities, reports, logs, admins, settings, [stats]] = await Promise.all([
     db.select({ id: user.id, name: user.name, email: user.email, twoFactorEnabled: user.twoFactorEnabled, createdAt: user.createdAt,
-      approvalStatus: user.approvalStatus, suspendedAt: userSuspension.createdAt, suspensionReason: userSuspension.reason, adminId: instanceAdmin.userId })
+      approvalStatus: user.approvalStatus, suspendedAt: userSuspension.createdAt, suspensionReason: userSuspension.reason, adminId: instanceAdmin.userId,
+      hypesquad: sql<boolean>`exists (select 1 from ${userBadge} where ${userBadge.userId} = ${user.id} and ${userBadge.badge} = 'hypesquad')`,
+      lastActiveAt: sql<Date | null>`(select max(${session.updatedAt}) from ${session} where ${session.userId} = ${user.id})`.mapWith(session.updatedAt),
+      ownedCommunities: sql<number>`(select count(*) from ${community} where ${community.ownerId} = ${user.id})`.mapWith(Number) })
       .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id)).leftJoin(instanceAdmin, eq(instanceAdmin.userId, user.id))
       .where(and(search ? or(ilike(user.name, pattern), ilike(user.email, pattern)) : undefined, userFilterWhere[filter]))
-      .orderBy(desc(user.createdAt), user.id).limit(50),
+      .orderBy(desc(user.createdAt), user.id).limit(PAGE_SIZE + 1).offset((page - 1) * PAGE_SIZE),
     // The approval queue is oldest first: fair, and nobody waits forever at the bottom.
     db.select({ id: user.id, name: user.name, email: user.email, emailVerified: user.emailVerified, createdAt: user.createdAt })
       .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id))
       .where(and(eq(user.approvalStatus, "pending"), isNull(userSuspension.userId))).orderBy(user.createdAt, user.id).limit(100),
-    db.select({ id: community.id, name: community.name, ownerId: community.ownerId, ownerEmail: user.email,
-      suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason, verifiedAt: community.verifiedAt })
+    db.select({ id: community.id, name: community.name, ownerId: community.ownerId, ownerEmail: user.email, createdAt: community.createdAt,
+      discoverable: community.discoverable, suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason, verifiedAt: community.verifiedAt,
+      members: sql<number>`(select count(*) from ${member} where ${member.communityId} = ${community.id})`.mapWith(Number) })
       .from(community).innerJoin(user, eq(user.id, community.ownerId))
-      .where(search ? ilike(community.name, pattern) : undefined).orderBy(desc(community.createdAt), community.id).limit(50),
-    db.select({ id: abuseReport.id, communityId: abuseReport.communityId, communityName: community.name,
+      .where(search ? ilike(community.name, pattern) : undefined).orderBy(desc(community.createdAt), community.id)
+      .limit(PAGE_SIZE + 1).offset((page - 1) * PAGE_SIZE),
+    status === "private" ? [] : db.select({ id: abuseReport.id, communityId: abuseReport.communityId, communityName: community.name,
       messageId: abuseReport.messageId, reason: abuseReport.reason, status: abuseReport.status, resolution: abuseReport.resolution,
-      createdAt: abuseReport.createdAt }).from(abuseReport).leftJoin(community, eq(community.id, abuseReport.communityId))
+      reporterName: reporter.name, createdAt: abuseReport.createdAt }).from(abuseReport).leftJoin(community, eq(community.id, abuseReport.communityId))
+      .leftJoin(reporter, eq(reporter.id, abuseReport.reporterId))
       .where(eq(abuseReport.status, status)).orderBy(desc(abuseReport.createdAt), abuseReport.id).limit(50),
     db.select({ id: instanceAuditLog.id, actorId: instanceAuditLog.actorId, actorName: user.name, action: instanceAuditLog.action,
       targetId: instanceAuditLog.targetId, reason: instanceAuditLog.reason, createdAt: instanceAuditLog.createdAt })
-      .from(instanceAuditLog).leftJoin(user, eq(user.id, instanceAuditLog.actorId)).orderBy(desc(instanceAuditLog.id)).limit(100),
+      .from(instanceAuditLog).leftJoin(user, eq(user.id, instanceAuditLog.actorId)).where(auditAreaWhere[area])
+      .orderBy(desc(instanceAuditLog.id)).limit(AUDIT_PAGE_SIZE + 1).offset((page - 1) * AUDIT_PAGE_SIZE),
     db.select({ id: user.id, name: user.name, email: user.email }).from(instanceAdmin).innerJoin(user, eq(user.id, instanceAdmin.userId)),
     getInstanceSettings(),
     db.select({
@@ -90,10 +118,27 @@ export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "",
       pending: sql<number>`count(*) filter (where ${user.approvalStatus} = 'pending' and ${userSuspension.userId} is null)`.mapWith(Number),
       suspended: count(userSuspension.userId),
       openReports: sql<number>`(select count(*) from ${abuseReport} where ${abuseReport.status} = 'open')`.mapWith(Number),
+      openPrivateReports: sql<number>`(select count(*) from ${dmReport} where ${dmReport.resolvedAt} is null)`.mapWith(Number),
       communities: sql<number>`(select count(*) from ${community})`.mapWith(Number),
     }).from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id)),
   ]);
-  return { users, pending, communities, reports, logs, admins, settings, stats, filter };
+  const auditPage = pageOf(logs, AUDIT_PAGE_SIZE);
+  return {
+    users: pageOf(users, PAGE_SIZE), pending, communities: pageOf(communities, PAGE_SIZE), reports, admins, settings, stats, filter,
+    logs: { ...auditPage, items: await withTargetNames(auditPage.items) },
+  };
+}
+
+/** Audit targets are bare ids; show the account or community name next to them while it still exists. */
+async function withTargetNames<T extends { targetId: string }>(entries: T[]) {
+  const ids = [...new Set(entries.map((e) => e.targetId))];
+  const uuids = ids.filter((id) => UUID_PATTERN.test(id));
+  const [users, communities] = await Promise.all([
+    ids.length ? db.select({ id: user.id, name: user.name }).from(user).where(inArray(user.id, ids)) : [],
+    uuids.length ? db.select({ id: community.id, name: community.name }).from(community).where(inArray(community.id, uuids)) : [],
+  ]);
+  const names = new Map([...users, ...communities].map((row) => [row.id, row.name]));
+  return entries.map((e) => ({ ...e, targetName: names.get(e.targetId) ?? null }));
 }
 export type AdminDashboard = Awaited<ReturnType<typeof adminDashboard>>;
 
@@ -207,6 +252,20 @@ export async function setInstanceAdmin(actor: AdminActor, rawId: unknown, enable
     }
     await invalidateLostVoiceCapabilities(tx, beforeVoice);
     await audit(tx, actor, grant ? "admin.grant" : "admin.revoke", id, reason);
+  });
+}
+/** Granted profile badges (today only HypeSquad); derived badges can't be granted. */
+export async function setUserBadge(actor: AdminActor, rawId: unknown, rawBadge: unknown, enabled: unknown, rawReason: unknown) {
+  const id = parse(z.string().min(1).max(128), rawId);
+  const badge = parse(z.enum(["hypesquad"]), rawBadge);
+  const grant = parse(z.boolean(), enabled);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const [target] = await tx.select({ id: user.id }).from(user).where(eq(user.id, id));
+    if (!target) throw notFound("Account not found.");
+    if (grant) await tx.insert(userBadge).values({ userId: id, badge }).onConflictDoNothing();
+    else await tx.delete(userBadge).where(and(eq(userBadge.userId, id), eq(userBadge.badge, badge)));
+    await audit(tx, actor, grant ? "user.badge.grant" : "user.badge.revoke", id, `${reason} (${badge})`);
   });
 }
 export const settingsInput = z.object({
