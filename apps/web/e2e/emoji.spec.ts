@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
+import { createCommunity, expectNoA11yViolations, newUserPage, openReactionPicker, signUp } from "./helpers";
 
 test("emoji search, insertion, local images and full reactions", async ({ browser }) => {
   const page = await newUserPage(browser);
@@ -23,8 +23,7 @@ test("emoji search, insertion, local images and full reactions", async ({ browse
   await composer.press("Enter");
   const row = page.getByRole("log").getByRole("listitem").filter({ has: page.getByRole("img", { name: "🎉", exact: true }) }).first();
   await expect(row.getByRole("img", { name: "🎉", exact: true })).toHaveAttribute("src", "/twemoji/17.0.3/svg/1f389.svg");
-  await row.hover();
-  await row.getByRole("button", { name: "Add reaction" }).click();
+  await openReactionPicker(row);
   const reactions = page.getByRole("dialog", { name: "Add a reaction", exact: true });
   await reactions.getByRole("button", { name: "Show all Emojis" }).click();
   await reactions.getByRole("textbox").fill("rocket");

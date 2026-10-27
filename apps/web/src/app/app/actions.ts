@@ -2,6 +2,8 @@
 // Thin wrappers: authenticate, call the service (which validates and authorises), refresh the UI.
 // Next.js rejects cross-origin Server Action calls, which covers CSRF.
 import { refresh } from "next/cache";
+import { cookies } from "next/headers";
+import { isAppLocale, LOCALE_COOKIE } from "@/lib/i18n";
 import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
@@ -10,7 +12,7 @@ import * as communities from "@/server/communities";
 import * as discovery from "@/server/discovery";
 import * as friends from "@/server/friends";
 import * as integrations from "@/server/integrations";
-import { toResult, type ActionResult } from "@/server/errors";
+import { invalid, toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as publicChannels from "@/server/public-channels";
 import * as messages from "@/server/messages";
@@ -147,3 +149,10 @@ export const updateCommunityRules = async (id: string, input: { text: string; re
 export const acknowledgeCommunityRules = async (id: string, version: number) => run((u) => trust.acknowledgeCommunityRules(u, id, version));
 export const submitBanAppeal = async (id: string, content: string) => run((u) => trust.submitBanAppeal(u, id, content));
 export const resolveBanAppeal = async (id: string, appealId: string, resolution: "uphold" | "unban", note: string) => run((u) => trust.resolveBanAppeal(u, id, appealId, resolution, note));
+
+/** Per browser, like the theme; validated so the cookie only ever holds a supported language. */
+export const setLocale = async (locale: string) =>
+  run(async () => {
+    if (!isAppLocale(locale)) throw invalid("Unsupported language.");
+    (await cookies()).set(LOCALE_COOKIE, locale, { path: "/", maxAge: 60 * 60 * 24 * 365, sameSite: "lax", httpOnly: true, secure: process.env.NODE_ENV === "production" });
+  });

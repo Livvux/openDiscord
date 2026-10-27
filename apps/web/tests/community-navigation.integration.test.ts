@@ -38,6 +38,8 @@ describe("server navigation metadata", () => {
     expect(await listCommunityNavigation(member)).toEqual([{
       id: communityId,
       name: "Server menu",
+      iconId: null,
+      verified: false,
       notifications: "muted",
       authority: { isOwner: false, permissions: DEFAULT_MEMBER_PERMISSIONS, rank: 0 },
     }]);

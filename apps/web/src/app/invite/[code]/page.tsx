@@ -3,13 +3,24 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import { AuthCard } from "@/components/app/auth-card";
+import { communityImageUrl } from "@/components/app/community-icon";
 import { buttonVariants } from "@/components/ui/button";
 import { auth } from "@/lib/auth";
 import { getInvitePreview } from "@/server/communities";
 import { AppError } from "@/server/errors";
 import { JoinButton } from "./join-button";
 
-export const metadata: Metadata = { title: "Invitation", robots: { index: false, follow: false } };
+export async function generateMetadata({ params }: PageProps<"/invite/[code]">): Promise<Metadata> {
+  const robots = { index: false, follow: false };
+  const preview = await getInvitePreview((await params).code).catch((e: unknown) => {
+    if (e instanceof AppError) return null;
+    throw e;
+  });
+  if (!preview) return { title: "Invitation", robots };
+  const title = `Join ${preview.communityName}`;
+  const images = preview.shareImageId ? [communityImageUrl(preview.shareImageId)] : undefined;
+  return { title, robots, openGraph: { title, siteName: "openDiscord", images }, twitter: { card: images ? "summary_large_image" : "summary", title, images } };
+}
 
 export default function InvitePage({ params }: PageProps<"/invite/[code]">) {
   return (

@@ -4,6 +4,8 @@ import { PlusIcon } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useId, useState, useTransition } from "react";
 import { createCommunity } from "@/app/app/actions";
+import { railShape, RailTooltip } from "./rail-link";
+import { useMessages } from "@/lib/i18n/client";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -19,6 +21,7 @@ export function CreateCommunityDialog(props: CreateCommunityDialogProps) {
 
 function CommunityCreationForm({ trigger = "icon" }: CreateCommunityDialogProps) {
   const router = useRouter();
+  const rail = useMessages().rail;
   const id = useId();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,17 +41,19 @@ function CommunityCreationForm({ trigger = "icon" }: CreateCommunityDialogProps)
   return (
     <Dialog open={open} onOpenChange={(o) => (setOpen(o), setError(null))}>
       {trigger === "icon" ? (
-        <DialogTrigger
-          render={
-            <button
-              type="button"
-              aria-label="Create a community"
-              className="grid size-12 place-items-center rounded-2xl bg-white/[0.08] text-[#23a55a] transition-colors hover:bg-[#23a55a] hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            />
-          }
-        >
-          <PlusIcon />
-        </DialogTrigger>
+        <RailTooltip label={rail.addCommunity}>
+          <DialogTrigger
+            render={
+              <button
+                type="button"
+                aria-label={rail.createCommunity}
+                className={`${railShape(false)} bg-white/[0.08] text-[#23a55a] hover:bg-[#23a55a] hover:text-white`}
+              />
+            }
+          >
+            <PlusIcon />
+          </DialogTrigger>
+        </RailTooltip>
       ) : (
         <DialogTrigger render={<Button size="lg" />}>Create a community</DialogTrigger>
       )}

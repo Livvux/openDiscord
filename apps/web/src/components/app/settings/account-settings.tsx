@@ -25,6 +25,8 @@ import { PresenceSettings } from "@/components/app/settings/presence-settings";
 import { requirePageUser } from "@/server/session";
 import { mailEnabled } from "@/lib/mail";
 import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
+import { LanguageSettings } from "@/components/app/settings/language-settings";
+import { getMessages } from "@/lib/i18n/server";
 
 export function AccountSettings({ intercepted = false }: { intercepted?: boolean }) {
   return (
@@ -36,7 +38,7 @@ export function AccountSettings({ intercepted = false }: { intercepted?: boolean
 
 async function Settings({ intercepted }: { intercepted: boolean }) {
   const user = await requirePageUser();
-  const [owned, has2fa, blocked, showPresence, profile, avatar, badges] = await Promise.all([
+  const [owned, has2fa, blocked, showPresence, profile, avatar, badges, { settings: t }] = await Promise.all([
     ownedCommunityNames(user.id),
     twoFactorEnabled(user.id),
     listBlocked(user.id),
@@ -44,58 +46,63 @@ async function Settings({ intercepted }: { intercepted: boolean }) {
     getProfile(user.id),
     ownAvatar(user.id),
     badgesOf(user.id),
+    getMessages(),
   ]);
   return (
-    <SettingsModal title="User settings" closeHref="/app" intercepted={intercepted} groups={[
-      { label: "User settings", sections: [
-        ["Profile", "My profile"], ["Badges", "Badges"], ["Email address", "Email"], ["Authenticator app", "Two-factor"], ["Passkeys", "Passkeys"], ["Sessions", "Devices"],
+    // Section ids stay English: links and saved positions point at them in every language.
+    <SettingsModal title={t.title} closeHref="/app" intercepted={intercepted} groups={[
+      { label: t.groupUser, sections: [
+        ["Profile", t.myProfile], ["Badges", t.badges], ["Email address", t.email], ["Authenticator app", t.twoFactor], ["Passkeys", t.passkeys], ["Sessions", t.devices],
       ] },
-      { label: "App settings", sections: [["Theme", "Appearance"], ["Notifications", "Notifications"], ["Online status", "Online status"]] },
-      { label: "Privacy & safety", sections: [["Blocked people", "Blocked people"], ["Your data", "Your data"], ["Delete account", "Delete account"]] },
+      { label: t.groupApp, sections: [["Theme", t.appearance], ["Language", t.language], ["Notifications", t.notifications], ["Online status", t.onlineStatus]] },
+      { label: t.groupPrivacy, sections: [["Blocked people", t.blocked], ["Your data", t.yourData], ["Delete account", t.deleteAccount]] },
     ]}>
-      <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
+      <Section id="Profile" title={t.profile} description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />
       </Section>
-      <Section title="Badges" description="Shown on your profile.">
+      <Section id="Badges" title={t.badges} description="Shown on your profile.">
         <BadgeOverview badges={badges} />
       </Section>
-      <Section title="Theme">
+      <Section id="Theme" title={t.theme}>
         <ThemeSettings />
       </Section>
-      <Section title="Email address" description="Changes require a recent sign-in and verification. Your email is never shown to other members.">
+      <Section id="Language" title={t.language}>
+        <LanguageSettings />
+      </Section>
+      <Section id="Email address" title={t.emailAddress} description="Changes require a recent sign-in and verification. Your email is never shown to other members.">
         {mailEnabled ? <EmailSettings email={user.email} /> : <p className="text-sm text-muted-foreground">Email changes are unavailable because this instance has not configured email delivery.</p>}
       </Section>
-      <Section title="Notifications" description="Mentions always show a badge in the app. Desktop notifications are optional.">
+      <Section id="Notifications" title={t.notifications} description="Mentions always show a badge in the app. Desktop notifications are optional.">
         <NotificationSettings />
         {pushEnabled && vapidPublicKey && <PushSettings publicKey={vapidPublicKey} />}
       </Section>
-      <Section title="Online status" description="Off by default. When on, members of your communities and your friends see a dot while you have openDiscord open. Choose Idle or Do not disturb from the account menu.">
+      <Section id="Online status" title={t.onlineStatus} description="Off by default. When on, members of your communities and your friends see a dot while you have openDiscord open. Choose Idle or Do not disturb from the account menu.">
         <PresenceSettings visible={showPresence} />
       </Section>
-      <Section title="Blocked people" description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
+      <Section id="Blocked people" title={t.blocked} description="Their messages are collapsed for you and their mentions don't notify you. They aren't told.">
         <BlockedList blocked={blocked} currentUserId={user.id} />
       </Section>
-      <Section title="Authenticator app" description="Optional two-factor authentication with a time-based code (TOTP).">
+      <Section id="Authenticator app" title={t.authenticator} description="Optional two-factor authentication with a time-based code (TOTP).">
         <TwoFactorSettings enabled={has2fa} />
       </Section>
-      <Section title="Passkeys" description="Sign in with Face ID, Touch ID, Windows Hello or a security key.">
+      <Section id="Passkeys" title={t.passkeys} description="Sign in with Face ID, Touch ID, Windows Hello or a security key.">
         <PasskeySettings />
       </Section>
-      <Section title="Sessions" description="Devices currently signed in to your account.">
+      <Section id="Sessions" title={t.sessions} description="Devices currently signed in to your account.">
         <Sessions />
         <SignOutButton userId={user.id} />
       </Section>
-      <Section title="Your data" description="Download your profile, sessions, security settings, memberships and messages as JSON.">
+      <Section id="Your data" title={t.yourData} description="Download your profile, sessions, security settings, memberships and messages as JSON.">
         <a
           href="/api/me/export"
           download
           className="inline-flex h-8 items-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
         >
-          Download my data
+          {t.downloadData}
         </a>
       </Section>
-      <Section title="Delete account" description="Permanently deletes your account, your sessions and every message you wrote. This can't be undone.">
+      <Section id="Delete account" title={t.deleteAccount} description="Permanently deletes your account, your sessions and every message you wrote. This can't be undone.">
         <DeleteAccount ownedCommunities={owned} />
       </Section>
     </SettingsModal>

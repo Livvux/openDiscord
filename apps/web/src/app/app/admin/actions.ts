@@ -20,6 +20,7 @@ async function run<T>(fn: (actor: admin.AdminActor) => Promise<T>, refreshUi = t
 export const suspendUser = async (id: string, suspended: boolean, reason: string) => run((a) => admin.setUserSuspension(a, id, suspended, reason));
 export const revokeSessions = async (id: string, reason: string) => run((a) => admin.revokeUserSessions(a, id, reason));
 export const suspendCommunity = async (id: string, suspended: boolean, reason: string) => run((a) => admin.setCommunitySuspension(a, id, suspended, reason));
+export const verifyCommunity = async (id: string, verified: boolean, reason: string) => run((a) => admin.setCommunityVerified(a, id, verified, reason));
 export const transferCommunity = async (id: string, email: string, reason: string) => run((a) => admin.transferCommunity(a, id, email, reason));
 export const setAdmin = async (id: string, enabled: boolean, reason: string) => run((a) => admin.setInstanceAdmin(a, id, enabled, reason));
 export const setApproval = async (id: string, decision: "approved" | "rejected", reason: string) => run((a) => admin.setApproval(a, id, decision, reason));

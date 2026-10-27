@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { AdminDashboard } from "@/server/instance-admin";
 import { AdminAction } from "./admin-action";
+import { VerifiedBadge } from "../community-icon";
 import { EmptyState, formatDate, Panel } from "./shared";
 import { SearchForm } from "./users";
 
@@ -22,6 +23,7 @@ export function CommunitiesPanel({ communities, search }: { communities: AdminDa
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-2">
                 <span className="font-medium break-words text-zinc-100">{c.name}</span>
+                {c.verifiedAt && <VerifiedBadge />}
                 {c.suspendedAt ? <Badge variant="destructive" className="text-red-200">Suspended</Badge> : <Badge className="bg-emerald-400/15 text-emerald-200">Active</Badge>}
               </p>
               <p className="text-sm break-all text-muted-foreground">Owner: {c.ownerEmail}</p>
@@ -29,6 +31,7 @@ export function CommunitiesPanel({ communities, search }: { communities: AdminDa
             </div>
             <div className="flex flex-wrap gap-2 md:justify-end">
               <AdminAction label={c.suspendedAt ? "Unsuspend community" : "Suspend community"} variant={c.suspendedAt ? "outline" : "destructive"} description={`Community: ${c.name}. Suspension blocks access and invitations for every member.`} action={(r) => actions.suspendCommunity(c.id, !c.suspendedAt, r)} />
+              <AdminAction label={c.verifiedAt ? "Remove verification" : "Verify community"} variant="outline" description={`Community: ${c.name}. Verified communities show a blue badge everywhere their name appears.`} action={(r) => actions.verifyCommunity(c.id, !c.verifiedAt, r)} />
               <AdminAction label="Transfer ownership" description={`Community: ${c.name}. The new owner must already be an active member.`} extraLabel="New owner's email" extraType="email" action={(r, email) => actions.transferCommunity(c.id, email, r)} />
             </div>
           </li>

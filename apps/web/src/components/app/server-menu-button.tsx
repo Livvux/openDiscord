@@ -2,9 +2,10 @@
 
 import { ChevronDownIcon } from "lucide-react";
 import { openContextMenuFrom } from "@/components/ui/context-menu";
+import { VerifiedBadge } from "./community-icon";
 
 /** The server name opens the same actions as a right-click, like Discord's header dropdown. */
-export function ServerMenuButton({ name }: { name: string }) {
+export function ServerMenuButton({ name, verified = false }: { name: string; verified?: boolean }) {
   return (
     <button
       type="button"
@@ -12,6 +13,7 @@ export function ServerMenuButton({ name }: { name: string }) {
       onClick={(e) => openContextMenuFrom(e.currentTarget)}
       className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-md px-2 text-left text-base font-semibold text-sidebar-foreground hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:outline-ring"
     >
+      {verified && <VerifiedBadge />}
       <span className="truncate">{name}</span>
       <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
     </button>

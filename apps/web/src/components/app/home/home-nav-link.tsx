@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { unreadTotal } from "@/lib/dm/contracts";
+import { useMessages } from "@/lib/i18n/client";
 import { useDirectConversations } from "../notifications-provider";
-import { RailBadge, RailPill, railTile } from "../rail-link";
+import { RailBadge, RailPill, railTile, RailTooltip } from "../rail-link";
 
 const HOME_PATHS = ["/app", "/app/friends", "/app/messages"];
 
@@ -13,20 +14,22 @@ export function RailHomeLink({ initialUnread = 0 }: { initialUnread?: number }) 
   const active = HOME_PATHS.includes(usePathname());
   const { direct } = useDirectConversations();
   const unread = direct ? unreadTotal(direct) : initialUnread;
+  const label = useMessages().rail.directMessages;
   return (
     <div className="group/rail relative mt-2">
       <RailPill active={active} unread={false} />
-      <Link
-        href="/app"
-        aria-label={unread > 0 ? `Home, ${unread} unread private ${unread === 1 ? "message" : "messages"}` : "Home"}
-        aria-current={active ? "page" : undefined}
-        title="Home"
-        className={railTile(active)}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element -- static SVG, no optimisation needed */}
-        <img src="/brand/symbol-white.svg" alt="" width={28} height={28} />
-        <RailBadge count={unread} data="data-home-unread" />
-      </Link>
+      <RailTooltip label={label}>
+        <Link
+          href="/app"
+          aria-label={unread > 0 ? `Home, ${unread} unread private ${unread === 1 ? "message" : "messages"}` : "Home"}
+          aria-current={active ? "page" : undefined}
+          className={railTile(active)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- static SVG, no optimisation needed */}
+          <img src="/brand/symbol-white.svg" alt="" width={28} height={28} />
+          <RailBadge count={unread} data="data-home-unread" />
+        </Link>
+      </RailTooltip>
     </div>
   );
 }

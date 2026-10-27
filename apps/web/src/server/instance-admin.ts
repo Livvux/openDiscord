@@ -73,7 +73,7 @@ export async function adminDashboard(actor: AdminActor, rawSearch: unknown = "",
       .from(user).leftJoin(userSuspension, eq(userSuspension.userId, user.id))
       .where(and(eq(user.approvalStatus, "pending"), isNull(userSuspension.userId))).orderBy(user.createdAt, user.id).limit(100),
     db.select({ id: community.id, name: community.name, ownerId: community.ownerId, ownerEmail: user.email,
-      suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason })
+      suspendedAt: community.suspendedAt, suspensionReason: community.suspensionReason, verifiedAt: community.verifiedAt })
       .from(community).innerJoin(user, eq(user.id, community.ownerId))
       .where(search ? ilike(community.name, pattern) : undefined).orderBy(desc(community.createdAt), community.id).limit(50),
     db.select({ id: abuseReport.id, communityId: abuseReport.communityId, communityName: community.name,
@@ -150,6 +150,19 @@ export async function setCommunitySuspension(actor: AdminActor, rawId: unknown, 
     await afterAccessChange(id);
   }
 }
+/** The verified badge: an instance administrator vouches that the community is who it claims to be. */
+export async function setCommunityVerified(actor: AdminActor, rawId: unknown, verified: unknown, rawReason: unknown) {
+  const id = parse(uuid, rawId);
+  const enabled = parse(z.boolean(), verified);
+  const reason = parse(requiredReason, rawReason);
+  await mutate(actor, async (tx) => {
+    const rows = await tx.update(community).set({ verifiedAt: enabled ? new Date() : null })
+      .where(eq(community.id, id)).returning({ id: community.id });
+    if (!rows.length) throw notFound("Community not found.");
+    await audit(tx, actor, enabled ? "community.verify" : "community.unverify", id, reason);
+  });
+}
+
 export async function transferCommunity(actor: AdminActor, rawId: unknown, rawEmail: unknown, rawReason: unknown) {
   const id = parse(uuid, rawId);
   const email = parse(z.email().max(254).transform((s) => s.toLowerCase()), rawEmail);

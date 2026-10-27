@@ -74,7 +74,7 @@ function ContextMenuContent({
       <ContextMenuPrimitive.Positioner side={side} sideOffset={sideOffset} align={align} alignOffset={alignOffset} collisionPadding={8} className="isolate z-50">
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
-          className={cn("max-h-[var(--available-height)] min-w-52 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg bg-popover p-1.5 text-popover-foreground shadow-xl ring-1 ring-foreground/10 outline-none", className)}
+          className={cn("max-h-[var(--available-height)] min-w-52 max-w-[calc(100vw-1rem)] origin-(--transform-origin) overflow-y-auto rounded-lg bg-popover p-1.5 text-popover-foreground shadow-xl ring-1 ring-foreground/10 outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none", className)}
           {...props}
         />
       </ContextMenuPrimitive.Positioner>

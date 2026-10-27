@@ -3,12 +3,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
-import { communityInitials } from "./community-icon";
+import { Tooltip } from "@/components/ui/tooltip";
+import { useMessages } from "@/lib/i18n/client";
+import { railShape, railTile } from "./rail-styles";
+
+export { railShape, railTile };
+import { communityInitials, CommunityPicture, VerifiedBadge } from "./community-icon";
 import { useCommunityUnread, useReportCommunityUnread, type UnreadSummary } from "./notifications-provider";
 
 interface RailLinkProps {
   communityId: string;
   name: string;
+  iconId: string | null;
+  verified: boolean;
   /** Server-rendered unread state; live updates come from the notifications provider. */
   initial: UnreadSummary;
   /** Muted: no unread dot, mention badges stay. */
@@ -37,12 +44,13 @@ export function RailBadge({ count, data }: { count: number; data?: string }) {
   );
 }
 
-export const railTile = (active: boolean) =>
-  `relative grid size-12 place-items-center rounded-2xl transition-[background-color,color] duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-    active ? "bg-primary text-primary-foreground" : "bg-white/[0.08] hover:bg-primary hover:text-primary-foreground"
-  }`;
+/** The name bubble right of every rail tile. */
+export function RailTooltip({ label, children }: { label: React.ReactNode; children: React.ReactElement }) {
+  // Touch screens have no hover; the bubble would only pop up on focus when the panel opens.
+  return <Tooltip label={label} side="right" delay={0} className="[@media(hover:none)]:hidden">{children}</Tooltip>;
+}
 
-export function RailLink({ communityId, name, initial, muted }: RailLinkProps) {
+export function RailLink({ communityId, name, iconId, verified, initial, muted }: RailLinkProps) {
   const href = `/app/c/${communityId}`;
   const active = usePathname().startsWith(href);
   const report = useReportCommunityUnread();
@@ -55,16 +63,18 @@ export function RailLink({ communityId, name, initial, muted }: RailLinkProps) {
   return (
     <div className="group/rail relative">
       <RailPill active={active} unread={showUnread} />
-      <Link
-        href={href}
-        title={name}
-        aria-label={`${name}${status}, ${initials}`}
-        aria-current={active ? "page" : undefined}
-        className={`${railTile(active)} text-base font-medium ${active ? "" : muted ? "text-muted-foreground" : "text-sidebar-foreground"}`}
-      >
-        {initials}
-        <RailBadge count={mentions} />
-      </Link>
+      <RailTooltip label={<span className="flex items-center gap-1.5">{verified && <VerifiedBadge tooltip={false} />}{name}</span>}>
+        <Link
+          href={href}
+          aria-label={`${name}${verified ? ", verified" : ""}${status}${iconId ? "" : `, ${initials}`}`}
+          aria-current={active ? "page" : undefined}
+          className={`${iconId ? railShape(active) : railTile(active)} text-base font-medium ${active ? "" : muted ? "text-muted-foreground" : "text-sidebar-foreground"}`}
+        >
+          {/* The picture clips to the tile while the mention badge hangs over its corner. */}
+          <span className="grid size-full place-items-center overflow-hidden rounded-[inherit]"><CommunityPicture name={name} iconId={iconId} /></span>
+          <RailBadge count={mentions} />
+        </Link>
+      </RailTooltip>
     </div>
   );
 }
@@ -72,18 +82,20 @@ export function RailLink({ communityId, name, initial, muted }: RailLinkProps) {
 /** Discord's compass: green tile, filled while browsing Discover. */
 export function RailDiscoverLink({ children }: { children: React.ReactNode }) {
   const active = usePathname().startsWith("/app/discover");
+  const t = useMessages().rail;
   return (
     <div className="group/rail relative">
       <RailPill active={active} unread={false} />
-      <Link
-        href="/app/discover"
-        aria-label="Discover communities"
-        aria-current={active ? "page" : undefined}
-        title="Discover"
-        className={`grid size-12 place-items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${active ? "bg-[#23a55a] text-white" : "bg-white/[0.08] text-[#23a55a] hover:bg-[#23a55a] hover:text-white"}`}
-      >
-        {children}
-      </Link>
+      <RailTooltip label={t.discover}>
+        <Link
+          href="/app/discover"
+          aria-label={t.discoverCommunities}
+          aria-current={active ? "page" : undefined}
+          className={`${railShape(active)} ${active ? "bg-[#23a55a] text-white" : "bg-white/[0.08] text-[#23a55a] hover:bg-[#23a55a] hover:text-white"}`}
+        >
+          {children}
+        </Link>
+      </RailTooltip>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { Pool } from "pg";
-import { CAPTCHA_HEADER, expectNoA11yViolations, newUserPage } from "./helpers";
+import { CAPTCHA_HEADER, expectNoA11yViolations, newUserPage, openMessageMenu } from "./helpers";
 
 test("global administration works without 2FA and applies reports and suspensions", async ({ browser, baseURL }, testInfo) => {
   test.setTimeout(120_000);
@@ -54,8 +54,7 @@ test("global administration works without 2FA and applies reports and suspension
     await chatter.locator("textarea").press("Enter");
     await expect(chatter.getByText("QA reported private message", { exact: true })).toBeVisible();
     const reported = chatter.getByRole("log").getByRole("listitem").filter({ hasText: "QA reported private message" });
-    await reported.hover();
-    await reported.getByRole("button", { name: "More message actions" }).click();
+    await openMessageMenu(reported);
     await chatter.getByRole("menuitem", { name: "Report message", exact: true }).click();
     await chatter.getByLabel("Why are you reporting this message?").fill("QA message abuse report");
     await chatter.getByRole("button", { name: "Submit report" }).click();

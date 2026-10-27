@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createInviteLink, expectNoA11yViolations, newUserPage, PASSWORD, sendMessage, signUp } from "./helpers";
+import { createInviteLink, expectNoA11yViolations, newUserPage, openMessageMenu, PASSWORD, sendMessage, signUp } from "./helpers";
 import { collectRuntimeErrors } from "./runtime-errors";
 
 async function showNavigationFor(page: Page, name: string) {
@@ -70,8 +70,7 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await sendMessage(bob, "Find my community profile here.");
   const bobMessage = alice.getByRole("log").getByRole("listitem").filter({ hasText: "Find my community profile here." });
   await expect(bobMessage).toBeVisible();
-  await bobMessage.hover();
-  await bobMessage.getByRole("button", { name: "More message actions" }).click();
+  await openMessageMenu(bobMessage);
   await alice.getByRole("menuitem", { name: "Message Private Bob privately" }).click();
   await expect(alice.getByRole("button", { name: "Send message request", exact: true })).toBeEnabled({ timeout: 30_000 });
   await alice.getByRole("button", { name: "Send message request", exact: true }).click();
