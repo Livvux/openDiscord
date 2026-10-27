@@ -1,5 +1,6 @@
 "use client";
 
+import { HashIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { markChannelRead, sendMessage } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,9 @@ import { Composer } from "./composer";
 import { MessageItem, PendingItem } from "./message-item";
 import { ThreadPanel } from "./thread-panel";
 import { useChannelMessages } from "./use-channel-messages";
+import { useChannelTyping } from "./use-channel-typing";
+import { useMemberNames } from "../member-list";
+import { typingText } from "@/lib/typing";
 
 interface ChannelChatProps {
   channel: ChannelSummary;
@@ -38,6 +42,8 @@ interface Pending {
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
+const dayFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "long" });
+const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
 const NEAR_BOTTOM_PX = 120;
 
 export function ChannelChat(props: ChannelChatProps) {
@@ -56,10 +62,17 @@ export function ChannelChat(props: ChannelChatProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
+  // Discord's "viewing older messages" bar, once the reader is more than a screen above the newest message.
+  const [farFromPresent, setFarFromPresent] = useState(false);
   const heightBeforeOlder = useRef<number | null>(null);
   const [dividerAfter] = useState(lastReadId);
   const firstUnread = dividerAfter ? messages.find((m) => m.id > dividerAfter && m.authorId !== currentUserId)?.id : undefined;
   const clearUnread = useClearUnread();
+  const typing = useChannelTyping(channel.id, currentUserId, blockedIds);
+  const typingNow = typingText(useMemberNames(threadId ? [] : typing.typing));
+  const announceTyping = typing.changed;
+  // The draft drives the notice; threads keep their typing to themselves.
+  useEffect(() => { if (!threadId && canSend) announceTyping(!!draft.trim()); }, [draft, threadId, canSend, announceTyping]);
   const newest = messages.at(-1)?.id;
 
   // Reading the newest message while the tab is visible marks the channel read (threads don't move the marker).
@@ -165,7 +178,9 @@ export function ChannelChat(props: ChannelChatProps) {
         ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget;
-          nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+          const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+          nearBottom.current = distance < NEAR_BOTTOM_PX;
+          setFarFromPresent(distance > el.clientHeight);
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
@@ -194,25 +209,37 @@ export function ChannelChat(props: ChannelChatProps) {
               />
             </ol>
           ) : (
-            <div className="px-5 pb-2">
-              <h2 className="text-xl font-semibold text-zinc-100">Welcome to #{channel.name}</h2>
-              <p className="text-sm text-zinc-400">This is the start of the channel.</p>
+            <div className="mx-4 mt-4 mb-2">
+              <span aria-hidden className="mb-2 grid size-[68px] place-items-center rounded-full bg-white/10 text-foreground"><HashIcon className="size-10" /></span>
+              <h2 className="text-[32px] leading-10 font-bold text-foreground">Welcome to #{channel.name}!</h2>
+              <p className="text-base text-muted-foreground">This is the start of the #{channel.name} channel.{channel.topic ? ` ${channel.topic}` : ""}</p>
             </div>
           )}
           <div role="log" aria-label={threadRoot ? "Thread replies" : `Messages in #${channel.name}`} aria-live="polite" aria-relevant="additions">
           <ol>
             {messages.map((m, i) => {
               const prev = messages[i - 1];
+              const newDay = prev === undefined || !sameDay(prev.createdAt, m.createdAt);
+              // Discord starts a new group for replies and on a new day.
               const grouped =
                 prev !== undefined &&
+                !newDay &&
+                !m.replyTo &&
                 prev.authorId === m.authorId &&
                 Date.parse(m.createdAt) - Date.parse(prev.createdAt) < GROUP_WINDOW_MS;
               return (
                 <Fragment key={m.id}>
+                {newDay && (
+                  // A plain list item: list children can't take the separator role.
+                  <li className="mx-4 mt-6 mb-2 flex items-center gap-2 text-xs font-semibold text-muted-foreground" suppressHydrationWarning>
+                    <span aria-hidden className="h-px flex-1 bg-border" />
+                    {dayFormat.format(new Date(m.createdAt))}
+                    <span aria-hidden className="h-px flex-1 bg-border" />
+                  </li>
+                )}
                 {m.id === firstUnread && (
-                  <li role="separator" aria-label="New messages" className="mx-5 my-2 flex items-center gap-2 text-[11px] font-semibold text-red-400 uppercase">
-                    <span className="h-px flex-1 bg-red-500/50" />
-                    New
+                  <li className="relative mx-4 my-2 h-px bg-[#dc2626]">
+                    <span className="absolute -top-2 right-0 rounded-sm bg-[#dc2626] px-1 text-[10px] leading-4 font-bold text-white uppercase">New<span className="sr-only"> messages</span></span>
                   </li>
                 )}
                 <MessageItem
@@ -245,6 +272,18 @@ export function ChannelChat(props: ChannelChatProps) {
           {sendError}
         </p>
       )}
+      {farFromPresent && (
+        <div className="relative z-0 mx-4 -mb-2 flex items-center justify-between gap-2 rounded-t-lg bg-primary px-4 pt-1 pb-3 text-sm font-medium text-primary-foreground">
+          <span className="truncate">You&apos;re viewing older messages</span>
+          <button
+            type="button"
+            className="shrink-0 rounded px-1 font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
+            onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })}
+          >
+            Jump to present
+          </button>
+        </div>
+      )}
       {canSend ? (
         <Composer
           channelId={channel.id}
@@ -258,9 +297,26 @@ export function ChannelChat(props: ChannelChatProps) {
           communityId={communityId}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
+          onEditLast={() => {
+            const mine = messages.findLast((m) => m.authorId === currentUserId && !m.authorImported);
+            // The row owns its editor; open it the way its Edit button does.
+            scroller.current?.querySelector<HTMLButtonElement>(`[data-message-id="${mine?.id}"] button[aria-label="Edit message"]`)?.click();
+          }}
         />
       ) : (
-        <p className="mx-4 mb-4 rounded-lg bg-white/5 px-4 py-2.5 text-sm text-zinc-400">You don&apos;t have permission to send messages here.</p>
+        <p className="mx-4 mb-6 rounded-lg bg-card px-4 py-4 text-base text-muted-foreground">You do not have permission to send messages in this channel.</p>
+      )}
+      {!threadId && (
+        <p aria-live="polite" className="-mt-6 flex h-6 min-w-0 items-center gap-1.5 px-4 text-xs text-muted-foreground">
+          {typingNow && (
+            <>
+              <span aria-hidden className="flex gap-0.5">
+                {[0, 150, 300].map((delay) => <span key={delay} className="size-1.5 animate-bounce rounded-full bg-foreground/80" style={{ animationDelay: `${delay}ms` }} />)}
+              </span>
+              <span className="truncate"><span className="font-semibold text-foreground">{typingNow.names}</span>{typingNow.verb}</span>
+            </>
+          )}
+        </p>
       )}
     </div>
   );

@@ -16,6 +16,9 @@ import { has, Permission } from "./permissions";
 import { publish } from "./realtime";
 import { messageContent, parse, uuid } from "./validation";
 
+/** How long a typing notice lasts without a refresh (clients re-announce every few seconds). */
+const TYPING_TTL_MS = 8000;
+
 import { checkPublicPost, publicText, snapshotPublicPost } from "./public-channels";
 
 export const PAGE_SIZE = 50;
@@ -218,6 +221,15 @@ async function loadOwnedMessage(rawMessageId: unknown) {
     .where(eq(message.id, messageId));
   if (!row) throw notFound("Message not found.");
   return row;
+}
+
+/** Short-lived "is typing" metadata for a channel. Never persisted; only people who may post can announce it. */
+export async function publishChannelTyping(userId: string, rawChannelId: unknown, rawTyping: unknown): Promise<void> {
+  const channelId = parse(uuid, rawChannelId);
+  const typing = parse(z.boolean(), rawTyping);
+  await consume(`channel-typing:${userId}`, 30, 60_000);
+  const { channel: ch } = await requireChannel(db, channelId, userId, Permission.SendMessages);
+  await publish({ type: "channel.typing", communityId: ch.communityId, channelId, userId, typing, expiresAt: Date.now() + TYPING_TTL_MS });
 }
 
 export async function editMessage(userId: string, rawMessageId: unknown, rawContent: unknown, publicGeneration: unknown = null) {

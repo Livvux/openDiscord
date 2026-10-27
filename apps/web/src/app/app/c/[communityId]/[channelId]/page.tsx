@@ -7,8 +7,9 @@ import { ChannelChat } from "@/components/app/chat/channel-chat";
 import { PinnedDialog } from "@/components/app/chat/pinned-dialog";
 import { VoiceRoom } from "@/components/app/voice/voice-room";
 import { voiceEnabled } from "@/server/voice";
-import { Volume2Icon } from "lucide-react";
-import { MemberListToggle } from "@/components/app/member-list";
+import { HashIcon, Volume2Icon } from "lucide-react";
+import { SearchDialog } from "@/components/app/search-dialog";
+import { MemberListPanel, MemberListToggle } from "@/components/app/member-list";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
 import { blockedIds } from "@/server/blocks";
@@ -36,16 +37,16 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
 
   return (
     <>
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/5 px-3 md:px-5">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background px-2 md:pl-4">
         <MobileNavToggle />
-        <h1 className="flex items-center gap-1 font-medium text-zinc-200">
-          {channel.kind === "voice" ? <Volume2Icon aria-hidden className="size-4 text-zinc-400" /> : <span aria-hidden className="text-zinc-400"># </span>}
-          {channel.name}
+        <h1 className="flex min-w-0 shrink-0 items-center gap-1.5 text-base font-semibold text-foreground">
+          {channel.kind === "voice" ? <Volume2Icon aria-hidden className="size-6 text-muted-foreground" /> : <HashIcon aria-hidden className="size-6 text-muted-foreground" />}
+          <span className="truncate">{channel.name}</span>
         </h1>
         {channel.topic && (
-          <p className="hidden truncate border-l border-white/10 pl-3 text-sm text-zinc-400 sm:block">{channel.topic}</p>
+          <p className="hidden min-w-0 truncate border-l pl-3 text-sm text-muted-foreground sm:block">{channel.topic}</p>
         )}
-        <div className="ml-auto flex items-center">
+        <div className="ml-auto flex shrink-0 items-center gap-1 text-muted-foreground [&>button]:hover:text-foreground">
           {channel.kind === "text" && <PinnedDialog channelId={channel.id} channelName={channel.name} />}
           {has(view.authority, Permission.ManageChannels) && (
             <ChannelSettingsDialog
@@ -56,9 +57,11 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
             />
           )}
           <MemberListToggle />
+          <div className="ml-1"><SearchDialog communityId={view.id} communityName={view.name} /></div>
         </div>
       </header>
       {publication && <PublicChannelControls channelId={channel.id} unpublished={publication.unpublished} isOwner={view.isOwner} />}
+      <div className="flex min-h-0 flex-1">
       {channel.kind === "voice" ? (
         <VoiceRoom
           key={channel.id}
@@ -81,6 +84,8 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         blockedIds={blocked}
       />
       )}
+      <MemberListPanel />
+      </div>
     </>
   );
 }

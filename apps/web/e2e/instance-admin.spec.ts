@@ -53,13 +53,18 @@ test("global administration works without 2FA and applies reports and suspension
     await chatter.locator("textarea").fill("QA reported private message");
     await chatter.locator("textarea").press("Enter");
     await expect(chatter.getByText("QA reported private message", { exact: true })).toBeVisible();
-    await chatter.getByRole("button", { name: "Report message", exact: true }).click();
+    const reported = chatter.getByRole("log").getByRole("listitem").filter({ hasText: "QA reported private message" });
+    await reported.hover();
+    await reported.getByRole("button", { name: "More message actions" }).click();
+    await chatter.getByRole("menuitem", { name: "Report message", exact: true }).click();
     await chatter.getByLabel("Why are you reporting this message?").fill("QA message abuse report");
     await chatter.getByRole("button", { name: "Submit report" }).click();
     await expect(chatter.getByRole("status")).toContainText("Report submitted");
     await chatter.keyboard.press("Escape");
     if (testInfo.project.use.isMobile) await chatter.getByRole("button", { name: "Open navigation", exact: true }).click();
-    await chatter.getByRole("button", { name: "Report community", exact: true }).click();
+    // Discord's server-name dropdown in the channel list.
+    await chatter.getByRole("navigation", { name: "Channels" }).getByRole("heading", { level: 2 }).getByRole("button").click();
+    await chatter.getByRole("menuitem", { name: "Report community", exact: true }).click();
     await chatter.getByLabel("Why are you reporting this community?").fill("QA community abuse report");
     await chatter.getByRole("button", { name: "Submit report" }).click();
     await expect(chatter.getByRole("status")).toContainText("Report submitted");

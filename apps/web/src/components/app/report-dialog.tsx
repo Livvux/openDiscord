@@ -8,8 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-export function ReportDialog({ communityId, messageId, open: controlledOpen, onOpenChange }: {
+export function ReportDialog({ communityId, messageId, open: controlledOpen, onOpenChange, hideTrigger = false }: {
   communityId?: string;
+  /** Opened from a menu instead of its own button. */
+  hideTrigger?: boolean;
   messageId?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -24,9 +26,11 @@ export function ReportDialog({ communityId, messageId, open: controlledOpen, onO
   const target = messageId ? "message" : "community";
   return (
     <Dialog open={open} onOpenChange={(value) => { setOpen(value); setError(null); setSent(false); }}>
-      <DialogTrigger render={<Button variant="ghost" size={messageId ? "icon-sm" : "sm"} aria-label={`Report ${target}`} />}>
-        <FlagIcon />{!messageId && "Report community"}
-      </DialogTrigger>
+      {!hideTrigger && (
+        <DialogTrigger render={<Button variant="ghost" size={messageId ? "icon-sm" : "sm"} aria-label={`Report ${target}`} />}>
+          <FlagIcon />{!messageId && "Report community"}
+        </DialogTrigger>
+      )}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Report {target}</DialogTitle>

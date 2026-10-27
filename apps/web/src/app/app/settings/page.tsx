@@ -29,21 +29,42 @@ export const metadata: Metadata = { title: "Account settings" };
 
 export default function AccountSettingsPage() {
   return (
-    <main className="flex-1 overflow-y-auto">
-      <header className="flex h-12 items-center gap-2 border-b px-3">
-        <MobileNavToggle />
-        <h1 className="font-semibold">Account settings</h1>
-      </header>
-      <Suspense fallback={<div className="p-6 text-primary"><DiamondOrbitSmoothLoader /></div>}>
-        <Settings />
-      </Suspense>
+    <main className="flex min-w-0 flex-1">
+      <nav aria-label="Settings sections" className="w-60 shrink-0 overflow-y-auto border-r bg-panel px-2 pt-14 pb-20 max-md:hidden">
+        {NAV.map(([group, titles]) => (
+          <div key={group} className="mb-4">
+            <h2 className="px-2.5 pb-1.5 text-xs font-bold tracking-wide text-muted-foreground uppercase">{group}</h2>
+            <ul className="space-y-0.5">
+              {titles.map(([title, label]) => (
+                <li key={title}><a href={`#${encodeURIComponent(`${title}-heading`)}`} className="block rounded-md px-2.5 py-1.5 text-base font-medium text-muted-foreground hover:bg-white/[0.06] hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{label}</a></li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </nav>
+      <div className="min-w-0 flex-1 overflow-y-auto">
+        <header className="flex h-12 items-center gap-2 border-b px-3 md:hidden">
+          <MobileNavToggle />
+        </header>
+        <h1 className="mx-auto max-w-[740px] px-6 pt-14 text-xl font-semibold max-md:pt-6">Account settings</h1>
+        <Suspense fallback={<div className="p-6 text-primary"><DiamondOrbitSmoothLoader /></div>}>
+          <Settings />
+        </Suspense>
+      </div>
     </main>
   );
 }
 
+/** Discord's settings sidebar: grouped links to the sections below. */
+const NAV: [group: string, sections: [title: string, label: string][]][] = [
+  ["User settings", [["Profile", "My profile"], ["Email address", "Email"], ["Authenticator app", "Two-factor"], ["Passkeys", "Passkeys"], ["Sessions", "Devices"]]],
+  ["App settings", [["Theme", "Appearance"], ["Notifications", "Notifications"], ["Online status", "Online status"]]],
+  ["Privacy & safety", [["Blocked people", "Blocked people"], ["Your data", "Your data"], ["Delete account", "Delete account"]]],
+];
+
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <section aria-labelledby={`${title}-heading`} className="space-y-3 border-b py-6 last:border-0">
+    <section aria-labelledby={`${title}-heading`} className="scroll-mt-4 space-y-3 border-b py-6 last:border-0">
       <div>
         <h2 id={`${title}-heading`} className="text-lg font-semibold">{title}</h2>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
@@ -64,7 +85,7 @@ async function Settings() {
     ownAvatar(user.id),
   ]);
   return (
-    <div className="mx-auto max-w-2xl px-6">
+    <div className="mx-auto max-w-[740px] px-6 pb-24">
       <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />

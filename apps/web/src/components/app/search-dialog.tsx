@@ -62,10 +62,11 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="icon-sm" aria-label="Search messages" title="Search messages (Ctrl+K)" className="text-zinc-400" />
+          <button type="button" aria-label="Search messages" title="Search messages (Ctrl+K)" className="flex h-8 w-8 items-center gap-2 rounded-lg bg-sidebar px-2 text-left sm:w-36 text-sm text-muted-foreground ring-1 ring-border transition-[width] hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring lg:w-60" />
         }
       >
-        <SearchIcon />
+        <span className="min-w-0 flex-1 truncate max-sm:hidden">Search</span>
+        <SearchIcon aria-hidden className="size-4 shrink-0" />
       </DialogTrigger>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>

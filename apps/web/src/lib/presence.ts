@@ -9,9 +9,10 @@ export const PRESENCE_LABEL: Record<PresenceChoice, string> = {
   invisible: "Invisible",
 };
 
+// Discord's status colours.
 export const PRESENCE_DOT: Record<PresenceChoice, string> = {
-  online: "bg-emerald-400",
-  idle: "bg-amber-400",
-  dnd: "bg-red-500",
-  invisible: "bg-zinc-500",
+  online: "bg-[#43a25a]",
+  idle: "bg-[#ca9654]",
+  dnd: "bg-[#d83a42]",
+  invisible: "bg-[#82838b]",
 };

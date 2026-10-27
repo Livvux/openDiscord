@@ -37,7 +37,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
         initial={Object.fromEntries(view.channels.map((c) => [c.id, { unread: c.unread, mentions: c.mentions }]))}
       >
       <MemberListProvider currentUserId={user.id} blockedIds={blocked} members={members.map(({ userId, name, avatar, isOwner }) => ({ userId, name, avatar, isOwner }))}>
-      <MobilePanel label="Channels" className="flex w-60 shrink-0 flex-col border-r border-white/5 bg-panel max-md:left-16">
+      <MobilePanel label="Channels" data-sidebar className="flex w-(--sidebar-w) shrink-0 flex-col border-r bg-panel max-md:left-(--rail-w)">
         <ChannelSidebar view={view} />
       </MobilePanel>
       <div className="flex min-w-0 flex-1 flex-col">{rules.required && !rules.accepted && <section aria-label="Required community rules" className="max-h-[50dvh] shrink-0 overflow-y-auto border-b p-4"><h2 className="mb-2 font-semibold">Community rules updated</h2><CommunityRules communityId={view.id} rules={rules} /></section>}{children}</div>

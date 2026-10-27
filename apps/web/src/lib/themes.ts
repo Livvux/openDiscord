@@ -1,7 +1,7 @@
 /** Color themes; each id other than "default" maps to a `[data-theme]` block in globals.css. */
 export const THEMES = [
   { id: "default", name: "openDiscord", swatch: ["#0f172a", "#4f46e5"] },
-  { id: "discord", name: "Discord", swatch: ["#313338", "#5865f2"] },
+  { id: "discord", name: "Discord", swatch: ["#323339", "#5865f2"] },
   { id: "midnight", name: "Midnight", swatch: ["#000000", "#2563eb"] },
   { id: "forest", name: "Forest", swatch: ["#0c1411", "#047857"] },
   { id: "rose", name: "Rose", swatch: ["#1c1917", "#e11d48"] },

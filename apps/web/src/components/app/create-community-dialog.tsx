@@ -43,7 +43,7 @@ function CommunityCreationForm({ trigger = "icon" }: CreateCommunityDialogProps)
             <button
               type="button"
               aria-label="Create a community"
-              className="grid size-10 place-items-center rounded-2xl bg-white/5 text-brand-mint transition-[border-radius,background-color] hover:rounded-xl hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="grid size-12 place-items-center rounded-2xl bg-white/[0.08] text-[#23a55a] transition-colors hover:bg-[#23a55a] hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
           }
         >

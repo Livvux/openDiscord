@@ -7,6 +7,7 @@ import type { MessageView } from "@/server/messages";
 export type ClientEvent =
   | { type: "message.created" | "message.updated"; message: MessageView }
   | { type: "message.deleted"; channelId: string; messageId: string }
+  | { type: "channel.typing"; channelId: string; userId: string; typing: boolean; expiresAt: number }
   /** Events may have been missed (reconnect): refetch. */
   | { type: "resync" }
   | { type: "assets.changed" };
@@ -44,7 +45,8 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
 
   useEffect(() => {
     const emit = (event: ClientEvent) => {
-      if (event.type !== "resync") {
+      // Typing notices are momentary; a late listener must not replay them.
+      if (event.type !== "resync" && event.type !== "channel.typing") {
         const now = Date.now();
         recent.current = [...recent.current.filter((r) => now - r.at < REPLAY_MS), { at: now, event }];
       }
@@ -97,6 +99,11 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
         seen();
         const { channelId, messageId } = JSON.parse(e.data) as { channelId: string; messageId: string };
         emit({ type: "message.deleted", channelId, messageId });
+      });
+      es.addEventListener("channel.typing", (e) => {
+        seen();
+        const { channelId, userId, typing, expiresAt } = JSON.parse(e.data) as { channelId: string; userId: string; typing: boolean; expiresAt: number };
+        emit({ type: "channel.typing", channelId, userId, typing, expiresAt });
       });
       es.addEventListener("assets.changed", () => (seen(), emit({ type: "assets.changed" })));
       es.addEventListener("resync", () => (seen(), emit({ type: "resync" })));

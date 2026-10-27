@@ -51,14 +51,14 @@ export function DirectMessageList({ userId, initial, presence, relations }: Dire
                 href={`/app/messages?c=${encodeURIComponent(c.id)}`}
                 aria-current={active ? "page" : undefined}
                 aria-label={label}
-                className={`flex items-center gap-3 rounded-md px-2 py-1.5 focus-visible:outline-2 focus-visible:outline-ring ${active ? "bg-white/10 text-zinc-50" : unread > 0 ? "font-semibold text-zinc-50 hover:bg-white/5" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
+                className={`flex h-[42px] items-center gap-3 rounded-lg px-2 text-base font-medium focus-visible:outline-2 focus-visible:outline-ring ${active ? "bg-white/10 text-sidebar-foreground" : unread > 0 ? "text-sidebar-foreground hover:bg-white/[0.06]" : "text-muted-foreground hover:bg-white/[0.06] hover:text-sidebar-foreground"}`}
               >
                 <GroupAvatars members={c.members} />
                 <span className="min-w-0 flex-1">
                   <span data-dm-peer-name className="block truncate">{c.peerName}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{c.members.filter((m) => !m.left).length + 1} members</span>
+                  <span className="block truncate text-xs font-normal text-muted-foreground">{c.members.filter((m) => !m.left).length + 1} members</span>
                 </span>
-                {unread > 0 && <span data-dm-unread aria-hidden className="min-w-5 rounded-full bg-red-600 px-1.5 text-center text-[11px] leading-5 font-bold text-white">{unread > 99 ? "99+" : unread}</span>}
+                {unread > 0 && <span data-dm-unread aria-hidden className="min-w-4 rounded-full bg-[#dc2626] px-1 text-center text-xs leading-4 font-bold text-white">{unread > 99 ? "99+" : unread}</span>}
               </Link>
             </li>
           );
@@ -69,15 +69,15 @@ export function DirectMessageList({ userId, initial, presence, relations }: Dire
                   href={`/app/messages?to=${encodeURIComponent(c.peerId)}`}
                   aria-current={active ? "page" : undefined}
                   aria-label={label}
-                  className={`flex items-center gap-3 rounded-md px-2 py-1.5 focus-visible:outline-2 focus-visible:outline-ring ${active ? "bg-white/10 text-zinc-50" : unread > 0 ? "font-semibold text-zinc-50 hover:bg-white/5" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100"}`}
+                  className={`flex h-[42px] items-center gap-3 rounded-lg px-2 text-base font-medium focus-visible:outline-2 focus-visible:outline-ring ${active ? "bg-white/10 text-sidebar-foreground" : unread > 0 ? "text-sidebar-foreground hover:bg-white/[0.06]" : "text-muted-foreground hover:bg-white/[0.06] hover:text-sidebar-foreground"}`}
                 >
                   <PresenceAvatar userId={c.peerId} name={c.peerName} avatar={c.peerAvatar} status={presence[c.peerId] ?? null} announce />
                   <span className="min-w-0 flex-1">
                     <span data-dm-peer-name className="block truncate">{c.peerName}</span>
-                    {status && <span className="block truncate text-xs text-muted-foreground">{status}</span>}
+                    {status && <span className="block truncate text-xs font-normal text-muted-foreground">{status}</span>}
                   </span>
                   {unread > 0 && (
-                    <span data-dm-unread aria-hidden className="min-w-5 rounded-full bg-red-600 px-1.5 text-center text-[11px] leading-5 font-bold text-white">
+                    <span data-dm-unread aria-hidden className="min-w-4 rounded-full bg-[#dc2626] px-1 text-center text-xs leading-4 font-bold text-white">
                       {unread > 99 ? "99+" : unread}
                     </span>
                   )}

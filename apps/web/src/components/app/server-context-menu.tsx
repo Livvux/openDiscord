@@ -1,6 +1,6 @@
 "use client";
 
-import { BellIcon, CheckIcon, CopyIcon, LogOutIcon, SettingsIcon, UserPlusIcon } from "lucide-react";
+import { BellIcon, CheckIcon, CopyIcon, FlagIcon, LogOutIcon, SettingsIcon, UserPlusIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
@@ -24,6 +24,7 @@ import type { CommunityNavigationSummary } from "@/server/communities";
 import type { ActionResult } from "@/server/errors";
 import { has, Permission } from "@/server/permissions";
 import { InviteDialog } from "./invite-dialog";
+import { ReportDialog } from "./report-dialog";
 
 const SETTINGS_PERMISSIONS =
   Permission.ManageCommunity | Permission.ManageRoles | Permission.KickMembers | Permission.BanMembers | Permission.ViewAuditLog;
@@ -44,6 +45,7 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
   const [open, setOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -114,7 +116,7 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
         >
           {children}
         </ContextMenuTrigger>
-        <ContextMenuContent aria-label={`${community.name} server actions`} finalFocus={inviteOpen || leaveOpen || error ? false : returnFocus}>
+        <ContextMenuContent aria-label={`${community.name} server actions`} finalFocus={inviteOpen || leaveOpen || reportOpen || error ? false : returnFocus}>
           <ContextMenuLabel>{community.name}</ContextMenuLabel>
           {canInvite && (
             <ContextMenuItem disabled={pending} onClick={() => setInviteOpen(true)}>
@@ -147,9 +149,12 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
           <ContextMenuItem onClick={() => void copyId()} closeOnClick={false}>
             {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />} {copied ? "Copied server ID" : "Copy server ID"}
           </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={pending} onClick={() => setReportOpen(true)}>
+            <FlagIcon aria-hidden /> Report community
+          </ContextMenuItem>
           {!community.authority.isOwner && (
             <>
-              <ContextMenuSeparator />
               <ContextMenuItem variant="destructive" disabled={pending} onClick={() => { setError(null); setLeaveOpen(true); }}>
                 <LogOutIcon aria-hidden /> Leave community
               </ContextMenuItem>
@@ -168,6 +173,8 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
           finalFocus={returnFocus}
         />
       )}
+
+      <ReportDialog communityId={community.id} open={reportOpen} onOpenChange={setReportOpen} hideTrigger />
 
       <Dialog open={leaveOpen} onOpenChange={(next) => { if (!pending) { setLeaveOpen(next); setError(null); } }}>
         <DialogContent finalFocus={returnFocus} showCloseButton={!pending}>

@@ -1,7 +1,7 @@
 "use client";
 
 import { PUBLIC_POST_NOTICE } from "@/lib/public-channels";
-import { SmilePlusIcon, FileIcon, LoaderCircleIcon, PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
+import { CirclePlusIcon, FileIcon, LoaderCircleIcon, SendHorizontalIcon, SmileIcon, XIcon } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,8 @@ interface ComposerProps {
   /** The message being replied to, shown above the input. */
   replyTo: { id: string; authorName: string } | null;
   onCancelReply: () => void;
+  /** Arrow Up in an empty composer: edit your latest message, as in Discord. */
+  onEditLast?: () => void;
 }
 
 interface Upload {
@@ -75,7 +77,7 @@ function useMentionSuggestions(communityId: string, query: string | null) {
   return query !== null && results?.query === query ? results.members : [];
 }
 
-export function Composer({ channelId, channelName, placeholder, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply, isPublic }: ComposerProps) {
+export function Composer({ channelId, channelName, placeholder, draft, setDraft, onSend, mediaEnabled, communityId, replyTo, onCancelReply, isPublic, onEditLast }: ComposerProps) {
   const [publicAcknowledged, setPublicAcknowledged] = useState(false);
   const [mentionAt, setMentionAt] = useState<{ query: string; start: number } | null>(null);
   const [activeOption, setActiveOption] = useState(0);
@@ -197,12 +199,12 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
         e.preventDefault();
         void submit();
       }}
-      className="relative mx-4 mb-4 rounded-lg bg-white/5 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-ring"
+      className="relative z-10 mx-4 mb-6 rounded-lg border bg-card"
     >
       {isPublic && <div className="border-b border-white/10 p-3 text-xs text-zinc-300"><p>{PUBLIC_POST_NOTICE}</p><label className="mt-2 flex items-start gap-2"><input type="checkbox" checked={publicAcknowledged} onChange={(e) => setPublicAcknowledged(e.target.checked)} />I acknowledge public posting in this channel.</label></div>}
       {replyTo && (
-        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1.5 text-xs text-zinc-300">
-          <span className="min-w-0 flex-1 truncate">Replying to <span className="font-medium text-zinc-100">{replyTo.authorName}</span></span>
+        <div className="flex items-center gap-2 rounded-t-lg border-b bg-sidebar px-4 py-2 text-sm text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">Replying to <span className="font-semibold text-foreground">{replyTo.authorName}</span></span>
           <Button type="button" variant="ghost" size="icon-xs" aria-label="Cancel reply" onClick={onCancelReply}>
             <XIcon />
           </Button>
@@ -271,24 +273,7 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           {failed.name}: {failed.error} Remove it to send.
         </p>
       )}
-      <div className="flex items-end gap-2 py-1 pr-1 pl-2">
-        <EmojiSelector channelId={isPublic ? undefined : channelId} stickers={!isPublic} returnFocusTo={textarea}
-          trigger={<Button type="button" variant="ghost" size="icon" className="mb-1 shrink-0" aria-label="Choose community emoji or sticker"><SmilePlusIcon /></Button>}
-          onPick={(emoji, asset) => {
-            const insertion = asset ? `${assetShortcode(asset)} ` : emoji;
-            const result = insertEmoji(draft, insertion, textarea.current?.selectionStart ?? draft.length, textarea.current?.selectionEnd ?? draft.length, MESSAGE_MAX_LENGTH);
-            if (!result) return;
-            if (asset) pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
-            pendingCaret.current = result.caret;
-            setDraft(result.value);
-            setMentionAt(null);
-          }} />
-        <GifSelector returnFocusTo={textarea}
-          disabled={sending || uploading || !!failed || (!!isPublic && !publicAcknowledged)}
-          onPick={(url) => {
-            if (sending || uploading || failed || (isPublic && !publicAcknowledged)) return;
-            void onSend(url, [], []);
-          }} />
+      <div className="flex items-start gap-1 pr-2 pl-2">
         {mediaEnabled && (
           <>
             <input
@@ -305,13 +290,13 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
               type="button"
               variant="ghost"
               size="icon"
-              className="mb-1 text-zinc-300"
+              className="mt-2 text-muted-foreground hover:text-foreground"
               aria-label={`Attach files (up to ${MAX_ATTACHMENTS_PER_MESSAGE}; images ${MAX_MB} MB, other files ${MAX_FILE_MB} MB)`}
               title={`Attach files (up to ${MAX_ATTACHMENTS_PER_MESSAGE}; images ${MAX_MB} MB, other files ${MAX_FILE_MB} MB)`}
               disabled={uploads.length >= MAX_ATTACHMENTS_PER_MESSAGE}
               onClick={() => fileInput.current?.click()}
             >
-              <PaperclipIcon />
+              <CirclePlusIcon className="size-6" />
             </Button>
           </>
         )}
@@ -357,6 +342,11 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
                 return;
               }
             }
+            if (e.key === "ArrowUp" && !draft && onEditLast && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              onEditLast();
+              return;
+            }
             if (e.key === "Escape" && replyTo) {
               e.preventDefault();
               onCancelReply();
@@ -372,14 +362,31 @@ export function Composer({ channelId, channelName, placeholder, draft, setDraft,
           maxLength={MESSAGE_MAX_LENGTH}
           placeholder={placeholder ?? `Message #${channelName}`}
           aria-describedby={remaining < 200 ? `${id}-remaining` : undefined}
-          className={`field-sizing-content max-h-48 min-h-10 min-w-0 flex-1 resize-none bg-transparent py-2 text-zinc-100 outline-none placeholder:text-zinc-400 ${mediaEnabled ? "" : "pl-2"}`}
+          className={`field-sizing-content max-h-[50dvh] min-h-[54px] min-w-0 flex-1 resize-none bg-transparent py-4 text-base leading-[1.375rem] text-foreground outline-none placeholder:text-muted-foreground ${mediaEnabled ? "" : "pl-2"}`}
         />
         {remaining < 200 && (
-          <span id={`${id}-remaining`} className="pb-2.5 text-[11px] text-zinc-400">
+          <span id={`${id}-remaining`} className="pt-4 text-[11px] text-muted-foreground">
             {remaining}
           </span>
         )}
-        <Button type="submit" size="icon" aria-label="Send message" disabled={!canSend} className="mb-1">
+        <GifSelector returnFocusTo={textarea}
+          disabled={sending || uploading || !!failed || (!!isPublic && !publicAcknowledged)}
+          onPick={(url) => {
+            if (sending || uploading || failed || (isPublic && !publicAcknowledged)) return;
+            void onSend(url, [], []);
+          }} />
+        <EmojiSelector channelId={isPublic ? undefined : channelId} stickers={!isPublic} returnFocusTo={textarea}
+          trigger={<Button type="button" variant="ghost" size="icon" className="mt-2 shrink-0 text-muted-foreground hover:text-foreground" aria-label="Choose community emoji or sticker"><SmileIcon className="size-6" /></Button>}
+          onPick={(emoji, asset) => {
+            const insertion = asset ? `${assetShortcode(asset)} ` : emoji;
+            const result = insertEmoji(draft, insertion, textarea.current?.selectionStart ?? draft.length, textarea.current?.selectionEnd ?? draft.length, MESSAGE_MAX_LENGTH);
+            if (!result) return;
+            if (asset) pickedAssets.current = [...pickedAssets.current.filter((item) => assetShortcode(item) !== assetShortcode(asset)), asset];
+            pendingCaret.current = result.caret;
+            setDraft(result.value);
+            setMentionAt(null);
+          }} />
+        <Button type="submit" variant="ghost" size="icon" aria-label="Send message" disabled={!canSend} className="mt-2 text-muted-foreground hover:text-foreground disabled:hidden">
           <SendHorizontalIcon />
         </Button>
       </div>

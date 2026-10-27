@@ -15,6 +15,8 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("channels.changed"), communityId: z.string() }),
   z.object({ type: z.literal("assets.changed"), communityId: z.string() }),
   z.object({ type: z.literal("member.removed"), communityId: z.string(), userId: z.string() }),
+  // Ephemeral "is typing" in a channel; the community stream drops it for people who can't read the channel.
+  z.object({ type: z.literal("channel.typing"), communityId: z.string(), channelId: z.string(), userId: z.string(), typing: z.boolean(), expiresAt: z.number() }),
   z.object({ type: z.literal("community.deleted"), communityId: z.string() }),
   // Personal events go to the person's own stream (`userTopic`), not to the community.
   z.object({ type: z.literal("mention.created"), userId: z.string(), communityId: z.string(), channelId: z.string(), messageId: z.string() }),

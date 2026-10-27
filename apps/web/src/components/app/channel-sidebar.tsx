@@ -5,12 +5,10 @@ import { has, Permission } from "@/server/permissions";
 import { CategoryGroup } from "./category-group";
 import { ChannelLink } from "./channel-link";
 import { CreateChannelDialog } from "./create-channel-dialog";
-import { ReportDialog } from "./report-dialog";
-import { SearchDialog } from "./search-dialog";
-import { VoiceBar } from "./voice/voice-bar";
 import { voiceEnabled } from "@/server/voice";
 import { InviteDialog } from "./invite-dialog";
 import { ServerContextMenu } from "./server-context-menu";
+import { ServerMenuButton } from "./server-menu-button";
 
 const SETTINGS_PERMISSIONS =
   Permission.ManageCommunity | Permission.ManageRoles | Permission.KickMembers | Permission.BanMembers | Permission.ViewAuditLog;
@@ -18,7 +16,6 @@ const SETTINGS_PERMISSIONS =
 export function ChannelSidebar({ view }: { view: CommunityView }) {
   const canManageChannels = has(view.authority, Permission.ManageChannels);
   const loose = view.channels.filter((c) => !c.categoryId);
-  const voice = loose.filter((c) => c.kind === "voice");
   const link = (c: CommunityView["channels"][number]) => (
     <li key={c.id}>
       <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} kind={c.kind} />
@@ -29,33 +26,26 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
     <>
       <ServerContextMenu
         community={{ id: view.id, name: view.name, authority: view.authority, notifications: view.notifications }}
-        tabIndex={0}
-        className="rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+        tabIndex={-1}
       >
-        <header className="flex h-12 items-center gap-1 border-b border-white/5 px-3">
-          <h2 className="min-w-0 flex-1 truncate px-2 font-semibold text-zinc-100">{view.name}</h2>
-          <SearchDialog communityId={view.id} communityName={view.name} />
+        <header className="flex h-12 shrink-0 items-center gap-0.5 border-b px-2">
+          <h2 className="flex min-w-0 flex-1"><ServerMenuButton name={view.name} /></h2>
+          {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} isOwner={view.isOwner} />}
+          {has(view.authority, Permission.CreateInvites) && <InviteDialog communityId={view.id} communityName={view.name} iconTrigger />}
           <Link
             href={`/app/c/${view.id}/settings`}
             aria-label={canModerate ? "Community settings" : "Community info"}
-            className="rounded-md p-1.5 text-zinc-400 hover:bg-white/5 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-ring"
+            title={canModerate ? "Community settings" : "Community info"}
+            className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-white/[0.06] hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring"
           >
             <SettingsIcon className="size-4" />
           </Link>
         </header>
       </ServerContextMenu>
-      <div className="flex items-center justify-between px-3 pt-3 pb-1">
-        <h3 className="px-2 text-[11px] tracking-widest text-zinc-400 uppercase">Text channels</h3>
-        {canManageChannels && <CreateChannelDialog communityId={view.id} voiceEnabled={voiceEnabled} isOwner={view.isOwner} />}
-      </div>
-      <ul className="flex-1 space-y-0.5 overflow-y-auto px-3">
+      {/* Bottom padding keeps the last channels above the floating user panel. */}
+      <ul className="flex-1 space-y-0.5 overflow-y-auto px-2 pt-3 pb-20">
         {loose.filter((c) => c.kind === "text").map(link)}
-        {voice.length > 0 && (
-          <li>
-            <h3 className="px-2 pt-4 pb-1 text-[11px] tracking-widest text-zinc-400 uppercase">Voice channels</h3>
-            <ul className="space-y-0.5">{voice.map(link)}</ul>
-          </li>
-        )}
+        {loose.filter((c) => c.kind === "voice").map(link)}
         {view.categories.map((cat) => {
           const inside = view.channels.filter((c) => c.categoryId === cat.id);
           return (
@@ -65,13 +55,6 @@ export function ChannelSidebar({ view }: { view: CommunityView }) {
           );
         })}
       </ul>
-      <VoiceBar />
-      <div className="px-3 py-2"><ReportDialog communityId={view.id} /></div>
-      {has(view.authority, Permission.CreateInvites) && (
-        <div className="border-t border-white/5 p-3">
-          <InviteDialog communityId={view.id} communityName={view.name} />
-        </div>
-      )}
     </>
   );
 }

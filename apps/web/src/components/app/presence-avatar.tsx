@@ -25,7 +25,7 @@ export function PresenceAvatar({ userId, name, avatar, size, announce = false, s
       <Avatar name={name} avatar={avatar} size={size} />
       {shown && (
         <>
-          <span aria-hidden className={`absolute rounded-full ring-background ${size === "lg" ? "right-0.5 bottom-0.5 size-5 ring-4" : "-right-0.5 -bottom-0.5 size-3 ring-2"} ${PRESENCE_DOT[shown]}`} />
+          <span aria-hidden className={`absolute rounded-full ring-(--avatar-ring) ${size === "lg" ? "right-0.5 bottom-0.5 size-5 ring-4" : "-right-0.5 -bottom-0.5 size-3.5 ring-[3px]"} ${PRESENCE_DOT[shown]}`} />
           {announce && <span className="sr-only">({PRESENCE_LABEL[shown].toLowerCase()})</span>}
         </>
       )}

@@ -38,7 +38,8 @@ test.describe("replies, reactions, pins and markdown", () => {
 
     // The owner pins; the member sees it in the pinned list. Members can't pin.
     await ownerRules.hover();
-    await ownerRules.getByRole("button", { name: "Pin message" }).click();
+    await ownerRules.getByRole("button", { name: "More message actions" }).click();
+    await owner.getByRole("menuitem", { name: "Pin message" }).click();
     await expect(rules.getByText("Pinned")).toBeVisible();
     await expect(rules.getByRole("button", { name: /Pin message/ })).toHaveCount(0);
     await member.getByRole("button", { name: "Pinned messages" }).click();
