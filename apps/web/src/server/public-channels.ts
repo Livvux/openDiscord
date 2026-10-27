@@ -14,7 +14,7 @@ export const PUBLIC_PAGE_SIZE = 30;
 export const publicConsent = uuid.nullish();
 
 // Closed-alpha rejection and suspension apply to public output as well as authenticated access.
-function activeUser(id: SQL): SQL {
+export function activeUser(id: SQL): SQL {
   return sql`exists (select 1 from "user" public_user
     where public_user.id = ${id}
     and not exists (select 1 from user_suspension where user_id = public_user.id)

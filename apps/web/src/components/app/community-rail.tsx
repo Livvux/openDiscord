@@ -13,7 +13,7 @@ import { unreadTotal } from "@/lib/dm/contracts";
 const NOTHING_UNREAD_SUMMARY = { unread: false, mentions: 0 };
 import { RailHomeLink } from "./home/home-nav-link";
 import { CreateCommunityDialog } from "./create-community-dialog";
-import { RailLink } from "./rail-link";
+import { RailDiscoverLink, RailLink } from "./rail-link";
 import { ServerContextMenu } from "./server-context-menu";
 import { UserPanel } from "./user-panel";
 
@@ -40,7 +40,7 @@ export async function CommunityRail() {
           <CreateCommunityDialog />
         </li>
         <li>
-          <Link href="/discover" aria-label="Discover communities" title="Discover" className={railAction}><CompassIcon /></Link>
+          <RailDiscoverLink><CompassIcon /></RailDiscoverLink>
         </li>
         {admin && (
           <li>

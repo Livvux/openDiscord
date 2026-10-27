@@ -14,6 +14,8 @@ import { AutomodSettings } from "@/components/app/settings/automod-settings";
 import { NotificationLevel } from "@/components/app/settings/notification-level";
 import { CategoriesEditor } from "@/components/app/settings/categories-editor";
 import { getAutomod } from "@/server/automod";
+import { getListing } from "@/server/discovery";
+import { DiscoverListing } from "@/components/app/settings/discover-listing";
 import { blockedIds } from "@/server/blocks";
 import { listIntegrations } from "@/server/integrations";
 import { IntegrationsEditor } from "@/components/app/settings/integrations-editor";
@@ -58,6 +60,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "webhook.create": "created the webhook",
   "webhook.revoke": "revoked the webhook",
   "automod.block": "had a message blocked by AutoMod",
+  "discover.list": "listed the community in Discover",
+  "discover.unlist": "removed the community from Discover",
 };
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
@@ -65,7 +69,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import"].includes(e.action)) return null;
+  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -94,6 +98,7 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
     blockedIds(user.id),
   ]);
   const [assets, rules, appeals] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
+  const listing = view.isOwner ? await getListing(user.id, view.id) : null;
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
   const groups: SettingsGroup[] = [
@@ -126,6 +131,7 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
       {has(a, Permission.ManageCommunity) && (
         <Section id="overview" title="Overview">
           <RenameCommunity communityId={view.id} name={view.name} />
+          {listing && <DiscoverListing communityId={view.id} listing={listing} />}
         </Section>
       )}
       {has(a, Permission.ManageCommunity) && <Section id="community-assets" title="Emoji and stickers"><CommunityAssetsEditor communityId={view.id} initialAssets={assets} /></Section>}

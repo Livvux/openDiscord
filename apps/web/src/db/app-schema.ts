@@ -30,6 +30,9 @@ export const community = pgTable("community", {
   rules: text("rules").notNull().default(""),
   rulesVersion: integer("rules_version").notNull().default(0),
   rulesRequired: boolean("rules_required").notNull().default(false),
+  /** Owner opt-in: listed in Discover and joinable without an invite. */
+  discoverable: boolean("discoverable").notNull().default(false),
+  description: text("description").notNull().default(""),
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspensionReason: text("suspension_reason"),
   /** Set while invites are paused (by a manager, or automatically by raid protection). */
