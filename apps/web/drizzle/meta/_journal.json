@@ -302,6 +302,13 @@
       "when": 1793095724442,
       "tag": "0042_community_discovery",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793097377471,
+      "tag": "0043_community_branding",
+      "breakpoints": true
     }
   ]
 }

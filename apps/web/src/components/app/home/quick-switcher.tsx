@@ -19,7 +19,7 @@ interface Destination {
 
 const MAX_RESULTS = 8;
 
-function destinations(communities: { id: string; name: string }[], conversations: DirectConversation[]): Destination[] {
+function destinations(communities: { id: string; name: string; iconId: string | null }[], conversations: DirectConversation[]): Destination[] {
   return [
     ...conversations.filter(visibleConversation).map((c) => ({
       key: c.id,
@@ -28,13 +28,13 @@ function destinations(communities: { id: string; name: string }[], conversations
       href: c.kind === "group" ? `/app/messages?c=${encodeURIComponent(c.id)}` : `/app/messages?to=${encodeURIComponent(c.peerId)}`,
       icon: c.kind === "group" ? <UsersIcon className="size-5 text-muted-foreground" /> : <Avatar name={c.peerName} avatar={c.peerAvatar} size="sm" />,
     })),
-    ...communities.map((c) => ({ key: c.id, label: c.name, hint: "Community", href: `/app/c/${c.id}`, icon: <CommunityIcon name={c.name} size="sm" /> })),
+    ...communities.map((c) => ({ key: c.id, label: c.name, hint: "Community", href: `/app/c/${c.id}`, icon: <CommunityIcon name={c.name} iconId={c.iconId} size="sm" /> })),
     { key: "friends", label: "Friends", hint: "Home", href: "/app", icon: <HashIcon className="size-5 text-muted-foreground" /> },
   ];
 }
 
 /** Discord's "Find or start a conversation": jump to a conversation or community by name. */
-export function QuickSwitcher({ communities, initial }: { communities: { id: string; name: string }[]; initial: DirectConversation[] }) {
+export function QuickSwitcher({ communities, initial }: { communities: { id: string; name: string; iconId: string | null }[]; initial: DirectConversation[] }) {
   const router = useRouter();
   const id = useId();
   const [open, setOpen] = useState(false);

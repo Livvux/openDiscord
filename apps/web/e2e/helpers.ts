@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { REGISTRATION_HEADER, registrationAttestation } from "../src/lib/registration-policy";
 import { safeNextPath } from "../src/lib/safe-redirect";
@@ -173,4 +173,22 @@ export async function finishSignOut(page: Page) {
   if (await anyway.isVisible()) await anyway.click();
   // The wipe waits briefly for a revoke and for stores still held open (dm/sign-out.ts).
   await expect(page).toHaveURL(/\/sign-in$/, { timeout: 15_000 });
+}
+
+const touchLayout = (row: Locator) => (row.page().viewportSize()?.width ?? 1280) < 768;
+
+/** Desktop: the hover toolbar's "More". Phones hide the toolbar; a long-press (a context menu event) opens the same menu. */
+export async function openMessageMenu(row: Locator) {
+  if (touchLayout(row)) return row.click({ button: "right" });
+  await row.hover();
+  await row.getByRole("button", { name: "More message actions" }).click();
+}
+
+export async function openReactionPicker(row: Locator) {
+  if (!touchLayout(row)) {
+    await row.hover();
+    return row.getByRole("button", { name: "Add reaction" }).click();
+  }
+  await row.click({ button: "right" });
+  await row.page().getByRole("menuitem", { name: "Add reaction", exact: true }).click();
 }

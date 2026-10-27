@@ -10,6 +10,11 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 export const AVATAR_DIMENSION = 256;
 export const AVATAR_RAW_BYTES = 2 * 1024 * 1024;
 
+/** Community server pictures (square) and banners (16:9); the server centre-crops uploads to these sizes. */
+export const COMMUNITY_ICON_DIMENSION = 512;
+export const BANNER_WIDTH = 960;
+export const BANNER_HEIGHT = 540;
+
 /** Other files are stored unchanged and only ever served as downloads. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 

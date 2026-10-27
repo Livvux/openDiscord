@@ -36,7 +36,7 @@ async function HomeSidebar() {
   return (
     <>
     <header className="flex h-12 shrink-0 items-center border-b px-2.5">
-      <QuickSwitcher communities={communities.map(({ id, name }) => ({ id, name }))} initial={recent} />
+      <QuickSwitcher communities={communities.map(({ id, name, iconId }) => ({ id, name, iconId }))} initial={recent} />
     </header>
     {/* Bottom padding keeps the last conversations above the floating user panel. */}
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pt-2 pb-20">

@@ -4,6 +4,7 @@ import { MenuIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { createContext, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useMessages } from "@/lib/i18n/client";
 
 // Below the md breakpoint the community rail and channel list become an off-canvas panel.
 const MobileNavContext = createContext<{ open: boolean; setOpen: (open: boolean) => void }>({
@@ -25,7 +26,7 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
       <Suspense><CloseOnNavigation close={() => setOpen(false)} /></Suspense>
       {children}
       {open && (
-        <div aria-hidden className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setOpen(false)} />
+        <div aria-hidden className="fixed inset-0 z-30 bg-black/50 duration-200 animate-in fade-in-0 md:hidden motion-reduce:animate-none" onClick={() => setOpen(false)} />
       )}
     </MobileNavContext.Provider>
   );
@@ -50,7 +51,7 @@ export function MobilePanel({ className, children, label, elevated = false, ...d
       // Close the overlay once a link inside it is followed.
       {...data}
       onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}
-      className={`${className} ${open ? `max-md:fixed max-md:inset-y-0 ${elevated ? "max-md:z-50" : "max-md:z-40"} max-md:flex max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]` : "max-md:hidden"}`}
+      className={`${className} ${open ? `max-md:fixed max-md:inset-y-0 ${elevated ? "max-md:z-50" : "max-md:z-40"} max-md:flex max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)] max-md:duration-200 max-md:ease-out max-md:animate-in max-md:slide-in-from-left motion-reduce:animate-none` : "max-md:hidden"}`}
     >
       {children}
     </nav>
@@ -59,12 +60,13 @@ export function MobilePanel({ className, children, label, elevated = false, ...d
 
 export function MobileNavToggle() {
   const { open, setOpen } = useContext(MobileNavContext);
+  const label = useMessages().rail.openNavigation;
   return (
     <Button
       variant="ghost"
       size="icon"
       className="md:hidden"
-      aria-label="Open navigation"
+      aria-label={label}
       aria-expanded={open}
       onClick={() => setOpen(!open)}
     >

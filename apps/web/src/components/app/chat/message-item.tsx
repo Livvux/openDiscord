@@ -24,6 +24,8 @@ import { EmojiSelector } from "../emoji-selector";
 import { EmojiText } from "../emoji-text";
 import { GifEmbed } from "../gif-embed";
 import { gifSource } from "@/lib/gifs";
+import { fmt } from "@/lib/i18n";
+import { useMessages } from "@/lib/i18n/client";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
@@ -96,6 +98,7 @@ export function MessageItem(props: MessageItemProps) {
   const [reportOpen, setReportOpen] = useState(false);
   const handoffFocus = useRef(false);
   const [pending, startTransition] = useTransition();
+  const t = useMessages().message;
   const created = new Date(message.createdAt);
   const mentionsMe = message.mentions.some((m) => m.id === currentUserId);
 
@@ -177,7 +180,7 @@ export function MessageItem(props: MessageItemProps) {
     <ContextMenuTrigger render={<li />}
       data-message-id={message.id}
       tabIndex={0}
-      className={`group relative flex gap-4 py-0.5 pr-12 pl-4 outline-none hover:bg-black/[0.06] focus-within:bg-black/[0.06] ${grouped ? "" : "mt-[17px]"} ${mentionsMe ? "bg-amber-400/[0.08] shadow-[inset_2px_0_0_var(--color-amber-400)] hover:bg-amber-400/[0.11]" : ""}`}
+      className={`group relative flex gap-4 py-0.5 pr-12 pl-4 outline-none max-md:[-webkit-touch-callout:none] hover:bg-black/[0.06] focus-within:bg-black/[0.06] ${grouped ? "" : "mt-[17px]"} ${mentionsMe ? "bg-amber-400/[0.08] shadow-[inset_2px_0_0_var(--color-amber-400)] hover:bg-amber-400/[0.11]" : ""}`}
       aria-busy={pending || undefined}
     >
       <div className={`w-10 shrink-0 ${message.replyTo && !grouped ? "pt-[22px]" : "pt-0.5"}`}>
@@ -311,48 +314,49 @@ export function MessageItem(props: MessageItemProps) {
         <ReportDialog messageId={message.id} open={reportOpen} onOpenChange={setReportOpen} hideTrigger />
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {notice && <p role="status" className="text-xs text-muted-foreground">{notice}</p>}
+      {/* Touch screens: long-press opens the same actions as the context menu, like Discord's mobile app. */}
       {!editing && (
-        <div className="absolute -top-4 right-4 z-10 flex rounded-lg border bg-card p-0.5 opacity-0 shadow-md shadow-black/20 group-focus-within:opacity-100 group-hover:opacity-100 has-data-popup-open:opacity-100 max-md:static max-md:mt-1 max-md:w-fit max-md:flex-wrap max-md:border-0 max-md:bg-transparent max-md:opacity-100 max-md:shadow-none [&_button]:text-muted-foreground [&_button:hover]:text-foreground">
+        <div className="absolute -top-4 right-4 z-10 flex rounded-lg border bg-card p-0.5 opacity-0 shadow-md shadow-black/20 group-focus-within:opacity-100 group-hover:opacity-100 has-data-popup-open:opacity-100 max-md:invisible [&_button]:text-muted-foreground [&_button:hover]:text-foreground">
           {canReact && (
             <EmojiSelector channelId={publicGeneration ? undefined : message.channelId} reactions onPick={react} open={reactionOpen} onOpenChange={setReactionOpen}
-              trigger={<Button variant="ghost" size="icon-sm" aria-label="Add reaction" title="Add reaction" disabled={pending}><SmilePlusIcon /></Button>} />
+              trigger={<Button variant="ghost" size="icon-sm" aria-label={t.addReaction} title={t.addReaction} disabled={pending}><SmilePlusIcon /></Button>} />
           )}
           {canEdit && (
-            <Button variant="ghost" size="icon-sm" aria-label="Edit message" title="Edit" onClick={() => setEditing(true)}>
+            <Button variant="ghost" size="icon-sm" aria-label={t.editMessage} title={t.edit} onClick={() => setEditing(true)}>
               <PencilIcon />
             </Button>
           )}
           {canReact && (
-            <Button variant="ghost" size="icon-sm" aria-label="Reply" title="Reply" onClick={() => onReply(message)}>
+            <Button variant="ghost" size="icon-sm" aria-label={t.reply} title={t.reply} onClick={() => onReply(message)}>
               <CornerUpLeftIcon />
             </Button>
           )}
           {canReact && onOpenThread && !message.thread && (
-            <Button variant="ghost" size="icon-sm" aria-label="Start a thread" title="Create thread" onClick={() => onOpenThread(message)}>
+            <Button variant="ghost" size="icon-sm" aria-label={t.startThread} title={t.createThread} onClick={() => onOpenThread(message)}>
               <MessagesSquareIcon />
             </Button>
           )}
-          <Button variant="ghost" size="icon-sm" aria-label="More message actions" title="More" aria-haspopup="menu" onClick={(e) => openContextMenuFrom(e.currentTarget)}>
+          <Button variant="ghost" size="icon-sm" aria-label={t.moreActions} title={t.more} aria-haspopup="menu" onClick={(e) => openContextMenuFrom(e.currentTarget)}>
             <EllipsisIcon />
           </Button>
         </div>
       )}
       </div>
     </ContextMenuTrigger>
-    <ContextMenuContent aria-label="Message actions" finalFocus={() => handoffFocus.current ? false : true}>
-      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onReply(message))}><CornerUpLeftIcon aria-hidden />Reply</ContextMenuItem>}
-      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReactionOpen(true))}><SmilePlusIcon aria-hidden />Add reaction</ContextMenuItem>}
-      {onOpenThread && (canReact || message.thread) && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onOpenThread(message))}><MessagesSquareIcon aria-hidden />{message.thread ? "Open thread" : "Start a thread"}</ContextMenuItem>}
+    <ContextMenuContent aria-label={t.actions} finalFocus={() => handoffFocus.current ? false : true}>
+      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onReply(message))}><CornerUpLeftIcon aria-hidden />{t.reply}</ContextMenuItem>}
+      {canReact && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReactionOpen(true))}><SmilePlusIcon aria-hidden />{t.addReaction}</ContextMenuItem>}
+      {onOpenThread && (canReact || message.thread) && <ContextMenuItem disabled={pending} onClick={() => openAction(() => onOpenThread(message))}><MessagesSquareIcon aria-hidden />{message.thread ? t.openThread : t.startThread}</ContextMenuItem>}
       {(canReact || (onOpenThread && message.thread)) && <ContextMenuSeparator />}
-      {message.content && <ContextMenuItem onClick={() => void copy(decodeAssetTokens(decodeMentions(message.content, message.mentions)), "Message text copied.")}><CopyIcon aria-hidden />Copy text</ContextMenuItem>}
-      <ContextMenuItem onClick={() => void copy(message.id, "Message ID copied.")}><HashIcon aria-hidden />Copy message ID</ContextMenuItem>
+      {message.content && <ContextMenuItem onClick={() => void copy(decodeAssetTokens(decodeMentions(message.content, message.mentions)), t.textCopied)}><CopyIcon aria-hidden />{t.copyText}</ContextMenuItem>}
+      <ContextMenuItem onClick={() => void copy(message.id, t.idCopied)}><HashIcon aria-hidden />{t.copyId}</ContextMenuItem>
       <ContextMenuSeparator />
-      {canEdit && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setEditing(true))}><PencilIcon aria-hidden />Edit message</ContextMenuItem>}
-      {canPin && <ContextMenuItem disabled={pending} onClick={() => run(() => setPinned(message.id, !message.pinned))}>{message.pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}{message.pinned ? "Unpin message" : "Pin message"}</ContextMenuItem>}
-      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuLinkItem render={<Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} />}><MailIcon aria-hidden />Message {message.authorName} privately</ContextMenuLinkItem>}
-      <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReportOpen(true))}><FlagIcon aria-hidden />Report message</ContextMenuItem>
-      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuItem disabled={pending} onClick={onBlock}><UserXIcon aria-hidden />Block {message.authorName}</ContextMenuItem>}
-      {canDelete && <><ContextMenuSeparator /><ContextMenuItem variant="destructive" disabled={pending} onClick={onDelete}><Trash2Icon aria-hidden />Delete message</ContextMenuItem></>}
+      {canEdit && <ContextMenuItem disabled={pending} onClick={() => openAction(() => setEditing(true))}><PencilIcon aria-hidden />{t.editMessage}</ContextMenuItem>}
+      {canPin && <ContextMenuItem disabled={pending} onClick={() => run(() => setPinned(message.id, !message.pinned))}>{message.pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}{message.pinned ? t.unpin : t.pin}</ContextMenuItem>}
+      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuLinkItem render={<Link href={`/app/messages?to=${encodeURIComponent(message.authorId)}`} />}><MailIcon aria-hidden />{fmt(t.messagePrivately, { name: message.authorName })}</ContextMenuLinkItem>}
+      <ContextMenuItem disabled={pending} onClick={() => openAction(() => setReportOpen(true))}><FlagIcon aria-hidden />{t.report}</ContextMenuItem>
+      {message.authorId !== currentUserId && !message.authorImported && !blocked && <ContextMenuItem disabled={pending} onClick={onBlock}><UserXIcon aria-hidden />{fmt(t.block, { name: message.authorName })}</ContextMenuItem>}
+      {canDelete && <><ContextMenuSeparator /><ContextMenuItem variant="destructive" disabled={pending} onClick={onDelete}><Trash2Icon aria-hidden />{t.delete}</ContextMenuItem></>}
     </ContextMenuContent>
     </ContextMenu>
   );

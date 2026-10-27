@@ -6,8 +6,8 @@ import { and, count, eq, gt, inArray, isNotNull, isNull, lt, or, sql, sum } from
 import sharp, { type Metadata } from "sharp";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, message } from "@/db/schema";
-import { ACCEPTED_IMAGE_TYPES, AVATAR_DIMENSION, AVATAR_RAW_BYTES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MAX_ARCHIVE_ATTACHMENTS } from "@/lib/limits";
+import { attachment, community, message } from "@/db/schema";
+import { ACCEPTED_IMAGE_TYPES, AVATAR_DIMENSION, AVATAR_RAW_BYTES, BANNER_HEIGHT, BANNER_WIDTH, COMMUNITY_ICON_DIMENSION, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_FILE_BYTES, MAX_ARCHIVE_ATTACHMENTS } from "@/lib/limits";
 import { assetDimension, assetRawLimit, type AssetRef } from "@/lib/community-assets";
 import { requireChannel, type Db } from "./access";
 import { AppError, invalid, notFound } from "./errors";
@@ -18,6 +18,10 @@ import { Permission } from "./permissions";
 import { assertActiveUser } from "./instance-policy";
 import { parse, uuid } from "./validation";
 import { cleanFilename } from "@/lib/filename";
+
+/** Linked server pictures and banners: never pending, never swept. */
+// Qualified by hand: drizzle leaves single-table columns unqualified, where "id" would bind to the community.
+const notCommunityImage = sql`not exists (select 1 from ${community} c where c.icon_id = "attachment"."id" or c.banner_id = "attachment"."id")`;
 
 export { cleanFilename };
 
@@ -67,10 +71,10 @@ export function requireStorage() {
   return storage;
 }
 
-interface ImageProcessingOptions { maximumDimension?: number; maximumFrames?: number; maximumPixels?: number; square?: boolean }
+interface ImageProcessingOptions { maximumDimension?: number; maximumFrames?: number; maximumPixels?: number; square?: boolean; banner?: boolean }
 
 /** Decodes, validates and re-encodes an image to WebP without metadata. */
-export async function processImage(input: Uint8Array, { maximumDimension = MAX_DIMENSION, maximumFrames = MAX_FRAMES, maximumPixels = MAX_TOTAL_PIXELS, square = false }: ImageProcessingOptions = {}): Promise<{ data: Buffer; width: number; height: number }> {
+export async function processImage(input: Uint8Array, { maximumDimension = MAX_DIMENSION, maximumFrames = MAX_FRAMES, maximumPixels = MAX_TOTAL_PIXELS, square = false, banner = false }: ImageProcessingOptions = {}): Promise<{ data: Buffer; width: number; height: number }> {
   if (input.byteLength === 0) throw invalid("The file is empty.");
   if (input.byteLength > MAX_ATTACHMENT_BYTES) throw invalid(`Images can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
   // sharp applies the pixel limit to the whole animation, a second guard for the check below.
@@ -85,13 +89,16 @@ export async function processImage(input: Uint8Array, { maximumDimension = MAX_D
   // Format comes from the decoder, never from the client: SVG, TIFF, PDF and friends are refused.
   if (!meta.format || !DECODABLE.has(meta.format)) throw invalid("Use a PNG, JPEG, WebP or GIF image.");
   const frames = meta.pages ?? 1;
-  if (frames > maximumFrames) throw invalid(maximumFrames === 1 ? "Community emoji and stickers must be static images." : `Animated images can have at most ${maximumFrames} frames.`);
+  if (frames > maximumFrames) throw invalid(maximumFrames === 1 ? "Animated images aren't supported here. Use a static image." : `Animated images can have at most ${maximumFrames} frames.`);
   if ((meta.width ?? 0) * (meta.pageHeight ?? meta.height ?? 0) * frames > maximumPixels) throw invalid("That image is too large to process.");
   try {
     const data = await sharp(input, options)
       .autoOrient()
       // Square: the client crops, but the stored picture is centre-cropped again so it is always square.
-      .resize({ width: maximumDimension, height: maximumDimension, fit: square ? "cover" : "inside", withoutEnlargement: !square })
+      // Banners are centre-cropped to the 16:9 Discord uses.
+      .resize(banner
+        ? { width: BANNER_WIDTH, height: BANNER_HEIGHT, fit: "cover" }
+        : { width: maximumDimension, height: maximumDimension, fit: square ? "cover" : "inside", withoutEnlargement: !square })
       .webp({ quality: 82 })
       .toBuffer();
     const out = await sharp(data).metadata();
@@ -228,6 +235,19 @@ export async function stageAvatarAttachment(userId: string, raw: Uint8Array, sig
   } finally { activeUploads -= 1; }
 }
 
+/** A community's server picture (square) or banner (16:9), staged unlinked until the community points at it. */
+export async function stageCommunityImage(userId: string, kind: "icon" | "banner", raw: Uint8Array, signal: AbortSignal): Promise<AttachmentView> {
+  signal.throwIfAborted();
+  if (raw.byteLength === 0 || raw.byteLength > MAX_ATTACHMENT_BYTES) throw invalid(`Community pictures can be at most ${mb(MAX_ATTACHMENT_BYTES)}.`);
+  if (activeUploads >= MAX_CONCURRENT_UPLOADS) throw new AppError("rate_limited", "The server is busy with other uploads. Try again in a moment.");
+  activeUploads += 1;
+  try {
+    return await storeUpload(userId, null, true, null, raw, MAX_UNLINKED_PER_USER, signal, kind === "icon"
+      ? { maximumDimension: COMMUNITY_ICON_DIMENSION, maximumFrames: 1, maximumPixels: MAX_DIMENSION * MAX_DIMENSION, square: true }
+      : { maximumFrames: 1, maximumPixels: MAX_DIMENSION * MAX_DIMENSION, banner: true });
+  } finally { activeUploads -= 1; }
+}
+
 async function storeUpload(userId: string, channelId: string | null, image: boolean, rawFilename: string | null, raw: Uint8Array, maximumPending = MAX_UNLINKED_PER_USER, signal?: AbortSignal, imageOptions?: ImageProcessingOptions): Promise<AttachmentView> {
   requireStorage();
   await scanAttachment(raw);
@@ -254,7 +274,7 @@ export async function persistUpload(userId: string, channelId: string | null, st
   const row = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`upload:${userId}`}, 0))`);
     const [{ unlinked }] = await tx.select({ unlinked: count() }).from(attachment)
-      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId)));
+      .where(and(eq(attachment.uploaderId, userId), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), notCommunityImage));
     if (unlinked >= maximumPending) throw new AppError("rate_limited", "Send or remove your pending attachments first.");
     const [{ today }] = await tx.select({ today: sum(attachment.size).mapWith(Number) }).from(attachment)
       .where(and(eq(attachment.uploaderId, userId), gt(attachment.createdAt, new Date(Date.now() - 86_400_000))));
@@ -354,7 +374,7 @@ export function sweepAttachments(now = Date.now()): Promise<number> {
 async function sweep(now: number): Promise<number> {
   if (!storage) return 0;
   const stale = await db.transaction(async (tx) => {
-    const eligible = and(isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))));
+    const eligible = and(isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), notCommunityImage, or(isNotNull(attachment.linkedAt), lt(attachment.createdAt, new Date(now - UNLINKED_TTL_MS))));
     const rows = await tx.select({ id: attachment.id }).from(attachment).where(eligible).limit(200).for("update", { skipLocked: true });
     if (rows.length === 0) return [];
     // Claim before storage I/O so a concurrent sender cannot reattach an object being removed.
@@ -365,7 +385,7 @@ async function sweep(now: number): Promise<number> {
   await Promise.all(stale.map(async ({ id, key }) => {
     if (await storage.remove(key).catch(() => false)) removed.push(id);
   }));
-  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), isNotNull(attachment.linkedAt)));
+  if (removed.length) await db.delete(attachment).where(and(inArray(attachment.id, removed), isNull(attachment.messageId), isNull(attachment.dmMessageId), isNull(attachment.assetId), isNull(attachment.avatarUserId), notCommunityImage, isNotNull(attachment.linkedAt)));
   return removed.length;
 }
 

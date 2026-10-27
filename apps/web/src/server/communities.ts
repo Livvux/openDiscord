@@ -14,12 +14,15 @@ import { afterAccessChange, closeVoiceRoom, voiceEnabled } from "./voice";
 import { lockVoiceLifecycle } from "./voice-locks";
 import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { NOTHING_UNREAD, unreadState } from "./unread";
+import { listed } from "./discovery";
 import { z } from "zod";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
 
 export interface CommunitySummary {
   id: string;
   name: string;
+  iconId: string | null;
+  verified: boolean;
 }
 
 export interface CommunityNavigationSummary extends CommunitySummary {
@@ -42,9 +45,8 @@ export interface ChannelSummary {
   lastReadId: string | null;
 }
 
-export interface CommunityView {
-  id: string;
-  name: string;
+export interface CommunityView extends CommunitySummary {
+  bannerId: string | null;
   isOwner: boolean;
   /** The viewer's notification level here. */
   notifications: "mentions" | "muted";
@@ -69,7 +71,7 @@ export async function createCommunity(userId: string, rawName: unknown): Promise
   });
 }
 
-export async function listCommunities(userId: string): Promise<CommunitySummary[]> {
+export async function listCommunities(userId: string): Promise<Pick<CommunitySummary, "id" | "name">[]> {
   await assertActiveUser(userId);
   return db
     .select({ id: community.id, name: community.name })
@@ -83,7 +85,7 @@ export async function listCommunities(userId: string): Promise<CommunitySummary[
 export async function listCommunityNavigation(userId: string): Promise<CommunityNavigationSummary[]> {
   await assertActiveUser(userId);
   const rows = await db
-    .select({ id: community.id, name: community.name, ownerId: community.ownerId, notifications: member.notifications })
+    .select({ id: community.id, name: community.name, iconId: community.iconId, verifiedAt: community.verifiedAt, ownerId: community.ownerId, notifications: member.notifications })
     .from(member)
     .innerJoin(community, eq(community.id, member.communityId))
     .where(and(eq(member.userId, userId), isNull(community.suspendedAt)))
@@ -96,8 +98,9 @@ export async function listCommunityNavigation(userId: string): Promise<Community
       inArray(role.communityId, rows.map((c) => c.id)),
       or(role.isDefault, inArray(role.id, db.select({ id: memberRole.roleId }).from(memberRole).where(eq(memberRole.userId, userId)))),
     ));
-  return rows.map(({ ownerId, ...c }) => ({
+  return rows.map(({ ownerId, verifiedAt, ...c }) => ({
     ...c,
+    verified: verifiedAt !== null,
     authority: resolveAuthority(ownerId === userId, roles.filter((r) => r.communityId === c.id)),
   }));
 }
@@ -125,7 +128,7 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
   const [own] = await db.select({ notifications: member.notifications }).from(member)
     .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
   return {
-    id: c.id, name: c.name, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions",
+    id: c.id, name: c.name, iconId: c.iconId, bannerId: c.bannerId, verified: c.verifiedAt !== null, isOwner: ctx.authority.isOwner, notifications: own?.notifications ?? "mentions",
     // Group names can be sensitive too: members only get groups with a channel they can see.
     categories: (await listCategories(communityId)).filter(
       (cat) => has(ctx.authority, Permission.ManageChannels) || channels.some((ch) => ch.categoryId === cat.id),
@@ -319,6 +322,8 @@ export interface InvitePreview {
   rules: string;
   rulesVersion: number;
   rulesRequired: boolean;
+  /** Banner (or picture) for link previews; only listed communities have public pictures. */
+  shareImageId: string | null;
 }
 
 export async function createInvite(userId: string, rawCommunityId: unknown, rawOptions: unknown): Promise<string> {
@@ -364,7 +369,8 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
   const code = parse(inviteCode, rawCode);
   await assertInvitesAllowed();
   const [row] = await db
-    .select({ invite, communityName: community.name, pausedAt: community.invitesPausedAt, rules: community.rules, rulesVersion: community.rulesVersion, rulesRequired: community.rulesRequired })
+    .select({ invite, communityName: community.name, pausedAt: community.invitesPausedAt, rules: community.rules, rulesVersion: community.rulesVersion, rulesRequired: community.rulesRequired,
+      shareImageId: sql<string | null>`case when ${listed()} then coalesce(${community.bannerId}, ${community.iconId}) end` })
     .from(invite)
     .innerJoin(community, eq(community.id, invite.communityId))
     .where(and(eq(invite.code, code), isNull(community.suspendedAt)));
@@ -373,7 +379,7 @@ export async function getInvitePreview(rawCode: unknown): Promise<InvitePreview>
     .select({ memberCount: count() })
     .from(member)
     .where(eq(member.communityId, row.invite.communityId));
-  return { code, communityId: row.invite.communityId, communityName: row.communityName, memberCount, paused: row.pausedAt !== null, rules: row.rules, rulesVersion: row.rulesVersion, rulesRequired: row.rulesRequired };
+  return { code, communityId: row.invite.communityId, communityName: row.communityName, memberCount, paused: row.pausedAt !== null, rules: row.rules, rulesVersion: row.rulesVersion, rulesRequired: row.rulesRequired, shareImageId: row.shareImageId };
 }
 
 // Pauses only end when a moderator resumes invites, so "try again later" would mislead.

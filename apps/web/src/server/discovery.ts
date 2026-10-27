@@ -15,6 +15,9 @@ export interface DiscoverableCommunity {
   id: string;
   name: string;
   description: string;
+  iconId: string | null;
+  bannerId: string | null;
+  verified: boolean;
   memberCount: number;
   onlineCount: number;
 }
@@ -25,11 +28,14 @@ export interface DiscoverablePreview extends DiscoverableCommunity {
   rulesRequired: boolean;
 }
 
-const listed = () => and(eq(community.discoverable, true), isNull(community.suspendedAt), activeUser(sql`${community.ownerId}`));
+export const listed = () => and(eq(community.discoverable, true), isNull(community.suspendedAt), activeUser(sql`${community.ownerId}`));
 const columns = {
   id: community.id,
   name: community.name,
   description: community.description,
+  iconId: community.iconId,
+  bannerId: community.bannerId,
+  verified: sql<boolean>`${community.verifiedAt} is not null`,
   memberCount: sql<number>`(select count(*)::int from member m where m.community_id = ${community.id})`,
   // Aggregate only, and only people who opted into showing their status.
   onlineCount: sql<number>`(select count(*)::int from member m join user_presence p on p.user_id = m.user_id

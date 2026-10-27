@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
+import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, openReactionPicker, signUp } from "./helpers";
 import { withCommunityImport } from "./import-lock";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -52,6 +52,8 @@ test.describe("private community images", () => {
     await expect(log.getByRole("img", { name: ":test_emoji:", exact: true })).toBeVisible();
     await expect(log.getByRole("img", { name: "[sticker: test_sticker]", exact: true })).toBeVisible();
     const row = log.getByRole("listitem").filter({ has: chat.getByRole("img", { name: "[sticker: test_sticker]", exact: true }) }).first();
+    // The hover toolbar stays inside the chat on desktop; phones use long-press instead.
+    if (!isMobile) {
     await row.hover();
     const reactButton = row.getByRole("button", { name: "Add reaction" });
     const geometry = await reactButton.evaluate((button) => {
@@ -63,7 +65,8 @@ test.describe("private community images", () => {
     expect(geometry.bottom).toBeLessThanOrEqual(geometry.logBottom);
     expect(geometry.left).toBeGreaterThanOrEqual(0);
     expect(geometry.right).toBeLessThanOrEqual(geometry.width);
-    await reactButton.click();
+    }
+    await openReactionPicker(row);
     const picker = chat.getByRole("dialog", { name: "Add a reaction", exact: true });
     await picker.getByRole("button", { name: "Show all Emojis" }).click();
     await picker.getByRole("textbox").fill("test_emoji");

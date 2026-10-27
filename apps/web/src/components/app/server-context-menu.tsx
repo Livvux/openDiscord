@@ -23,6 +23,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import type { CommunityNavigationSummary } from "@/server/communities";
 import type { ActionResult } from "@/server/errors";
 import { has, Permission } from "@/server/permissions";
+import { fmt } from "@/lib/i18n";
+import { useMessages } from "@/lib/i18n/client";
 import { InviteDialog } from "./invite-dialog";
 import { ReportDialog } from "./report-dialog";
 
@@ -30,7 +32,7 @@ const SETTINGS_PERMISSIONS =
   Permission.ManageCommunity | Permission.ManageRoles | Permission.KickMembers | Permission.BanMembers | Permission.ViewAuditLog;
 
 interface ServerContextMenuProps {
-  community: CommunityNavigationSummary;
+  community: Pick<CommunityNavigationSummary, "id" | "name" | "authority" | "notifications">;
   children: React.ReactNode;
   className?: string;
   /** Existing links remain the tab stop; the header can be focused on its own. */
@@ -49,6 +51,7 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
+  const t = useMessages().community;
   const canInvite = has(community.authority, Permission.CreateInvites);
   const canManage = (community.authority.permissions & SETTINGS_PERMISSIONS) !== 0;
 
@@ -120,16 +123,16 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
           <ContextMenuLabel>{community.name}</ContextMenuLabel>
           {canInvite && (
             <ContextMenuItem disabled={pending} onClick={() => setInviteOpen(true)}>
-              <UserPlusIcon aria-hidden /> Invite people
+              <UserPlusIcon aria-hidden /> {t.invite}
             </ContextMenuItem>
           )}
           <ContextMenuLinkItem render={<Link href={`/app/c/${community.id}/settings`} />}>
-            <SettingsIcon aria-hidden /> {canManage ? "Community settings" : "Community info"}
+            <SettingsIcon aria-hidden /> {canManage ? t.settings : t.info}
           </ContextMenuLinkItem>
           <ContextMenuSeparator />
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={pending}>
-              <BellIcon aria-hidden /> Notifications
+              <BellIcon aria-hidden /> {t.notifications}
             </ContextMenuSubTrigger>
             <ContextMenuContent aria-label="Server notifications">
               <ContextMenuRadioGroup
@@ -141,22 +144,22 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
                   }
                 }}
               >
-                <ContextMenuRadioItem value="mentions" closeOnClick>Mentions</ContextMenuRadioItem>
-                <ContextMenuRadioItem value="muted" closeOnClick>Muted</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="mentions" closeOnClick>{t.mentions}</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="muted" closeOnClick>{t.muted}</ContextMenuRadioItem>
               </ContextMenuRadioGroup>
             </ContextMenuContent>
           </ContextMenuSub>
           <ContextMenuItem onClick={() => void copyId()} closeOnClick={false}>
-            {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />} {copied ? "Copied server ID" : "Copy server ID"}
+            {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />} {copied ? t.copiedId : t.copyId}
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem disabled={pending} onClick={() => setReportOpen(true)}>
-            <FlagIcon aria-hidden /> Report community
+            <FlagIcon aria-hidden /> {t.report}
           </ContextMenuItem>
           {!community.authority.isOwner && (
             <>
               <ContextMenuItem variant="destructive" disabled={pending} onClick={() => { setError(null); setLeaveOpen(true); }}>
-                <LogOutIcon aria-hidden /> Leave community
+                <LogOutIcon aria-hidden /> {t.leave}
               </ContextMenuItem>
             </>
           )}
@@ -179,13 +182,13 @@ export function ServerContextMenu({ community, children, className, tabIndex = -
       <Dialog open={leaveOpen} onOpenChange={(next) => { if (!pending) { setLeaveOpen(next); setError(null); } }}>
         <DialogContent finalFocus={returnFocus} showCloseButton={!pending}>
           <DialogHeader>
-            <DialogTitle>Leave {community.name}?</DialogTitle>
-            <DialogDescription>You will lose access to its channels and conversations. You will need an invite to rejoin.</DialogDescription>
+            <DialogTitle>{fmt(t.leaveTitle, { name: community.name })}</DialogTitle>
+            <DialogDescription>{t.leaveDescription}</DialogDescription>
           </DialogHeader>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
-            <Button variant="outline" disabled={pending} onClick={() => { setLeaveOpen(false); setError(null); }}>Cancel</Button>
-            <Button variant="destructive" disabled={pending} onClick={leave}>{pending ? "Leaving…" : "Leave community"}</Button>
+            <Button variant="outline" disabled={pending} onClick={() => { setLeaveOpen(false); setError(null); }}>{t.cancel}</Button>
+            <Button variant="destructive" disabled={pending} onClick={leave}>{pending ? t.leaving : t.leave}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -33,6 +33,11 @@ export const community = pgTable("community", {
   /** Owner opt-in: listed in Discover and joinable without an invite. */
   discoverable: boolean("discoverable").notNull().default(false),
   description: text("description").notNull().default(""),
+  /** Square server picture and wide banner; replaced pictures lose this link and the media sweeper deletes them. */
+  iconId: uuid("icon_id").references((): AnyPgColumn => attachment.id, { onDelete: "set null" }),
+  bannerId: uuid("banner_id").references((): AnyPgColumn => attachment.id, { onDelete: "set null" }),
+  /** Set by an instance administrator: shows the verified badge. */
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspensionReason: text("suspension_reason"),
   /** Set while invites are paused (by a manager, or automatically by raid protection). */

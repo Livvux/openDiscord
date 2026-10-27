@@ -9,20 +9,21 @@ import { ownAvatar } from "@/server/avatars";
 import { communityUnread } from "@/server/unread";
 import { listDirectConversations } from "@/server/direct-messages";
 import { unreadTotal } from "@/lib/dm/contracts";
+import { getMessages } from "@/lib/i18n/server";
 
 const NOTHING_UNREAD_SUMMARY = { unread: false, mentions: 0 };
 import { RailHomeLink } from "./home/home-nav-link";
 import { CreateCommunityDialog } from "./create-community-dialog";
-import { RailDiscoverLink, RailLink } from "./rail-link";
+import { RailDiscoverLink, RailLink, RailTooltip } from "./rail-link";
+import { railShape } from "./rail-styles";
 import { ServerContextMenu } from "./server-context-menu";
 import { UserPanel } from "./user-panel";
 
-const railAction = "grid size-12 place-items-center rounded-2xl bg-white/[0.08] text-[#23a55a] transition-colors hover:bg-[#23a55a] hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 export async function CommunityRail() {
   const user = await requirePageUser();
   const [communities, admin, presence, profile, avatar] = await Promise.all([loadCommunityNavigation(user.id), isInstanceAdmin(user.id), presenceChoice(user.id), getProfile(user.id), ownAvatar(user.id)]);
-  const [unread, direct] = await Promise.all([communityUnread(user.id, communities), listDirectConversations(user.id)]);
+  const [unread, direct, { rail: t }] = await Promise.all([communityUnread(user.id, communities), listDirectConversations(user.id), getMessages()]);
   return (
     <>
       <RailHomeLink initialUnread={unreadTotal(direct)} />
@@ -32,7 +33,7 @@ export async function CommunityRail() {
         {communities.map((c) => (
           <li key={c.id}>
             <ServerContextMenu community={c}>
-              <RailLink communityId={c.id} name={c.name} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} muted={c.notifications === "muted"} />
+              <RailLink communityId={c.id} name={c.name} iconId={c.iconId} verified={c.verified} initial={unread.get(c.id) ?? NOTHING_UNREAD_SUMMARY} muted={c.notifications === "muted"} />
             </ServerContextMenu>
           </li>
         ))}
@@ -44,7 +45,9 @@ export async function CommunityRail() {
         </li>
         {admin && (
           <li>
-            <Link href="/app/admin" aria-label="Instance administration" title="Instance administration" className={railAction}><ShieldIcon /></Link>
+            <RailTooltip label={t.adminCenter}>
+              <Link href="/app/admin" aria-label={t.adminCenter} className={`${railShape(false)} bg-white/[0.08] text-[#23a55a] hover:bg-[#23a55a] hover:text-white`}><ShieldIcon /></Link>
+            </RailTooltip>
           </li>
         )}
       </ul>

@@ -16,6 +16,7 @@ import { CategoriesEditor } from "@/components/app/settings/categories-editor";
 import { getAutomod } from "@/server/automod";
 import { getListing } from "@/server/discovery";
 import { DiscoverListing } from "@/components/app/settings/discover-listing";
+import { CommunityImages } from "@/components/app/settings/community-images";
 import { blockedIds } from "@/server/blocks";
 import { listIntegrations } from "@/server/integrations";
 import { IntegrationsEditor } from "@/components/app/settings/integrations-editor";
@@ -62,6 +63,8 @@ const AUDIT_LABELS: Record<string, string> = {
   "automod.block": "had a message blocked by AutoMod",
   "discover.list": "listed the community in Discover",
   "discover.unlist": "removed the community from Discover",
+  "community.icon": "changed the server picture",
+  "community.banner": "changed the banner",
 };
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
@@ -69,7 +72,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist"].includes(e.action)) return null;
+  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist", "community.icon", "community.banner"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -130,6 +133,7 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
       <Section id="community-rules" title="Community rules"><CommunityRules communityId={view.id} rules={rules} canManage={has(a, Permission.ManageCommunity)} /></Section>
       {has(a, Permission.ManageCommunity) && (
         <Section id="overview" title="Overview">
+          <CommunityImages communityId={view.id} name={view.name} iconId={view.iconId} bannerId={view.bannerId} />
           <RenameCommunity communityId={view.id} name={view.name} />
           {listing && <DiscoverListing communityId={view.id} listing={listing} />}
         </Section>
