@@ -96,7 +96,7 @@ describe("closed alpha", () => {
     const rejected = await signUp("Rejected person");
     const a = await statusOf(approved.email);
     const r = await statusOf(rejected.email);
-    expect((await admin.adminDashboard(root, "", "open", "pending")).users.map((u) => u.id)).toEqual(expect.arrayContaining([a.id, r.id]));
+    expect((await admin.adminDashboard(root, { filter: "pending" })).users.items.map((u) => u.id)).toEqual(expect.arrayContaining([a.id, r.id]));
 
     await admin.setApproval(root, a.id, "approved", "Known tester");
     await expect(admin.setApproval(root, a.id, "approved", "Again")).rejects.toThrow(/already approved/);

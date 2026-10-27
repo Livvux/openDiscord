@@ -8,54 +8,66 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { AdminDashboard } from "@/server/instance-admin";
-import { AdminAction } from "./admin-action";
+import type { listDirectReports } from "@/server/direct-messages";
+import type { AdminDashboard, AuditArea } from "@/server/instance-admin";
+import { AdminAction, MoreActions } from "./admin-action";
+import { PrivateReports } from "./private-reports";
 import { VerifiedBadge } from "../community-icon";
-import { EmptyState, formatDate, Panel } from "./shared";
+import { adminHref, EmptyState, FilterChips, formatDate, Pager, Panel } from "./shared";
 import { SearchForm } from "./users";
 
-export function CommunitiesPanel({ communities, search }: { communities: AdminDashboard["communities"]; search: string }) {
+type PrivateReport = Awaited<ReturnType<typeof listDirectReports>>[number];
+
+export function CommunitiesPanel({ communities, search, page }: { communities: AdminDashboard["communities"]; search: string; page: number }) {
   return (
-    <Panel id="communities" title="Communities" description="Up to 50 newest matches." actions={<SearchForm tab="communities" search={search} label="Search communities by name" />}>
-      {!communities.length ? <EmptyState>No communities match.</EmptyState> : (
-        <ul className="divide-y">{communities.map((c) => (
+    <Panel id="communities" title="Communities" actions={<SearchForm tab="communities" search={search} label="Search communities by name" />}>
+      {!communities.items.length ? <EmptyState>No communities match.</EmptyState> : (
+        <ul className="divide-y">{communities.items.map((c) => (
           <li key={c.id} className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-2">
                 <span className="font-medium break-words text-zinc-100">{c.name}</span>
                 {c.verifiedAt && <VerifiedBadge />}
                 {c.suspendedAt ? <Badge variant="destructive" className="text-red-200">Suspended</Badge> : <Badge className="bg-emerald-400/15 text-emerald-200">Active</Badge>}
+                {c.discoverable && !c.suspendedAt && <Link href={`/app/discover/${c.id}`} className="text-xs text-muted-foreground underline hover:text-zinc-100">In Discover</Link>}
               </p>
               <p className="text-sm break-all text-muted-foreground">Owner: {c.ownerEmail}</p>
-              {c.suspendedAt && <p className="text-xs text-muted-foreground">Suspended: {c.suspensionReason}</p>}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {c.members} {c.members === 1 ? "member" : "members"} · Created <time dateTime={new Date(c.createdAt).toISOString()}>{formatDate(c.createdAt)}</time>
+                {c.suspendedAt && <> · Suspended: {c.suspensionReason}</>}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2 md:justify-end">
               <AdminAction label={c.suspendedAt ? "Unsuspend community" : "Suspend community"} variant={c.suspendedAt ? "outline" : "destructive"} description={`Community: ${c.name}. Suspension blocks access and invitations for every member.`} action={(r) => actions.suspendCommunity(c.id, !c.suspendedAt, r)} />
-              <AdminAction label={c.verifiedAt ? "Remove verification" : "Verify community"} variant="outline" description={`Community: ${c.name}. Verified communities show a blue badge everywhere their name appears.`} action={(r) => actions.verifyCommunity(c.id, !c.verifiedAt, r)} />
-              <AdminAction label="Transfer ownership" description={`Community: ${c.name}. The new owner must already be an active member.`} extraLabel="New owner's email" extraType="email" action={(r, email) => actions.transferCommunity(c.id, email, r)} />
+              <MoreActions label={`More actions for ${c.name}`} items={[
+                { label: c.verifiedAt ? "Remove verification" : "Verify community", description: `Community: ${c.name}. Verified communities show a blue badge everywhere their name appears.`, action: (r) => actions.verifyCommunity(c.id, !c.verifiedAt, r) },
+                { label: "Transfer ownership", description: `Community: ${c.name}. The new owner must already be an active member.`, extraLabel: "New owner's email", extraType: "email", action: (r, email) => actions.transferCommunity(c.id, email, r) },
+              ]} />
             </div>
           </li>
         ))}</ul>
       )}
+      <Pager page={page} hasMore={communities.hasMore} href={(p) => adminHref({ tab: "communities", q: search, page: p })} />
     </Panel>
   );
 }
 
-export function ReportsPanel({ reports, status }: { reports: AdminDashboard["reports"]; status: string }) {
+const REPORT_STATUSES = [["open", "Open"], ["private", "Private messages"], ["dismissed", "Dismissed"], ["removed", "Removed"]] as const;
+
+export function ReportsPanel({ reports, privateReports, status, openPrivate }: { reports: AdminDashboard["reports"]; privateReports: PrivateReport[]; status: string; openPrivate: number }) {
+  const options = REPORT_STATUSES.map(([s, label]) => [s, s === "private" && openPrivate ? `${label} (${openPrivate})` : label] as const);
   return (
     <Panel
       id="reports"
       title="Abuse reports"
-      description="Message content stays hidden until you open it with a reason. Removing a reported community suspends it and keeps its data."
-      actions={
-        <nav aria-label="Report status" className="flex gap-1.5">
-          {["open", "dismissed", "removed"].map((s) => (
-            <Link key={s} href={`/app/admin?tab=reports&status=${s}`} aria-current={s === status ? "page" : undefined} className="rounded-full border px-3 py-1 text-sm capitalize text-zinc-300 hover:bg-muted aria-[current=page]:border-brand-indigo aria-[current=page]:bg-brand-indigo/15 aria-[current=page]:text-zinc-100">{s}</Link>
-          ))}
-        </nav>
-      }
+      description={status === "private"
+        ? "Only the recipient's reason and any text they chose to disclose. Excerpts are their statement, not proof: the server can't decrypt private messages."
+        : "Message content stays hidden until you open it with a reason."}
+      actions={<FilterChips label="Report status" options={options} current={status} href={(s) => adminHref({ tab: "reports", status: s })} />}
     >
-      {!reports.length ? <EmptyState>No {status} reports.</EmptyState> : <ul className="divide-y">{reports.map((r) => <ReportRow key={r.id} report={r} />)}</ul>}
+      {status === "private"
+        ? <PrivateReports reports={privateReports} />
+        : !reports.length ? <EmptyState>No {status} reports.</EmptyState> : <ul className="divide-y">{reports.map((r) => <ReportRow key={r.id} report={r} />)}</ul>}
     </Panel>
   );
 }
@@ -69,7 +81,7 @@ function ReportRow({ report }: { report: AdminDashboard["reports"][number] }) {
           {report.messageId ? "Message" : "Community"} report · {report.communityName ?? "Deleted community"}
           <Badge variant="outline" className="capitalize">{report.status}</Badge>
         </p>
-        <p className="text-xs text-muted-foreground">{formatDate(report.createdAt)}</p>
+        <p className="text-xs text-muted-foreground">{formatDate(report.createdAt)} · Reported by {report.reporterName ?? "a deleted account"}</p>
       </div>
       <p className="break-words whitespace-pre-wrap">{report.reason}</p>
       {report.resolution && <p className="text-sm text-muted-foreground">Resolution: {report.resolution}</p>}
@@ -100,7 +112,7 @@ export function SettingsPanel({ settings, admins }: { settings: AdminDashboard["
   const limits = [["ownedCommunities", "Communities per owner"], ["channelsPerCommunity", "Channels per community"], ["rolesPerCommunity", "Roles per community"], ["activeInvitesPerCommunity", "Active invites per community"]] as const;
   return (
     <div className="grid gap-6">
-      <Panel id="settings" title="Instance settings" description="Closed Alpha is on the Overview tab. Lower limits affect new creations and don't delete existing data.">
+      <Panel id="settings" title="Instance settings" description="Lower limits only affect new creations.">
         <form className="grid max-w-2xl gap-5 py-5" onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
@@ -126,25 +138,32 @@ export function SettingsPanel({ settings, admins }: { settings: AdminDashboard["
           <Button type="submit" disabled={pending} className="w-fit">Save instance settings</Button>
         </form>
       </Panel>
-      <Panel id="admins" title="Instance administrators" description="Grant or remove rights from the Users tab. The last admin can't be removed, suspended or deleted.">
+      <Panel id="admins" title="Instance administrators" description={<>Manage rights in <Link href="/app/admin?tab=users&filter=admins" className="link">Users</Link>. The last admin can&apos;t be removed.</>}>
         <ul className="divide-y">{admins.map((u) => <li key={u.id} className="py-3"><p className="font-medium text-zinc-100">{u.name}</p><p className="text-sm break-all text-muted-foreground">{u.email}</p></li>)}</ul>
       </Panel>
     </div>
   );
 }
 
-export function AuditPanel({ logs }: { logs: AdminDashboard["logs"] }) {
+const AUDIT_AREAS = [["all", "All"], ["user", "Users"], ["community", "Communities"], ["report", "Reports"], ["instance", "Instance"]] as const satisfies readonly (readonly [AuditArea, string])[];
+
+export function AuditPanel({ logs, area, page }: { logs: AdminDashboard["logs"]; area: AuditArea; page: number }) {
   return (
-    <Panel id="audit" title="Instance audit log" description="The latest 100 administrative actions.">
-      {!logs.length ? <EmptyState>No entries yet.</EmptyState> : (
-        <ol className="divide-y">{logs.map((entry) => (
-          <li key={entry.id} className="space-y-1 py-3 break-words">
-            <p className="flex flex-wrap items-baseline gap-x-2"><code className="font-mono text-sm text-zinc-100">{entry.action}</code><time className="text-xs text-muted-foreground" dateTime={new Date(entry.createdAt).toISOString()}>{formatDate(entry.createdAt)}</time></p>
-            <p className="text-xs text-muted-foreground">Actor: {entry.actorName ?? "Operator / deleted account"} {entry.actorId && `(${entry.actorId})`} · Target: {entry.targetId}</p>
-            <p className="text-sm">{entry.reason}</p>
-          </li>
-        ))}</ol>
-      )}
+    <Panel id="audit" title="Instance audit log" actions={<FilterChips label="Filter audit log" options={AUDIT_AREAS} current={area} href={(a) => adminHref({ tab: "audit", area: a })} />}>
+      {!logs.items.length ? <EmptyState>No entries yet.</EmptyState> : <ol className="divide-y">{logs.items.map((entry) => <AuditEntry key={entry.id} entry={entry} />)}</ol>}
+      <Pager page={page} hasMore={logs.hasMore} href={(p) => adminHref({ tab: "audit", area, page: p })} />
     </Panel>
+  );
+}
+
+export function AuditEntry({ entry }: { entry: AdminDashboard["logs"]["items"][number] }) {
+  return (
+    <li className="space-y-1 py-3 break-words">
+      <p className="flex flex-wrap items-baseline gap-x-2"><code className="font-mono text-sm text-zinc-100">{entry.action}</code><time className="text-xs text-muted-foreground" dateTime={new Date(entry.createdAt).toISOString()}>{formatDate(entry.createdAt)}</time></p>
+      <p className="text-xs text-muted-foreground">
+        By {entry.actorName ?? "operator / deleted account"} · Target: {entry.targetName ?? <span className="font-mono">{entry.targetId}</span>}
+      </p>
+      <p className="text-sm">{entry.reason}</p>
+    </li>
   );
 }

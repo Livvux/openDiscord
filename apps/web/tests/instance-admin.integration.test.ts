@@ -9,6 +9,7 @@ import { createCommunity, createChannel, createInvite, acceptInvite, getInvitePr
 import { exportUserData } from "@/server/account";
 import { requireMember } from "@/server/access";
 import * as admin from "@/server/instance-admin";
+import { badgesOf } from "@/server/badges";
 import { isInstanceAdmin } from "@/server/instance-policy";
 import { listMessages, sendMessage } from "@/server/messages";
 import { reportContent } from "@/server/reports";
@@ -143,6 +144,32 @@ describe("instance administration", () => {
     await expect(admin.setUserSuspension(root, root.userId, true, "Self suspension")).rejects.toThrow(/Remove this account/);
     // RESTRICT guards erasure even if an account-deletion path misses the application hook.
     await expect(db.delete(user).where(eq(user.id, root.userId))).rejects.toThrow();
+  });
+  it("grants and removes the HypeSquad badge with an audit record", async () => {
+    await expect(admin.setUserBadge(root, chatter, "staff", true, "Not a grantable badge")).rejects.toThrow();
+    await expect(admin.setUserBadge(await makeSession(owner), chatter, "hypesquad", true, "Not an admin")).rejects.toThrow(/administrator access/);
+    await admin.setUserBadge(root, chatter, "hypesquad", true, "Approved HypeSquad application");
+    await admin.setUserBadge(root, chatter, "hypesquad", true, "Granting twice is harmless");
+    expect(await badgesOf(chatter)).toContain("hypesquad");
+    const listed = await admin.adminDashboard(root, { search: "Chatter", filter: "all" });
+    expect(listed.users.items.find((u) => u.id === chatter)?.hypesquad).toBe(true);
+    await admin.setUserBadge(root, chatter, "hypesquad", false, "Badge removed");
+    expect(await badgesOf(chatter)).not.toContain("hypesquad");
+    const audit = await admin.adminDashboard(root, { area: "user" });
+    expect(audit.logs.items.every((e) => /^(user|admin|dm\.identity)\./.test(e.action))).toBe(true);
+    const revoke = audit.logs.items.find((e) => e.action === "user.badge.revoke" && e.targetId === chatter);
+    expect(revoke?.targetName).toBe("Chatter");
+    expect(revoke?.reason).toBe("Badge removed (hypesquad)");
+  });
+  it("pages users, communities and the audit log without overlap", async () => {
+    const first = await admin.adminDashboard(root);
+    expect(first.users.items.length).toBeLessThanOrEqual(admin.PAGE_SIZE);
+    expect(first.logs.items.find((e) => e.targetId === c.communityId)?.targetName).toBe("Private community");
+    const second = await admin.adminDashboard(root, { page: 2 });
+    const firstIds = new Set(first.users.items.map((u) => u.id));
+    expect(second.users.items.some((u) => firstIds.has(u.id))).toBe(false);
+    await expect(admin.adminDashboard(root, { page: 0 })).rejects.toThrow();
+    await expect(admin.adminDashboard(root, { area: "everything" })).rejects.toThrow();
   });
   it("serializes concurrent demotions and preserves the last administrator", async () => {
     // The last-admin rule is instance-wide; a developer database may already have its own admins.

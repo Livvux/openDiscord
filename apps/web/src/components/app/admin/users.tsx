@@ -5,8 +5,8 @@ import Link from "next/link";
 import * as actions from "@/app/app/admin/actions";
 import { Badge } from "@/components/ui/badge";
 import type { AdminDashboard, UserFilter } from "@/server/instance-admin";
-import { AdminAction, QuickAction } from "./admin-action";
-import { type AdminUser, EmptyState, formatDate, Panel, StatusBadge } from "./shared";
+import { AdminAction, type AdminActionProps, MoreActions, QuickAction } from "./admin-action";
+import { adminHref, type AdminUser, EmptyState, FilterChips, formatDate, Pager, Panel, StatusBadge } from "./shared";
 
 const APPROVE_REASON = "Approved for Closed Alpha access";
 
@@ -64,38 +64,33 @@ export function ApprovalQueue({ pending, closedAlpha, limit }: { pending: Pendin
   );
 }
 
-const FILTER_LABELS: Record<UserFilter, string> = {
-  all: "All", pending: "Pending", active: "Active", rejected: "Rejected", suspended: "Suspended", admins: "Admins",
-};
+const FILTERS = [["all", "All"], ["pending", "Pending"], ["active", "Active"], ["rejected", "Rejected"], ["suspended", "Suspended"], ["admins", "Admins"]] as const satisfies readonly (readonly [UserFilter, string])[];
 
-export function UsersPanel({ users, filter, search }: { users: AdminUser[]; filter: UserFilter; search: string }) {
+export function UsersPanel({ users, filter, search, page }: { users: AdminDashboard["users"]; filter: UserFilter; search: string; page: number }) {
   return (
-    <Panel id="users" title="Users" description="Up to 50 newest matches. Narrow the list with search and filters.">
+    <Panel id="users" title="Users">
       <div className="flex flex-col gap-3 py-4 lg:flex-row lg:items-end lg:justify-between">
-        <nav aria-label="Filter users by status" className="flex flex-wrap gap-1.5">
-          {(Object.keys(FILTER_LABELS) as UserFilter[]).map((f) => (
-            <Link
-              key={f}
-              href={`/app/admin?tab=users&filter=${f}&q=${encodeURIComponent(search)}`}
-              aria-current={f === filter ? "page" : undefined}
-              className="rounded-full border px-3 py-1 text-sm text-zinc-300 hover:bg-muted aria-[current=page]:border-brand-indigo aria-[current=page]:bg-brand-indigo/15 aria-[current=page]:text-zinc-100"
-            >
-              {FILTER_LABELS[f]}
-            </Link>
-          ))}
-        </nav>
+        <FilterChips label="Filter users by status" options={FILTERS} current={filter} href={(f) => adminHref({ tab: "users", filter: f, q: search })} />
         <SearchForm tab="users" search={search} label="Search users by name or email" extra={{ filter }} />
       </div>
-      {!users.length ? <EmptyState>No users match.</EmptyState> : (
+      {!users.items.length ? <EmptyState>No users match.</EmptyState> : (
         <ul className="divide-y border-t">
-          {users.map((u) => <UserRow key={u.id} user={u} />)}
+          {users.items.map((u) => <UserRow key={u.id} user={u} />)}
         </ul>
       )}
+      <Pager page={page} hasMore={users.hasMore} href={(p) => adminHref({ tab: "users", filter, q: search, page: p })} />
     </Panel>
   );
 }
 
 function UserRow({ user: u }: { user: AdminUser }) {
+  const more: AdminActionProps[] = [
+    { label: "Revoke sessions", description: `Sign out every device of ${u.email}.`, action: (r) => actions.revokeSessions(u.id, r) },
+    { label: u.hypesquad ? "Remove HypeSquad badge" : "Grant HypeSquad badge", description: `Account: ${u.email}. The badge shows on their profile.`, action: (r) => actions.setBadge(u.id, "hypesquad", !u.hypesquad, r) },
+    ...(u.adminId
+      ? [{ label: "Remove admin", variant: "destructive" as const, description: `Remove instance rights from ${u.email}.`, action: (r: string) => actions.setAdmin(u.id, false, r) }]
+      : u.suspendedAt ? [] : [{ label: "Grant admin", description: `Grant full instance administrator rights to ${u.email}.`, action: (r: string) => actions.setAdmin(u.id, true, r) }]),
+  ];
   return (
     <li className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
@@ -103,10 +98,14 @@ function UserRow({ user: u }: { user: AdminUser }) {
           <span className="font-medium break-words text-zinc-100">{u.name}</span>
           <StatusBadge user={u} />
           {u.adminId && <Badge className="bg-brand-indigo/20 text-indigo-200"><ShieldIcon />Instance admin</Badge>}
+          {u.hypesquad && <Badge variant="outline">HypeSquad</Badge>}
         </p>
         <p className="text-sm break-all text-muted-foreground">{u.email}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Joined <time dateTime={new Date(u.createdAt).toISOString()}>{formatDate(u.createdAt)}</time> · {u.twoFactorEnabled ? "2FA enabled" : "2FA not enabled"}
+          Joined <time dateTime={new Date(u.createdAt).toISOString()}>{formatDate(u.createdAt)}</time>
+          {" · "}{u.lastActiveAt ? <>Last active <time dateTime={new Date(u.lastActiveAt).toISOString()}>{formatDate(u.lastActiveAt)}</time></> : "Not signed in"}
+          {" · "}{u.twoFactorEnabled ? "2FA on" : "2FA off"}
+          {u.ownedCommunities > 0 && <> · Owns {u.ownedCommunities} {u.ownedCommunities === 1 ? "community" : "communities"}</>}
           {u.suspendedAt && <> · Suspended: {u.suspensionReason}</>}
         </p>
       </div>
@@ -121,12 +120,7 @@ function UserRow({ user: u }: { user: AdminUser }) {
             action={(r) => actions.suspendUser(u.id, !u.suspendedAt, r)}
           />
         )}
-        <AdminAction label="Revoke sessions" description={`Sign out every device of ${u.email}.`} action={(r) => actions.revokeSessions(u.id, r)} />
-        {u.adminId ? (
-          <AdminAction label="Remove admin" variant="destructive" description={`Remove instance rights from ${u.email}.`} action={(r) => actions.setAdmin(u.id, false, r)} />
-        ) : !u.suspendedAt && (
-          <AdminAction label="Grant admin" description={`Grant full instance administrator rights to ${u.email}.`} action={(r) => actions.setAdmin(u.id, true, r)} />
-        )}
+        <MoreActions label={`More actions for ${u.email}`} items={more} />
       </div>
     </li>
   );
