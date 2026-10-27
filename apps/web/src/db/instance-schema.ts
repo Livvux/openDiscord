@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, index, integer, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
@@ -9,6 +9,12 @@ export const instanceAdmin = pgTable("instance_admin", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "restrict" }),
   createdAt: createdAt(),
 });
+/** Badges someone has to be granted (e.g. an approved HypeSquad application). Derived badges aren't stored. */
+export const userBadge = pgTable("user_badge", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  badge: text("badge", { enum: ["hypesquad"] }).notNull(),
+  createdAt: createdAt(),
+}, (t) => [primaryKey({ columns: [t.userId, t.badge] })]);
 export const userSuspension = pgTable("user_suspension", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   reason: text("reason").notNull(),

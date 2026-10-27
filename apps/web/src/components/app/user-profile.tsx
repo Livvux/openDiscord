@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { PRESENCE_LABEL } from "@/lib/presence";
 import type { ActionResult } from "@/server/errors";
 import type { ProfileCard } from "@/server/profile-card";
+import { BadgeList } from "./badges";
 import { PresenceAvatar } from "./presence-avatar";
 
 const dateFormat = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" });
@@ -72,6 +73,7 @@ export function ProfileCardBody({ card, currentUserId, onChanged, headingLevel =
           <p className="text-xs text-muted-foreground">{card.presence ? PRESENCE_LABEL[card.presence] : "Offline"}{isSelf ? " · You" : ""}</p>
           {card.customStatus && <p className="mt-1 text-sm break-words text-zinc-200">{card.customStatus}</p>}
         </div>
+        <BadgeList badges={card.badges} />
         {card.bio && (
           <div className={section}>
             <p className={sectionTitle}>About me</p>

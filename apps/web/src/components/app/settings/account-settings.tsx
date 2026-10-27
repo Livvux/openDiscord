@@ -13,7 +13,9 @@ import { ThemeSettings } from "@/components/app/settings/theme-settings";
 import { Sessions } from "@/components/app/settings/sessions";
 import { TwoFactorSettings } from "@/components/app/settings/two-factor-settings";
 import { SignOutButton } from "@/app/app/sign-out-button";
+import { BadgeOverview } from "@/components/app/badges";
 import { ownedCommunityNames, twoFactorEnabled } from "@/server/account";
+import { badgesOf } from "@/server/badges";
 import { listBlocked } from "@/server/blocks";
 import { presenceVisible } from "@/server/presence";
 import { getProfile } from "@/server/profile";
@@ -34,18 +36,19 @@ export function AccountSettings({ intercepted = false }: { intercepted?: boolean
 
 async function Settings({ intercepted }: { intercepted: boolean }) {
   const user = await requirePageUser();
-  const [owned, has2fa, blocked, showPresence, profile, avatar] = await Promise.all([
+  const [owned, has2fa, blocked, showPresence, profile, avatar, badges] = await Promise.all([
     ownedCommunityNames(user.id),
     twoFactorEnabled(user.id),
     listBlocked(user.id),
     presenceVisible(user.id),
     getProfile(user.id),
     ownAvatar(user.id),
+    badgesOf(user.id),
   ]);
   return (
     <SettingsModal title="User settings" closeHref="/app" intercepted={intercepted} groups={[
       { label: "User settings", sections: [
-        ["Profile", "My profile"], ["Email address", "Email"], ["Authenticator app", "Two-factor"], ["Passkeys", "Passkeys"], ["Sessions", "Devices"],
+        ["Profile", "My profile"], ["Badges", "Badges"], ["Email address", "Email"], ["Authenticator app", "Two-factor"], ["Passkeys", "Passkeys"], ["Sessions", "Devices"],
       ] },
       { label: "App settings", sections: [["Theme", "Appearance"], ["Notifications", "Notifications"], ["Online status", "Online status"]] },
       { label: "Privacy & safety", sections: [["Blocked people", "Blocked people"], ["Your data", "Your data"], ["Delete account", "Delete account"]] },
@@ -53,6 +56,9 @@ async function Settings({ intercepted }: { intercepted: boolean }) {
       <Section title="Profile" description="Your display name is visible to members of communities you join; your status and bio to your friends. Your email address is not.">
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />
+      </Section>
+      <Section title="Badges" description="Shown on your profile.">
+        <BadgeOverview badges={badges} />
       </Section>
       <Section title="Theme">
         <ThemeSettings />

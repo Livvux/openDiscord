@@ -27,6 +27,8 @@ describe("profile card", () => {
     const card = await getProfileCard(ada, bo);
     expect(card).toMatchObject({ id: bo, name: "Bo Card", bio: "Hello there", customStatus: "Coding", relation: null, blocked: false });
     expect(card.mutualCommunities).toEqual([{ id: communityId, name: "Card Club" }]);
+    expect(card.badges).not.toContain("community_founder");
+    expect((await getProfileCard(bo, ada)).badges).toContain("community_founder");
     await sendFriendRequest(ada, bo);
     expect((await getProfileCard(bo, ada)).relation).toBe("incoming");
   });
@@ -36,7 +38,7 @@ describe("profile card", () => {
     await expect(getProfileCard(ada, "x".repeat(65))).rejects.toThrow();
     await blockUser(bo, ada);
     const card = await getProfileCard(ada, bo);
-    expect(card).toMatchObject({ bio: "", customStatus: "", presence: null, mutualCommunities: [], blocked: false });
+    expect(card).toMatchObject({ bio: "", customStatus: "", presence: null, mutualCommunities: [], badges: [], blocked: false });
     expect((await getProfileCard(bo, ada)).blocked).toBe(true);
   });
 

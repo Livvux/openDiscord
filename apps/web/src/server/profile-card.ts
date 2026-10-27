@@ -7,7 +7,9 @@ import { z } from "zod";
 import { db } from "@/db";
 import { community, dmConversation, friendship, member, user, userBlock, userPresence, userProfile } from "@/db/schema";
 import type { PresenceStatus } from "@/lib/presence";
+import type { BadgeId } from "@/lib/badges";
 import { avatarOf } from "./avatars";
+import { badgesOf } from "./badges";
 import { notFound } from "./errors";
 import { consume } from "./limits";
 import { AccountBlocked, assertActiveUser } from "./instance-policy";
@@ -32,6 +34,7 @@ export interface ProfileCard {
   /** You blocked them. */
   blocked: boolean;
   mutualCommunities: { id: string; name: string }[];
+  badges: BadgeId[];
 }
 
 const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]) as [string, string];
@@ -42,7 +45,7 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
   const [first, second] = pair(viewerId, targetId);
   const shared = alias(member, "profile_shared");
   const active = assertActiveUser(targetId).then(() => true, (e: unknown) => (e instanceof AccountBlocked ? false : Promise.reject(e)));
-  const [[person], mutual, [friend], [conversation], blocks, isActive] = await Promise.all([
+  const [[person], mutual, [friend], [conversation], blocks, isActive, badges] = await Promise.all([
     db
       .select({ name: user.name, avatar: avatarOf(user.id), createdAt: user.createdAt, bio: userProfile.bio, customStatus: userProfile.customStatus, visible: userPresence.visible, status: userPresence.status, lastSeenAt: userPresence.lastSeenAt })
       .from(user)
@@ -64,13 +67,14 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
       .from(userBlock)
       .where(or(and(eq(userBlock.blockerId, viewerId), eq(userBlock.blockedId, targetId)), and(eq(userBlock.blockerId, targetId), eq(userBlock.blockedId, viewerId)))),
     active,
+    badgesOf(targetId),
   ]);
   const self = viewerId === targetId;
   if (!person || (!self && (!isActive || (!mutual.length && !friend && !conversation)))) throw notFound("Profile not found.");
   const relation: ProfileCard["relation"] = !friend ? null : friend.status === "accepted" ? "friend" : friend.requestedBy === viewerId ? "outgoing" : "incoming";
   const blocked = blocks.some((b) => b.blockerId === viewerId);
   const base = { id: targetId, name: person.name, avatar: person.avatar, memberSince: person.createdAt.toISOString(), relation, blocked };
-  if (blocks.length) return { ...base, relation: null, customStatus: "", bio: "", presence: null, mutualCommunities: [] };
+  if (blocks.length) return { ...base, relation: null, customStatus: "", bio: "", presence: null, mutualCommunities: [], badges: [] };
   const online = person.visible && person.lastSeenAt && person.lastSeenAt > new Date(Date.now() - ONLINE_WINDOW_MS);
   return {
     ...base,
@@ -78,6 +82,7 @@ export async function getProfileCard(viewerId: string, rawTarget: unknown): Prom
     bio: person.bio ?? "",
     presence: online ? (person.status ?? "online") : null,
     mutualCommunities: self ? [] : mutual,
+    badges,
   };
 }
 
