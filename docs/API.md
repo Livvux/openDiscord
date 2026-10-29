@@ -20,6 +20,11 @@ curl -H "Authorization: Bot $TOKEN" -H "Content-Type: application/json" \
 Limits: 60 requests per minute per bot, plus the normal message rate limit and AutoMod. Mentions from
 bots notify like any member's.
 
+For safe retries, include a UUID `transactionId` in the message body and reuse the same ID and complete
+payload if a response is interrupted. IDs are scoped to the bot account. A matching retry returns the
+existing message; a different payload or a retry of a deleted message returns `409`. Current channel
+permissions are still required. Without `transactionId`, repeated requests create separate messages.
+
 ### Posting to explicitly public channels
 
 The channel list includes `publicPosting` (null for private channels) and `publicPostNotice`.

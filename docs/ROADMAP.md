@@ -1,5 +1,9 @@
 # Roadmap and gap analysis
 
+The [technical quality milestones](TECHNICAL-QUALITY-PLAN.md) track the 2026-10-29 reliability,
+Voice/mobile, recovery, capacity and independent-assurance work. Implementation and release evidence
+are tracked separately; the historical checkpoints below are not current deployment attestations.
+
 Readiness reconciliation: 2026-10-22. The hosted beta has public registration enabled.
 Implementation, automated acceptance, deployment and external review remain separate evidence states.
 The production checkpoint below refers to `d969304`; the DM conversation tools in this change need

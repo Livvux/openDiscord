@@ -27,14 +27,14 @@ export const HTTP_STATUS: Record<AppErrorCode, number> = {
   call_full: 409,
 };
 
-export type ActionResult<T = void> = { ok: true; data: T } | { ok: false; error: string };
+export type ActionResult<T = void> = { ok: true; data: T } | { ok: false; error: string; code?: AppErrorCode };
 
 /** Runs a mutation for a server action; expected errors become messages, the rest are logged. */
 export async function toResult<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
   try {
     return { ok: true, data: await fn() };
   } catch (error: unknown) {
-    if (error instanceof AppError) return { ok: false, error: error.message };
+    if (error instanceof AppError) return { ok: false, error: error.message, code: error.code };
     // Rethrow Next.js control flow (redirect/notFound) untouched.
     unstable_rethrow(error);
     console.error("[action] unexpected error", error);

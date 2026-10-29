@@ -400,13 +400,13 @@ function EditForm({ initial, pending, onSave, onCancel, isPublic }: { isPublic: 
   );
 }
 
-export function PendingItem({ content, mentions, images }: { content: string; mentions: Mention[]; images: number }) {
+export function PendingItem({ content, mentions, images, failed = false }: { content: string; mentions: Mention[]; images: number; failed?: boolean }) {
   return (
-    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label="Sending">
+    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label={failed ? "Delivery unconfirmed" : "Sending"}>
       <div className="w-10 shrink-0" />
       <div className="min-w-0 flex-1 text-base leading-[1.375rem] break-words whitespace-pre-wrap text-foreground">
         <MessageContent content={content} mentions={mentions} />
-        {images > 0 && <span className="block text-[11px] text-zinc-400">Sending {images === 1 ? "1 attachment" : `${images} attachments`}…</span>}
+        {images > 0 && <span className="block text-[11px] text-zinc-400">{images === 1 ? "1 attachment" : `${images} attachments`}{failed ? " · delivery unconfirmed" : " · sending…"}</span>}
       </div>
     </li>
   );

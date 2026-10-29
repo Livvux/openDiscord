@@ -1,7 +1,7 @@
 // OpenAPI 3.1 description of the public API (v1), served at /api/v1/openapi.json.
 const error = { type: "object", properties: { error: { type: "string" } }, required: ["error"] };
 const errors = Object.fromEntries(
-  [["400", "Invalid input"], ["401", "Missing or invalid bot token"], ["403", "Missing permission"], ["404", "Not found (also for things the bot can't see)"], ["429", "Rate limited"]]
+  [["400", "Invalid input"], ["401", "Missing or invalid bot token"], ["403", "Missing permission"], ["404", "Not found (also for things the bot can't see)"], ["409", "Conflicting send ID or resource limit"], ["429", "Rate limited"]]
     .map(([code, description]) => [code, { description, content: { "application/json": { schema: error } } }]),
 );
 const message = {
@@ -76,6 +76,7 @@ export const openApiDocument = {
           required: true,
           content: { "application/json": { schema: { type: "object", required: ["content"], properties: {
             content: { type: "string", maxLength: 4000 },
+            transactionId: { type: "string", format: "uuid", description: "Optional idempotency ID, scoped to this bot. Reuse the same ID and payload after an interrupted response. Different payloads or retries of deleted messages return 409." },
             replyToId: { type: ["string", "null"], format: "uuid", description: "Not allowed in public channels." },
             threadId: { type: ["string", "null"], format: "uuid", description: "Not allowed in public channels." },
             publicGeneration: { type: ["string", "null"], format: "uuid", description: "Explicit acknowledgement of public posting. Required for public text channels: use publicPosting.generation from the channel list after reviewing publicPostNotice. Missing or stale acknowledgement fails closed; private channels do not require this field." },

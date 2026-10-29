@@ -39,6 +39,11 @@ interface Pending {
   content: string;
   mentions: Mention[];
   images: number;
+  attachmentIds: string[];
+  replyToId: string | null;
+  replyTo: MessageView | null;
+  publicGeneration: string | null;
+  error: string | null;
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
@@ -57,6 +62,7 @@ export function ChannelChat(props: ChannelChatProps) {
   const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
+  const sending = useRef(new Set<string>());
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<MessageView | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -143,23 +149,40 @@ export function ChannelChat(props: ChannelChatProps) {
     await loadOlder();
   }
 
-  async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
-    const tempId = crypto.randomUUID();
-    setSendError(null);
-    nearBottom.current = true;
-    setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
-    const replyToId = replyTo?.id ?? null;
-    setReplyTo(null);
-    const result = await sendMessage(channel.id, content, attachmentIds, replyToId, threadId, publicGeneration);
-    setPending((p) => p.filter((x) => x.tempId !== tempId));
-    if (result.ok) {
+  async function deliver(item: Pending, firstAttempt = false): Promise<boolean> {
+    if (sending.current.has(item.tempId)) return true;
+    sending.current.add(item.tempId);
+    setPending((items) => items.map((p) => p.tempId === item.tempId ? { ...p, error: null } : p));
+    try {
+      const result = await sendMessage(channel.id, item.content, item.attachmentIds, item.replyToId, threadId, item.publicGeneration, item.tempId);
+      if (!result.ok && result.code && firstAttempt) {
+        setPending((items) => items.filter((p) => p.tempId !== item.tempId));
+        setSendError(result.error);
+        setDraft((draft) => draft.trim() ? draft : decodeMentions(item.content, item.mentions));
+        setReplyTo((reply) => reply ?? item.replyTo);
+        return false;
+      }
+      if (!result.ok) throw new Error(result.error);
       upsert(result.data);
-      return true;
+      setPending((items) => items.filter((p) => p.tempId !== item.tempId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Connection interrupted.";
+      setPending((items) => items.map((p) => p.tempId === item.tempId ? { ...p, error: detail } : p));
+    } finally {
+      sending.current.delete(item.tempId);
     }
-    setSendError(result.error);
-    // Put the text back unless the person already started a new message.
-    setDraft((d) => (d.trim() ? d : decodeMentions(content, mentions)));
-    return false;
+    return true;
+  }
+
+  async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
+    const item: Pending = { tempId: crypto.randomUUID(), content, mentions, images: attachmentIds.length,
+      attachmentIds, replyToId: replyTo?.id ?? null, replyTo, publicGeneration: publicGeneration ?? null, error: null };
+    nearBottom.current = true;
+    setSendError(null);
+    setReplyTo(null);
+    setPending((items) => [...items, item]);
+    // This component owns retries, including the original attachment/reply context.
+    return deliver(item, true);
   }
 
   const column = (
@@ -261,17 +284,20 @@ export function ChannelChat(props: ChannelChatProps) {
               );
             })}
             {pending.map((p) => (
-              <PendingItem key={p.tempId} content={p.content} mentions={p.mentions} images={p.images} />
+              <Fragment key={p.tempId}>
+                <PendingItem content={p.content} mentions={p.mentions} images={p.images} failed={!!p.error} />
+                {p.error && <li className="px-5 pb-2 text-sm text-destructive" role="alert">
+                  <p>{p.error} Delivery is unconfirmed. Retry safely without sending a duplicate. Keep this page open until resolved.</p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void deliver(p)}>Retry message</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setPending((items) => items.filter((item) => item.tempId !== p.tempId))}>Dismiss pending message</Button>
+                </li>}
+              </Fragment>
             ))}
           </ol>
           </div>
         </div>
       </div>
-      {sendError && (
-        <p role="alert" className="px-5 pb-1 text-sm text-destructive">
-          {sendError}
-        </p>
-      )}
+      {sendError && <p role="alert" className="px-5 pb-1 text-sm text-destructive">{sendError}</p>}
       {farFromPresent && (
         <div className="relative z-0 mx-4 -mb-2 flex items-center justify-between gap-2 rounded-t-lg bg-primary px-4 pt-1 pb-3 text-sm font-medium text-primary-foreground">
           <span className="truncate">You&apos;re viewing older messages</span>

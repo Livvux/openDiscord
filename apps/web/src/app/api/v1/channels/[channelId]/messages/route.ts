@@ -18,6 +18,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/v1/channels/
 
 const body = z.object({
   publicGeneration: z.uuid().nullish(),
+  transactionId: z.uuid().nullish(),
   content: z.string(),
   replyToId: z.string().nullish(),
   threadId: z.string().nullish(),
@@ -29,7 +30,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/v1/channels
     const { userId } = await requireBot(request.headers);
     const { channelId } = await ctx.params;
     const input = parse(body, await readJsonBody(request, 16 * 1024));
-    const message = await sendMessage(userId, channelId, input.content, [], input.replyToId ?? null, input.threadId ?? null, input.publicGeneration);
+    const message = await sendMessage(userId, channelId, input.content, [], input.replyToId ?? null, input.threadId ?? null, input.publicGeneration, input.transactionId);
     return Response.json(message, { status: 201, headers: PRIVATE_NO_STORE });
   } catch (error) {
     return errorResponse(error);
