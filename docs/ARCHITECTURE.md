@@ -61,7 +61,9 @@ the same escalation rule as editing the role itself.
 
 ## Realtime
 
-1. A write commits, then the service calls `pg_notify('opendiscord_events', {type, ids})`.
+1. Community message creation calls `pg_notify('opendiscord_events', {type, ids})` inside its write
+   transaction, including mention events. PostgreSQL delivers them only after commit; publication
+   failure rolls back the message. Other domain services may still publish after their write.
    Payloads carry ids only (NOTIFY is limited to 8 kB and must not carry private content).
 2. Each web process keeps one `LISTEN` connection and fans events out to its subscribers.
 3. `GET /api/communities/:id/events` is an SSE stream (max. 8 per user and process). It checks
@@ -82,6 +84,16 @@ only over channels the person can view.
 
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every
 listener. Delivery is at-most-once; the resync on reconnect is the recovery path.
+
+The chat client assigns a UUID send ID and reuses its complete payload on an explicit retry after an
+ambiguous response. A per-author `message_send` receipt is committed with the message; concurrent
+retries return the same message without consuming another message-rate slot or sending duplicate
+events. Reusing an ID with different input fails. Receipts retain a null message reference after
+deletion so retries cannot resurrect removed messages. They cascade with their channel or account
+and are included in user-export version 13. Current channel permissions are always required on replay.
+The bot API accepts an optional `transactionId`; legacy callers without one retain non-idempotent sends.
+Pending browser retries live in memory and are lost on navigation/reload; this is not a durable offline
+outbox. Web Push remains best effort and is not transactionally queued.
 
 ## Voice
 

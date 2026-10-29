@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import type { AssetView } from "@/lib/community-assets";
 import { assetsForMessages, validateCommunityAssetRefs } from "./community-assets";
 import { and, count, countDistinct, desc, eq, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLog, channel, integration, message, publicPost, reaction, user, userBlock } from "@/db/schema";
-import { channelAuthorities, loadMember, lockCommunity, requireChannel } from "./access";
+import { auditLog, channel, integration, message, messageSend, publicPost, reaction, user, userBlock } from "@/db/schema";
+import { channelAuthorities, loadMember, lockCommunity, requireChannel, type Db } from "./access";
 import { enforceAutomod } from "./automod";
 import { avatarOf } from "./avatars";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
@@ -119,8 +120,7 @@ async function requireThreadRoot(channelId: string, rawThreadId: unknown): Promi
   return threadId;
 }
 
-async function notifyMentions(userIds: string[], communityId: string, channelId: string, messageId: string) {
-  for (const userId of userIds) await publish({ type: "mention.created", userId, communityId, channelId, messageId });
+function pushMentions(userIds: string[], channelId: string, messageId: string) {
   if (userIds.length === 0) return;
   // Web Push for devices without an open tab; loaded lazily (push imports this module).
   void import("./push")
@@ -172,6 +172,23 @@ export async function getMessageForBroadcast(messageId: string): Promise<{ commu
   return { communityId, message: (await toViews([view]))[0] };
 }
 
+async function replaySend(database: Db, userId: string, transactionId: string, channelId: string, requestHash: string): Promise<string | undefined> {
+  const [receipt] = await database.select().from(messageSend)
+    .where(and(eq(messageSend.userId, userId), eq(messageSend.transactionId, transactionId)));
+  if (!receipt) return;
+  if (receipt.channelId !== channelId || receipt.requestHash !== requestHash) {
+    throw new AppError("conflict", "This send ID was already used for a different message.");
+  }
+  if (!receipt.messageId) throw new AppError("conflict", "This message was already sent and has since been deleted.");
+  return receipt.messageId;
+}
+
+async function sentMessage(messageId: string): Promise<MessageView> {
+  const loaded = await getMessageForBroadcast(messageId);
+  if (!loaded) throw notFound("The sent message was deleted.");
+  return loaded.message;
+}
+
 export async function sendMessage(
   userId: string,
   rawChannelId: unknown,
@@ -180,36 +197,62 @@ export async function sendMessage(
   rawReplyToId: unknown = null,
   rawThreadId: unknown = null,
   publicGeneration: unknown = null,
+  rawTransactionId: unknown = null,
 ): Promise<MessageView> {
   const channelId = parse(uuid, rawChannelId);
+  const transactionId = rawTransactionId == null ? null : parse(uuid, rawTransactionId);
   const replyToId = rawReplyToId ? parse(uuid, rawReplyToId) : null;
   const ids = parse(attachmentIds, rawAttachments);
   // A message with images may have no text.
   const content = ids.length > 0 && typeof rawContent === "string" && !rawContent.trim() ? "" : parse(messageContent, rawContent);
   const { channel: ch, authority } = await requireChannel(db, channelId, userId, Permission.SendMessages);
   if (ch.kind === "voice") throw new AppError("invalid", "Voice channels don't have messages.");
-  await enforceAutomod(ch.communityId, userId, authority, content);
-
-  if (replyToId) {
-    // Replies stay inside one channel, so a preview can never come from a channel the reader can't see.
-    const [parent] = await db.select({ id: message.id }).from(message).where(and(eq(message.id, replyToId), eq(message.channelId, channelId)));
-    if (!parent) throw notFound("The message you replied to was deleted.");
+  const threadId = rawThreadId ? parse(uuid, rawThreadId) : null;
+  const requestHash = createHash("sha256").update(JSON.stringify([channelId, content, ids, replyToId, threadId, publicGeneration ?? null])).digest("hex");
+  // Replays still need current access, but mutable new-send rules must not hide a committed send.
+  if (transactionId) {
+    const replay = await replaySend(db, userId, transactionId, channelId, requestHash);
+    if (replay) return sentMessage(replay);
   }
-  const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
-  const { row, mentioned } = await db.transaction(async (tx) => {
+  await enforceAutomod(ch.communityId, userId, authority, content);
+  const { messageId, mentioned } = await db.transaction(async (tx) => {
     await lockCommunity(tx, ch.communityId);
     await requireChannel(tx, channelId, userId, Permission.SendMessages);
+    if (transactionId) {
+      // The unique receipt serializes retries, including requests in different communities.
+      const claimed = await tx.insert(messageSend).values({ userId, transactionId, channelId, requestHash })
+        .onConflictDoNothing().returning({ transactionId: messageSend.transactionId });
+      if (!claimed.length) {
+        const replay = await replaySend(tx, userId, transactionId, channelId, requestHash);
+        if (!replay) throw new AppError("conflict", "This send could not be resolved. Retry it with the same ID.");
+        return { messageId: replay, mentioned: [] as string[] };
+      }
+    }
+    if (replyToId) {
+      const [parent] = await tx.select({ id: message.id }).from(message)
+        .where(and(eq(message.id, replyToId), eq(message.channelId, channelId)));
+      if (!parent) throw notFound("The message you replied to was deleted.");
+    }
+    if (threadId) {
+      const [root] = await tx.select({ id: message.id }).from(message)
+        .where(and(eq(message.id, threadId), eq(message.channelId, channelId), isNull(message.threadId)));
+      if (!root) throw notFound("Thread not found.");
+    }
     const publication = await checkPublicPost(tx, channelId, publicGeneration, content, ids, replyToId, threadId);
     await validateCommunityAssetRefs(tx, ch.communityId, content);
     await consume(`message:${userId}`, RATE_LIMIT.messages, RATE_LIMIT.windowSeconds * 1000, Date.now(), tx);
     const [created] = await tx.insert(message).values({ channelId, authorId: userId, content, replyToId, threadId }).returning();
     if (publication) await snapshotPublicPost(tx, created);
     await linkAttachments(tx, userId, channelId, created.id, ids);
-    return { row: created, mentioned: await syncMentions(tx, ch.communityId, created.id, userId, content) };
+    const mentioned = await syncMentions(tx, ch.communityId, created.id, userId, content);
+    if (transactionId) await tx.update(messageSend).set({ messageId: created.id })
+      .where(and(eq(messageSend.userId, userId), eq(messageSend.transactionId, transactionId)));
+    await publish({ type: "message.created", communityId: ch.communityId, channelId, messageId: created.id }, tx);
+    for (const target of mentioned) await publish({ type: "mention.created", userId: target, communityId: ch.communityId, channelId, messageId: created.id }, tx);
+    return { messageId: created.id, mentioned };
   });
-  await publish({ type: "message.created", communityId: ch.communityId, channelId, messageId: row.id });
-  await notifyMentions(mentioned, ch.communityId, channelId, row.id);
-  return (await getMessageForBroadcast(row.id))!.message;
+  pushMentions(mentioned, channelId, messageId);
+  return sentMessage(messageId);
 }
 
 async function loadOwnedMessage(rawMessageId: unknown) {

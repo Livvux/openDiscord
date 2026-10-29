@@ -59,6 +59,11 @@ See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [OPEN-BETA-READINESS.md](OPEN
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
 
 There are no built-in analytics, tracking pixels, advertising identifiers or third-party fonts.
+Community message send receipts store the author, channel, random transaction ID, message reference
+and SHA-256 request fingerprint to deduplicate retries. A deleted message leaves a null reference;
+the receipt does not store a plaintext copy of its text. Receipts persist until channel or account
+deletion and are included in the author's data export. Fingerprints are metadata and can reveal
+whether a guessed request matches; they are not encryption.
 The Content Security Policy restricts third-party requests. If the operator enables Cloudflare
 Turnstile, the sign-up page contacts Cloudflare, which processes the visitor's IP address and
 browser signals. If image attachments use Cloudflare R2, the server accesses R2 privately;
