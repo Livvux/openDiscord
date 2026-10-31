@@ -166,7 +166,8 @@ export function MessageItem(props: MessageItemProps) {
 
   if (blocked && !revealed) {
     return (
-      <li className={`flex gap-4 px-4 py-0.5 text-sm text-muted-foreground ${grouped ? "" : "mt-[17px]"}`}>
+      // Still a message row: collapsed messages count as seen for the read marker.
+      <li data-message-id={message.id} className={`flex gap-4 px-4 py-0.5 text-sm text-muted-foreground ${grouped ? "" : "mt-[17px]"}`}>
         <div className="w-10 shrink-0" />
         <p>
           Message from a blocked person.{" "}

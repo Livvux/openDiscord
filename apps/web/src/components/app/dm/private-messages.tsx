@@ -24,6 +24,7 @@ import { MAX_HISTORY_COPIES, type HistoryArchive } from "@/lib/dm/history";
 import { iosBrowserTab, persistDmStorage, storageHint } from "@/lib/dm/storage-persistence";
 import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, type TrustedDevice, type VerificationView } from "@/lib/dm/client";
 import { searchDmTimeline } from "@/lib/dm/timeline";
+import { intersects } from "@/lib/read-marker";
 import type { DmOperation } from "@/lib/dm/contracts";
 import { useDmTyping } from "./use-dm-typing";
 import { readDraft, writeDraft } from "@/lib/chat-drafts";
@@ -110,8 +111,24 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const markedRead = useRef<string | null>(null);
   // The conversation whose draft the composer holds; null while switching, so nothing is saved under the wrong one.
   const draftScope = useRef<string | null>(null);
+  const timeline = useRef<HTMLDivElement>(null);
+  // The latest message from someone else, once a verified browser decrypted it; read only once it is on screen.
+  const readCandidate = useRef<{ conversation: string; message: string } | null>(null);
+  const markSeen = useCallback(() => {
+    const candidate = readCandidate.current, view = timeline.current;
+    if (!candidate || !view || markedRead.current === candidate.message || document.visibilityState !== "visible") return;
+    const row = document.getElementById(`dm-${candidate.message}`);
+    if (!row || !intersects(view.getBoundingClientRect(), row.getBoundingClientRect())) return;
+    markedRead.current = candidate.message;
+    void dmFetch("/api/dm", { action: "read", id: candidate.conversation, message: candidate.message }).catch(() => { markedRead.current = null; });
+  }, []);
+  const seenTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(seenTimer.current), []);
+  // A conversation opens at its newest message and stays there as it grows, unless the reader scrolled up.
+  const pinned = useRef(true);
+  useLayoutEffect(() => { if (pinned.current && timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight; }, [messages]);
   useEffect(() => {
-    selectedRef.current = selected; history.current = []; scan.current++; scanning.current = false;
+    selectedRef.current = selected; history.current = []; scan.current++; scanning.current = false; readCandidate.current = null; pinned.current = true;
     draftScope.current = null;
     const timer = setTimeout(() => {
       // Plaintext drafts stay in memory only (lib/chat-drafts.ts); attachments are not kept.
@@ -124,6 +141,12 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   }, [selected, userId]);
   useEffect(() => { if (draftScope.current) writeDraft(userId, draftScope.current, { text, replyTo }); }, [userId, text, replyTo]);
   const ready = !!client;
+  // Settings and group panels render above the timeline in the same scroller: opening one shows it.
+  useEffect(() => {
+    if (!security && !groupSettings && !creatingGroup) return;
+    pinned.current = false;
+    timeline.current?.scrollTo({ top: 0 });
+  }, [security, groupSettings, creatingGroup]);
 
   useEffect(() => {
     let alive = true;
@@ -200,16 +223,16 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           // Seen only when it is on screen, and not by an unverified browser that gets no keys: it must not
           // clear the unread marker for the person's trusted devices. The server keeps the marker monotonic.
           const latest = all.at(-1);
-          if (latest && latest.senderId !== userId && verifiedHere && markedRead.current !== latest.id && document.visibilityState === "visible") {
-            markedRead.current = latest.id;
-            void dmFetch("/api/dm", { action: "read", id: current.id, message: latest.id }).catch(() => { markedRead.current = null; });
-          }
+          readCandidate.current = latest && latest.senderId !== userId && verifiedHere ? { conversation: current.id, message: latest.id } : null;
+          markSeen();
         }
       }
       setStatus("Encrypted messaging ready.");
     } catch (e) { setError(errorText(e)); setStatus("Connection or verification needs attention."); }
     finally { loading.current = false; lastRefresh.current = Date.now(); }
-  }, [client, userId, target, targetIsFriend, conversation, commitTimeline]);
+  }, [client, userId, target, targetIsFriend, conversation, commitTimeline, markSeen]);
+  // The latest row renders after the refresh that decrypted it.
+  useEffect(() => { markSeen(); }, [messages, markSeen]);
   useEffect(() => {
     const initial = window.setTimeout(() => { void refresh(); }, 0);
     // Event-driven refreshes already cover active conversations; the interval only fills quiet gaps.
@@ -323,7 +346,11 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
           {searching && <Button type="button" size="sm" variant="outline" onClick={() => { scan.current++; scanning.current = false; setSearching(false); }}>Stop loading history</Button>}
         </div>}
       </div>}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={timeline} onScroll={(event) => {
+        const view = event.currentTarget;
+        pinned.current = view.scrollHeight - view.scrollTop - view.clientHeight < 120;
+        clearTimeout(seenTimer.current); seenTimer.current = setTimeout(markSeen, 300);
+      }} className="min-h-0 flex-1 overflow-y-auto">
         {creatingGroup && <NewGroupForm friends={friends} busy={busy} onCancel={() => setCreatingGroup(false)} onCreate={(members, name) => void run(() => createGroup(members, name))} />}
         {active && group && groupSettings && <GroupSettings key={active.id} conversation={active} userId={userId} friends={friends} busy={busy}
           onRename={(name) => void run(async () => { await dmFetch("/api/dm", { action: "group-rename", id: active.id, name }); })}

@@ -189,7 +189,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
-| Unread state, @mentions, notifications | ✅ | Unread markers per channel, community and private conversation; mentions notify only members who can read the channel; new DMs notify by sender only (desktop and Web Push, never text); opt-in desktop notifications |
+| Unread state, @mentions, notifications | ✅ | Unread markers per channel, community and private conversation, advanced only by messages actually on screen in a visible tab or by "Mark as read"; mentions notify only members who can read the channel; new DMs notify by sender only (desktop and Web Push, never text); opt-in desktop notifications |
 | Blocking, anti-raid, invite controls | ✅ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
 | Production readiness | ✅ | Lint, types, unit/integration, build, Playwright, `pnpm audit` and Docker build green; full Compose stack smoke-tested locally (fresh migrations, TLS, sign-up, export, SSE through Caddy); HSTS sent by the app behind any proxy. Rolling the release out to opendiscord.app is an operator step |
 
