@@ -13,27 +13,33 @@ import { MemberListPanel, MemberListToggle } from "@/components/app/member-list"
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
 import { blockedIds } from "@/server/blocks";
-import { listMessages } from "@/server/messages";
+import { listMessages, openMessage } from "@/server/messages";
 import { loadCommunityView } from "@/server/pages";
 import { has, Permission } from "@/server/permissions";
 import { requirePageUser } from "@/server/session";
 
-export default function ChannelPage({ params }: PageProps<"/app/c/[communityId]/[channelId]">) {
+export default function ChannelPage({ params, searchParams }: PageProps<"/app/c/[communityId]/[channelId]">) {
   return (
     <Suspense fallback={<p className="m-auto text-muted-foreground">Loading messages…</p>}>
-      <Channel params={params} />
+      <Channel params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channelId]">, "params">) {
+/** `?m=<messageId>` opens the channel at that message (a thread reply opens its thread). */
+async function Channel({ params, searchParams }: PageProps<"/app/c/[communityId]/[channelId]">) {
   const { communityId, channelId } = await params;
+  const { m: linked } = await searchParams;
   const user = await requirePageUser();
   const view = await loadCommunityView(user.id, communityId);
   const channel = view.channels.find((c) => c.id === channelId);
   // Channel from another community, or deleted: 404 without revealing which.
   if (!channel) notFound();
-  const [page, blocked, publication] = await Promise.all([listMessages(user.id, channelId), blockedIds(user.id), publicChannelState(user.id, channelId)]);
+  const [{ page, target }, blocked, publication] = await Promise.all([
+    linked !== undefined && channel.kind === "text" ? openMessage(user.id, channelId, linked) : listMessages(user.id, channelId).then((page) => ({ page, target: null })),
+    blockedIds(user.id),
+    publicChannelState(user.id, channelId),
+  ]);
 
   return (
     <>
@@ -71,9 +77,12 @@ async function Channel({ params }: Pick<PageProps<"/app/c/[communityId]/[channel
         />
       ) : (
       <ChannelChat
-        key={channel.id}
+        // Another link into the same channel starts a fresh view.
+        key={`${channel.id}:${linked ?? ""}`}
         channel={channel}
         initialPage={page}
+        target={target}
+        unavailable={page.unavailable}
         currentUserId={user.id}
         canSend={has(channel, Permission.SendMessages) && !publication?.unpublished}
         publicGeneration={publication && !publication.unpublished ? publication.generation : null}

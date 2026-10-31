@@ -59,6 +59,7 @@ const harness = vi.hoisted(() => {
 
 vi.mock("react", async (original) => ({ ...await original<typeof import("react")>(), ...harness.react }));
 vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.fn(), sendStatus: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("@/components/app/realtime-provider", () => ({ useRealtime: () => ({ state: "open" }) }));
 vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread, setChannelAtPresent: harness.atPresent }));
 vi.mock("@/components/app/chat/use-channel-messages", () => ({ useChannelMessages: () => harness.messages }));

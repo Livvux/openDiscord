@@ -83,7 +83,7 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
             {shown.map((m) => (
               <li key={m.id}>
                 <Link
-                  href={`/app/c/${communityId}/${m.channelId}`}
+                  href={`/app/c/${communityId}/${m.channelId}?m=${m.id}`}
                   onClick={() => setOpen(false)}
                   className="grid gap-0.5 px-3 py-2 text-sm hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"
                 >

@@ -19,18 +19,20 @@ interface ReadMarkerOptions {
   scroller: RefObject<HTMLDivElement | null>;
   /** Realtime connection state: a reconnect resync can merge messages in. */
   connection: string;
+  /** The view was opened at an older message and hasn't loaded the present (`hasNewer`). */
+  detached?: boolean;
 }
 
 /**
  * Moves the channel's read marker to the newest message actually on screen while the tab is visible,
  * or to the newest loaded message through `markAll`. `unseen` is the first unseen message below the view.
  */
-export function useReadMarker({ channelId, enabled, messages, currentUserId, lastReadId, scroller, connection }: ReadMarkerOptions) {
+export function useReadMarker({ channelId, enabled, messages, currentUserId, lastReadId, scroller, connection, detached = false }: ReadMarkerOptions) {
   const clearUnread = useClearUnread();
   const [unseen, setUnseen] = useState<string | null>(null);
-  const live = useRef({ messages, clearUnread });
+  const live = useRef({ messages, clearUnread, detached });
   const api = useRef({ schedule: () => {}, markAll: () => {} });
-  useLayoutEffect(() => { live.current = { messages, clearUnread }; }, [messages, clearUnread]);
+  useLayoutEffect(() => { live.current = { messages, clearUnread, detached }; }, [messages, clearUnread, detached]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -51,7 +53,7 @@ export function useReadMarker({ channelId, enabled, messages, currentUserId, las
       if (stopped || !result?.ok) return;
       marked = laterId(marked, id);
       // The sidebar badge covers the whole channel: clear it only once the newest loaded message is read.
-      if (id === newest()) live.current.clearUnread?.(channelId);
+      if (id === newest() && !live.current.detached) live.current.clearUnread?.(channelId);
       showUnseen();
       void push();
     };
@@ -66,7 +68,7 @@ export function useReadMarker({ channelId, enabled, messages, currentUserId, las
       });
       const visible = newestVisibleId(el.getBoundingClientRect(), rows);
       seen = laterId(seen, visible);
-      setChannelAtPresent(channelId, visible !== null && visible === newest());
+      setChannelAtPresent(channelId, !live.current.detached && visible !== null && visible === newest());
       showUnseen();
       wanted = laterId(wanted, visible);
       void push();
@@ -78,7 +80,20 @@ export function useReadMarker({ channelId, enabled, messages, currentUserId, las
         clearTimeout(timer);
         timer = setTimeout(evaluate, SETTLE_MS);
       },
-      markAll: () => { wanted = laterId(wanted, newest()); void push(); },
+      markAll: () => {
+        if (!live.current.detached) {
+          wanted = laterId(wanted, newest());
+          void push();
+          return;
+        }
+        // The newest messages aren't loaded here: the server marks its newest one.
+        void markChannelRead(channelId, null).then((result) => {
+          if (stopped || !result.ok) return;
+          marked = laterId(marked, newest());
+          live.current.clearUnread?.(channelId);
+          showUnseen();
+        }).catch(() => { /* stays offered */ });
+      },
     };
     document.addEventListener("visibilitychange", evaluate);
     window.addEventListener("online", evaluate);

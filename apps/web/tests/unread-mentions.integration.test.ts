@@ -92,6 +92,22 @@ describe("unread state", () => {
     expect((await channelState(bob, channelId))?.lastReadId).toBe(second.id);
   });
 
+  it("marks the newest top-level message without an id, ignoring thread replies", async () => {
+    const channelId = await createChannel(owner, communityId, "jumped");
+    await markChannelRead(bob, channelId, null);
+    expect((await channelState(bob, channelId))?.lastReadId).toBeNull();
+    // Its own poster: the others' send budgets are shared with the neighbouring tests.
+    const poster = await users.create("Poster");
+    await acceptInvite(poster, await createInvite(owner, communityId, { expiresInHours: 24, maxUses: 1 }));
+    const root = await sendMessage(poster, channelId, "root");
+    const newest = await sendMessage(poster, channelId, "newest");
+    await sendMessage(poster, channelId, "reply", [], null, root.id);
+    await markChannelRead(bob, channelId, null);
+    expect((await channelState(bob, channelId))?.lastReadId).toBe(newest.id);
+    expect((await channelState(bob, channelId))?.unread).toBe(false);
+    await expect(markChannelRead(bob, channelId, undefined)).rejects.toMatchObject({ code: "invalid" });
+  });
+
   it("ignores channels the person can't see, and refuses to mark them", async () => {
     const hidden = await createChannel(owner, communityId, "hidden");
     const everyone = (await listRoles(owner, communityId)).find((r) => r.isDefault)!.id;

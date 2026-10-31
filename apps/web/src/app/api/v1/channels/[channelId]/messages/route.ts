@@ -4,13 +4,14 @@ import { requireBot } from "@/server/integrations";
 import { listMessages, sendMessage } from "@/server/messages";
 import { parse } from "@/server/validation";
 
-/** Newest page (or `?before=`), oldest first; `?thread=` for a thread. Same permissions as members. */
+/** Newest page (or `?before=`, `?after=`, `?around=`), oldest first; `?thread=` for a thread. Same permissions as members. */
 export async function GET(request: Request, ctx: RouteContext<"/api/v1/channels/[channelId]/messages">) {
   try {
     const { userId } = await requireBot(request.headers);
     const { channelId } = await ctx.params;
     const params = new URL(request.url).searchParams;
-    return Response.json(await listMessages(userId, channelId, params.get("before"), params.get("thread")), { headers: PRIVATE_NO_STORE });
+    const page = await listMessages(userId, channelId, params.get("before"), params.get("thread"), { after: params.get("after"), around: params.get("around") });
+    return Response.json(page, { headers: PRIVATE_NO_STORE });
   } catch (error) {
     return errorResponse(error);
   }

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AssetView } from "@/lib/community-assets";
 import { assetsForMessages, validateCommunityAssetRefs } from "./community-assets";
-import { and, count, countDistinct, desc, eq, inArray, isNotNull, isNull, lt, max, notExists, sql } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, max, notExists, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLog, channel, integration, message, messageSend, publicPost, reaction, user, userBlock } from "@/db/schema";
@@ -9,7 +9,7 @@ import { channelAuthorities, loadMember, lockCommunity, requireChannel, type Db 
 import { enforceAutomod } from "./automod";
 import { avatarOf } from "./avatars";
 import { attachmentIds, attachmentsFor, linkAttachments, sweepAttachments, type AttachmentView } from "./media";
-import { AppError, forbidden, notFound } from "./errors";
+import { AppError, forbidden, invalid, notFound } from "./errors";
 import { mentionsFor, syncMentions, type MentionView } from "./mentions";
 import { emoji, MAX_EMOJIS_PER_MESSAGE, reactionsFor, replyPreviews, type ReactionView, type ReplyPreview } from "./message-extras";
 import { consume } from "./limits";
@@ -131,29 +131,98 @@ function pushMentions(userIds: string[], channelId: string, messageId: string) {
 export interface MessagePage {
   /** Oldest first. */
   messages: MessageView[];
+  /** Older messages exist before this page. */
   hasMore: boolean;
+  /** Newer messages exist after this page (pages from `after` or `around`). */
+  hasNewer?: boolean;
+  /** `around` named a message that isn't in this channel or thread (deleted or never there): this is the newest page. */
+  unavailable?: boolean;
 }
 
-/** Newest page, or the page before `before` (a message id; UUIDv7 sorts by time). */
-/** A page of the channel (top-level messages) or, with `rawThreadId`, of one thread. */
-export async function listMessages(userId: string, rawChannelId: unknown, rawBefore?: unknown, rawThreadId?: unknown): Promise<MessagePage> {
+/** Messages kept before an `around` target; the rest of the page (minus the target) comes after it. */
+const AROUND_BEFORE = 25;
+
+/**
+ * A page of the channel (top-level messages) or, with `rawThreadId`, of one thread: the newest page,
+ * the page before `before` or after `after` (message ids; UUIDv7 sorts by time), or a page centered on `around`.
+ */
+export async function listMessages(
+  userId: string,
+  rawChannelId: unknown,
+  rawBefore?: unknown,
+  rawThreadId?: unknown,
+  cursor: { after?: unknown; around?: unknown } = {},
+): Promise<MessagePage> {
   const channelId = parse(uuid, rawChannelId);
   const before = rawBefore ? parse(uuid, rawBefore) : undefined;
+  const after = cursor.after ? parse(uuid, cursor.after) : undefined;
+  const around = cursor.around ? parse(uuid, cursor.around) : undefined;
+  if ([before, after, around].filter(Boolean).length > 1) throw invalid("Use only one of before, after and around.");
   const { channel: ch } = await requireChannel(db, channelId, userId);
   if (ch.kind === "voice") return { messages: [], hasMore: false };
   const threadId = rawThreadId ? await requireThreadRoot(channelId, rawThreadId) : null;
-  const rows = await db
+  const scope = and(eq(message.channelId, channelId), threadId ? eq(message.threadId, threadId) : isNull(message.threadId));
+  const rows = (where: SQL | undefined, newestFirst: boolean, limit: number) => db
     .select(viewColumns)
     .from(message)
     .innerJoin(user, eq(user.id, message.authorId))
-    .where(and(
-      eq(message.channelId, channelId),
-      threadId ? eq(message.threadId, threadId) : isNull(message.threadId),
-      before ? lt(message.id, before) : undefined,
-    ))
-    .orderBy(desc(message.id))
-    .limit(PAGE_SIZE + 1);
-  return { messages: await toViews(rows.slice(0, PAGE_SIZE).reverse()), hasMore: rows.length > PAGE_SIZE };
+    .where(and(scope, where))
+    .orderBy(newestFirst ? desc(message.id) : asc(message.id))
+    .limit(limit);
+  if (after) {
+    const newer = await rows(gt(message.id, after), false, PAGE_SIZE + 1);
+    // The cursor itself is older than this page.
+    return { messages: await toViews(newer.slice(0, PAGE_SIZE)), hasMore: true, hasNewer: newer.length > PAGE_SIZE };
+  }
+  if (around) {
+    const [hit] = await db.select({ id: message.id }).from(message).where(and(scope, eq(message.id, around)));
+    if (hit) {
+      const [older, newer] = await Promise.all([
+        rows(lte(message.id, around), true, AROUND_BEFORE + 2),
+        rows(gt(message.id, around), false, PAGE_SIZE - AROUND_BEFORE),
+      ]);
+      const newerShown = PAGE_SIZE - AROUND_BEFORE - 1;
+      return {
+        messages: await toViews([...older.slice(0, AROUND_BEFORE + 1).reverse(), ...newer.slice(0, newerShown)]),
+        hasMore: older.length > AROUND_BEFORE + 1,
+        hasNewer: newer.length > newerShown,
+      };
+    }
+  }
+  const newest = await rows(before ? lt(message.id, before) : undefined, true, PAGE_SIZE + 1);
+  return {
+    messages: await toViews(newest.slice(0, PAGE_SIZE).reverse()),
+    hasMore: newest.length > PAGE_SIZE,
+    ...(around ? { unavailable: true } : {}),
+  };
+}
+
+export interface MessageTarget {
+  id: string;
+  /** Set for thread replies: the main page is centered on this root instead. */
+  threadId: string | null;
+  /** The thread page around the reply. */
+  threadPage: MessagePage | null;
+}
+
+/**
+ * The channel page for a direct message link (`?m=`): centered on the message, or on its thread root
+ * with the thread page around the reply. Anything not in this readable channel gets the newest page
+ * marked `unavailable`, the same for deleted, foreign and malformed ids.
+ */
+export async function openMessage(userId: string, rawChannelId: unknown, rawMessageId: unknown): Promise<{ page: MessagePage; target: MessageTarget | null }> {
+  const channelId = parse(uuid, rawChannelId);
+  await requireChannel(db, channelId, userId);
+  const id = uuid.safeParse(rawMessageId).data;
+  const [row] = id ? await db.select({ threadId: message.threadId }).from(message).where(and(eq(message.id, id), eq(message.channelId, channelId))) : [];
+  if (!id || !row) return { page: { ...(await listMessages(userId, channelId)), unavailable: true }, target: null };
+  const [page, threadPage] = await Promise.all([
+    listMessages(userId, channelId, undefined, undefined, { around: row.threadId ?? id }),
+    row.threadId ? listMessages(userId, channelId, undefined, row.threadId, { around: id }) : null,
+  ]);
+  // Deleted between the lookup and the page.
+  if (page.unavailable || threadPage?.unavailable) return { page: { ...page, unavailable: true }, target: null };
+  return { page, target: { id, threadId: row.threadId, threadPage } };
 }
 
 /**

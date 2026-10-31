@@ -1,11 +1,12 @@
 "use client";
 
 import { HashIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sendMessage, sendStatus } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
-import type { MessagePage, MessageView } from "@/server/messages";
+import type { MessagePage, MessageTarget, MessageView } from "@/server/messages";
 import { decodeMentions, type Mention } from "@/lib/mentions";
 import { readDraft, writeDraft } from "@/lib/chat-drafts";
 import { outbox, type OutboxEntry } from "@/lib/outbox";
@@ -35,6 +36,10 @@ interface ChannelChatProps {
   blockedIds: string[];
   /** Set when this instance shows a thread (in the side panel) instead of the channel. */
   threadRoot?: MessageView;
+  /** Opened from a message link (`?m=`): the message to center and highlight. */
+  target?: MessageTarget | null;
+  /** The linked message is deleted or not in this channel. */
+  unavailable?: boolean;
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
@@ -43,11 +48,15 @@ const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Dat
 const NEAR_BOTTOM_PX = 120;
 
 export function ChannelChat(props: ChannelChatProps) {
-  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot, publicGeneration } = props;
+  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot, publicGeneration, target, unavailable } = props;
   const { state } = useRealtime();
+  const router = useRouter();
   const threadId = threadRoot?.id ?? null;
-  const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
-  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const { messages, hasMore, hasNewer, loadingOlder, loadError, loadOlder, loadNewer, loadPresent, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
+  // A linked thread reply: the channel centers its root, the thread panel the reply.
+  const focusId = threadId ? (target?.threadId === threadId ? target.id : null) : (target?.threadId ?? target?.id ?? null);
+  const [openThreadId, setOpenThreadId] = useState<string | null>(threadId ? null : (target?.threadId ?? null));
+  const [threadTarget, setThreadTarget] = useState(target?.threadId ? target : null);
   // The live root from the list: edits show up, and a deleted root closes its thread.
   const openThread = openThreadId ? (messages.find((m) => m.id === openThreadId) ?? null) : null;
   const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
@@ -84,7 +93,7 @@ export function ChannelChat(props: ChannelChatProps) {
   }, []);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  const nearBottom = useRef(true);
+  const nearBottom = useRef(!focusId);
   // Discord's "viewing older messages" bar, once the reader is more than a screen above the newest message.
   const [farFromPresent, setFarFromPresent] = useState(false);
   const heightBeforeOlder = useRef<number | null>(null);
@@ -96,7 +105,7 @@ export function ChannelChat(props: ChannelChatProps) {
   // The draft drives the notice; threads keep their typing to themselves.
   useEffect(() => { if (!threadId && canSend) announceTyping(!!draft.trim()); }, [draft, threadId, canSend, announceTyping]);
   // Only messages that were on screen in a visible tab, or "Mark as read", move the marker (threads don't).
-  const read = useReadMarker({ channelId: channel.id, enabled: !threadId, messages, currentUserId, lastReadId, scroller, connection: state });
+  const read = useReadMarker({ channelId: channel.id, enabled: !threadId, messages, currentUserId, lastReadId, scroller, connection: state, detached: hasNewer });
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
@@ -112,8 +121,21 @@ export function ChannelChat(props: ChannelChatProps) {
   }, [messages, pending]);
 
   useEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, []);
+    const el = scroller.current;
+    if (!el) return;
+    const row = focusId ? el.querySelector<HTMLElement>(`[data-message-id="${focusId}"]`) : null;
+    if (!row) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    row.scrollIntoView({ block: "center" });
+    if (focusId !== target?.id) return;
+    row.focus({ preventScroll: true });
+    // Styled in globals.css; reduced motion gets a static highlight.
+    row.dataset.highlighted = "";
+    const timer = setTimeout(() => delete row.dataset.highlighted, 4000);
+    return () => clearTimeout(timer);
+  }, [focusId, target?.id]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -160,7 +182,9 @@ export function ChannelChat(props: ChannelChatProps) {
         return true;
       }
       if (!result.ok) throw new Error(result.error);
-      upsert(result.data);
+      // Sent from a channel view opened at an older message: the present replaces it, and the link goes.
+      if (hasNewer && !threadId && mounted.current) router.replace(`/app/c/${communityId}/${channel.id}`, { scroll: false });
+      else upsert(result.data);
       outbox.remove(currentUserId, item.id);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Connection interrupted.";
@@ -198,6 +222,9 @@ export function ChannelChat(props: ChannelChatProps) {
           Connection lost. Reconnecting…
         </p>
       )}
+      {!threadId && unavailable && (
+        <p role="status" className="bg-muted px-4 py-1.5 text-center text-sm text-muted-foreground">This message is no longer available.</p>
+      )}
       {!threadId && state === "closed" && (
         <p role="status" className="bg-destructive/15 px-4 py-1.5 text-center text-sm">
           Live updates stopped. <button className="underline" onClick={() => window.location.reload()}>Reload</button>
@@ -227,8 +254,10 @@ export function ChannelChat(props: ChannelChatProps) {
         onScroll={(e) => {
           const el = e.currentTarget;
           const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-          nearBottom.current = distance < NEAR_BOTTOM_PX;
+          // A view opened at an older message never pins; reaching its end loads the next page.
+          nearBottom.current = distance < NEAR_BOTTOM_PX && !hasNewer;
           setFarFromPresent(distance > el.clientHeight);
+          if (hasNewer && distance < NEAR_BOTTOM_PX) void loadNewer();
           read.schedule();
         }}
         className="min-h-0 flex-1 overflow-y-auto"
@@ -327,13 +356,21 @@ export function ChannelChat(props: ChannelChatProps) {
         </div>
       </div>
       {sendError && <p role="alert" className="px-5 pb-1 text-sm text-destructive">{sendError}</p>}
-      {farFromPresent && (
+      {(farFromPresent || hasNewer) && (
         <div className="relative z-0 mx-4 -mb-2 flex items-center justify-between gap-2 rounded-t-lg bg-primary px-4 pt-1 pb-3 text-sm font-medium text-primary-foreground">
           <span className="truncate">You&apos;re viewing older messages</span>
           <button
             type="button"
             className="shrink-0 rounded px-1 font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
-            onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })}
+            onClick={() => {
+              if (!hasNewer) scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
+              // The channel reloads without `?m`; a thread swaps in its newest page.
+              else if (!threadId) router.replace(`/app/c/${communityId}/${channel.id}`, { scroll: false });
+              else {
+                nearBottom.current = true;
+                void loadPresent();
+              }
+            }}
           >
             Jump to present
           </button>
@@ -380,7 +417,7 @@ export function ChannelChat(props: ChannelChatProps) {
     <div className="flex min-h-0 flex-1">
       {column}
       {openThread && (
-        <ThreadPanel key={openThread.id} {...props} root={openThread} onClose={() => setOpenThreadId(null)} />
+        <ThreadPanel key={openThread.id} {...props} target={threadTarget} root={openThread} onClose={() => { setOpenThreadId(null); setThreadTarget(null); }} />
       )}
     </div>
   );
