@@ -83,7 +83,8 @@ Personal events (mentions) go to a second stream per tab, `GET /api/me/events`, 
 carries only what a notification needs (sender, channel, a 140-character excerpt). Unread state is a
 `channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward).
 The client moves it only to the newest message whose row was on screen in a visible tab
-(`src/lib/read-marker.ts`), or to the newest loaded message through "Mark as read"; reading older
+(`src/lib/read-marker.ts`), or through "Mark as read" (to the newest loaded message, or to the channel's
+newest top-level message in a view opened at an older message, which is never treated as at the present); reading older
 messages, a background tab or a reconnect resync never marks unseen messages read. Private
 conversations follow the same rule for their latest message; they open scrolled to it and stay there
 while the reader is at the end. Mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
