@@ -78,8 +78,11 @@ the same escalation rule as editing the role itself.
 Personal events (mentions) go to a second stream per tab, `GET /api/me/events`, on the topic
 `user:<id>`. It re-checks that the person can still read the channel before delivering a mention and
 carries only what a notification needs (sender, channel, a 140-character excerpt). Unread state is a
-`channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward);
-mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
+`channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward).
+The client moves it only to the newest message whose row was on screen in a visible tab
+(`src/lib/read-marker.ts`), or to the newest loaded message through "Mark as read"; reading older
+messages, a background tab or a reconnect resync never marks unseen messages read. Private
+conversations follow the same rule for their latest message. Mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
 only over channels the person can view.
 
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every

@@ -2,7 +2,7 @@
 
 import { HashIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { markChannelRead, sendMessage, sendStatus } from "@/app/app/actions";
+import { sendMessage, sendStatus } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
 import type { MessagePage, MessageView } from "@/server/messages";
@@ -10,13 +10,13 @@ import { decodeMentions, type Mention } from "@/lib/mentions";
 import { readDraft, writeDraft } from "@/lib/chat-drafts";
 import { outbox, type OutboxEntry } from "@/lib/outbox";
 import { useRealtime } from "../realtime-provider";
-import { useClearUnread } from "../unread-provider";
 import { Composer } from "./composer";
 import { MessageItem, PendingItem } from "./message-item";
 import { ThreadPanel } from "./thread-panel";
 import { useChannelMessages } from "./use-channel-messages";
 import { useChannelTyping } from "./use-channel-typing";
 import { useOutbox } from "./use-outbox";
+import { useReadMarker } from "./use-read-marker";
 import { useMemberNames } from "../member-list";
 import { typingText } from "@/lib/typing";
 
@@ -90,41 +90,13 @@ export function ChannelChat(props: ChannelChatProps) {
   const heightBeforeOlder = useRef<number | null>(null);
   const [dividerAfter] = useState(lastReadId);
   const firstUnread = dividerAfter ? messages.find((m) => m.id > dividerAfter && m.authorId !== currentUserId)?.id : undefined;
-  const clearUnread = useClearUnread();
   const typing = useChannelTyping(channel.id, currentUserId, blockedIds);
   const typingNow = typingText(useMemberNames(threadId ? [] : typing.typing));
   const announceTyping = typing.changed;
   // The draft drives the notice; threads keep their typing to themselves.
   useEffect(() => { if (!threadId && canSend) announceTyping(!!draft.trim()); }, [draft, threadId, canSend, announceTyping]);
-  const newest = messages.at(-1)?.id;
-
-  // Reading the newest message while the tab is visible marks the channel read (threads don't move the marker).
-  useEffect(() => {
-    if (!newest || threadId) return;
-    let stopped = false, inFlight = false, marked = false;
-    const mark = async () => {
-      if (stopped || inFlight || marked || document.visibilityState !== "visible") return;
-      inFlight = true;
-      // Navigation/offline can reject the transport before the action returns a result.
-      // Leave the marker pending for a later visibility/online/reconnect attempt.
-      const result = await markChannelRead(channel.id, newest).catch(() => null);
-      inFlight = false;
-      if (!stopped && result?.ok) {
-        marked = true;
-        clearUnread?.(channel.id);
-      }
-    };
-    const request = () => { void mark(); };
-    const timer = setTimeout(request, 500);
-    document.addEventListener("visibilitychange", request);
-    window.addEventListener("online", request);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", request);
-      window.removeEventListener("online", request);
-    };
-  }, [newest, threadId, channel.id, clearUnread, state]);
+  // Only messages that were on screen in a visible tab, or "Mark as read", move the marker (threads don't).
+  const read = useReadMarker({ channelId: channel.id, enabled: !threadId, messages, currentUserId, lastReadId, scroller, connection: state });
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
@@ -231,6 +203,25 @@ export function ChannelChat(props: ChannelChatProps) {
           Live updates stopped. <button className="underline" onClick={() => window.location.reload()}>Reload</button>
         </p>
       )}
+      {read.unseen && (
+        <div className="relative z-10 mx-4 flex h-7 shrink-0 items-center justify-between gap-2 rounded-b-lg bg-primary px-3 text-sm font-semibold text-primary-foreground">
+          <button
+            type="button"
+            aria-label="Jump to new messages"
+            className="truncate rounded px-1 hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
+            onClick={() => scroller.current?.querySelector(`[data-message-id="${read.unseen}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" })}
+          >
+            New messages
+          </button>
+          <button
+            type="button"
+            className="shrink-0 rounded px-1 hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
+            onClick={read.markAll}
+          >
+            Mark as read
+          </button>
+        </div>
+      )}
       <div
         ref={scroller}
         onScroll={(e) => {
@@ -238,6 +229,7 @@ export function ChannelChat(props: ChannelChatProps) {
           const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
           nearBottom.current = distance < NEAR_BOTTOM_PX;
           setFarFromPresent(distance > el.clientHeight);
+          read.schedule();
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >

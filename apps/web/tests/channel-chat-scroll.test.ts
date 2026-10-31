@@ -28,6 +28,7 @@ const harness = vi.hoisted(() => {
   return {
     messages,
     clearUnread: vi.fn(),
+    atPresent: vi.fn(),
     begin() { cursor = 0; },
     commit() {
       for (const run of [...layouts, ...effects]) run();
@@ -59,7 +60,7 @@ const harness = vi.hoisted(() => {
 vi.mock("react", async (original) => ({ ...await original<typeof import("react")>(), ...harness.react }));
 vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.fn(), sendStatus: vi.fn() }));
 vi.mock("@/components/app/realtime-provider", () => ({ useRealtime: () => ({ state: "open" }) }));
-vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread }));
+vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread, setChannelAtPresent: harness.atPresent }));
 vi.mock("@/components/app/chat/use-channel-messages", () => ({ useChannelMessages: () => harness.messages }));
 vi.mock("@/components/app/chat/use-channel-typing", () => ({ useChannelTyping: () => ({ changed: () => {}, stop: () => {}, typing: [] }) }));
 vi.mock("@/components/app/member-list", () => ({ useMemberNames: () => [] }));
@@ -86,22 +87,27 @@ class ResizeDouble implements ResizeObserver {
 function geometry() {
   let top = 0;
   const writes: number[] = [];
+  // Message rows in viewport coordinates; the viewport is 0..clientHeight.
+  const rows: { id: string; top: number; bottom: number }[] = [];
   const element = {
     scrollHeight: 1484, clientHeight: 608,
     get scrollTop() { return top; },
     set scrollTop(value: number) { writes.push(value); top = Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)); },
+    getBoundingClientRect() { return { top: 0, bottom: this.clientHeight }; },
+    querySelectorAll() { return rows.map((row) => ({ dataset: { messageId: row.id }, getBoundingClientRect: () => row })); },
   };
   // Only the DOM surface used by the component is modeled; no DOM renderer is installed.
-  return { element: element as HTMLDivElement, writes,
+  return { element: element as unknown as HTMLDivElement, writes, rows,
     resize(height: number) { element.scrollHeight = height; },
     userScroll(topValue: number) { top = topValue; } };
 }
 
 type ElementProps = {
   children?: ReactNode;
+  "aria-label"?: string;
   ref?: RefObject<HTMLDivElement | null>;
   onScroll?: (event: { currentTarget: HTMLDivElement }) => void;
-  onClick?: () => Promise<void>;
+  onClick?: () => unknown;
 };
 function findProps(node: ReactNode, matches: (props: ElementProps) => boolean): ElementProps | undefined {
   if (Array.isArray(node)) {
@@ -109,6 +115,12 @@ function findProps(node: ReactNode, matches: (props: ElementProps) => boolean): 
   } else if (isValidElement<ElementProps>(node)) {
     return matches(node.props) ? node.props : findProps(node.props.children, matches);
   }
+}
+
+function withRows(rows: { id: string; top: number; bottom: number }[]) {
+  const view = geometry();
+  view.rows.push(...rows);
+  return view;
 }
 
 const props: ComponentProps<typeof ChannelChat> = {
@@ -123,7 +135,7 @@ const message = (id: string): MessageView => ({
   replyTo: null, reactions: [], pinned: false, threadId: null, thread: null,
 });
 
-function render(scroller = geometry(), content = geometry()) {
+function render(scroller = withRows([{ id: "latest", top: 500, bottom: 540 }]), content = geometry()) {
   harness.begin();
   const tree = ChannelChat(props);
   const scrollProps = findProps(tree, (candidate) => !!candidate.onScroll);
@@ -136,8 +148,9 @@ function render(scroller = geometry(), content = geometry()) {
   return {
     scroller, content, observer: ResizeDouble.instances.at(-1)!,
     scroll(top: number) { scroller.userScroll(top); scrollProps.onScroll!({ currentTarget: scroller.element }); },
+    button(name: string) { return findProps(tree, (candidate) => candidate.children === name)?.onClick; },
     async loadOlder() {
-      const button = findProps(tree, (candidate) => !!candidate.onClick);
+      const button = findProps(tree, (candidate) => !!candidate.onClick && candidate.children !== "Mark as read" && !candidate["aria-label"]);
       if (!button?.onClick) throw new Error("Missing Load older button");
       await button.onClick();
     },
@@ -188,6 +201,53 @@ describe("ChannelChat read-marker lifecycle", () => {
     expect(harness.clearUnread).not.toHaveBeenCalled();
     window.dispatchEvent(new Event("online"));
     expect(markChannelRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ChannelChat marks only what was on screen", () => {
+  const visible = () => vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+  const ok = { ok: true as const, data: undefined };
+
+  it("while scrolled up marks the newest row on screen, keeps the badge and offers Mark as read", async () => {
+    visible();
+    harness.messages.messages = [message("01"), message("02")];
+    vi.mocked(markChannelRead).mockResolvedValue(ok);
+    const scroller = withRows([{ id: "01", top: 100, bottom: 140 }, { id: "02", top: 700, bottom: 740 }]);
+    const view = render(scroller);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(markChannelRead).toHaveBeenCalledExactlyOnceWith("channel", "01");
+    expect(harness.clearUnread).not.toHaveBeenCalled();
+    expect(harness.atPresent).toHaveBeenLastCalledWith("channel", false);
+    const markAll = render(view.scroller, view.content).button("Mark as read");
+    expect(markAll).toBeTypeOf("function");
+    markAll!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(markChannelRead).toHaveBeenLastCalledWith("channel", "02");
+    expect(harness.clearUnread).toHaveBeenCalledExactlyOnceWith("channel");
+    expect(render(view.scroller, view.content).button("Mark as read")).toBeUndefined();
+  });
+
+  it("marks the newest message once it is scrolled into view", async () => {
+    visible();
+    harness.messages.messages = [message("01"), message("02")];
+    vi.mocked(markChannelRead).mockResolvedValue(ok);
+    const view = render(withRows([{ id: "01", top: 100, bottom: 140 }, { id: "02", top: 700, bottom: 740 }]));
+    await vi.advanceTimersByTimeAsync(300);
+    view.scroller.rows.splice(0, 2, { id: "01", top: -200, bottom: -160 }, { id: "02", top: 400, bottom: 440 });
+    view.scroll(876);
+    view.scroll(876);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(vi.mocked(markChannelRead).mock.calls).toEqual([["channel", "01"], ["channel", "02"]]);
+    expect(harness.clearUnread).toHaveBeenCalledExactlyOnceWith("channel");
+    expect(harness.atPresent).toHaveBeenLastCalledWith("channel", true);
+  });
+
+  it("marks nothing from a hidden tab, even with the newest message on screen", async () => {
+    harness.messages.messages = [message("latest")];
+    render();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(markChannelRead).not.toHaveBeenCalled();
+    expect(harness.atPresent).not.toHaveBeenCalledWith("channel", true);
   });
 });
 

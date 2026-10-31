@@ -12,6 +12,13 @@ interface UnreadValue {
 
 const NONE: UnreadSummary = { unread: false, mentions: 0 };
 const UnreadContext = createContext<UnreadValue | null>(null);
+// Open channels whose newest loaded message is on screen (ChannelChat's use-read-marker keeps this current).
+const atPresent = new Set<string>();
+
+export function setChannelAtPresent(channelId: string, present: boolean) {
+  if (present) atPresent.add(channelId);
+  else atPresent.delete(channelId);
+}
 
 export function useChannelUnread(channelId: string): UnreadSummary {
   return useContext(UnreadContext)?.get(channelId) ?? NONE;
@@ -49,7 +56,9 @@ export function UnreadProvider({ communityId, currentUserId, blockedIds, initial
       subscribe((event) => {
         if (event.type !== "message.created" || event.message.authorId === currentUserId) return;
         const { channelId, mentions } = event.message;
-        const watching = window.location.pathname === `/app/c/${communityId}/${channelId}` && document.visibilityState === "visible";
+        // Someone reading older messages hasn't seen this one: only a view at the present counts as watching.
+        const watching = window.location.pathname === `/app/c/${communityId}/${channelId}` && atPresent.has(channelId)
+          && document.visibilityState === "visible";
         if (watching) return;
         const mentioned = mentions.some((m) => m.id === currentUserId) && !blockedIds.includes(event.message.authorId);
         setState((s) => {
