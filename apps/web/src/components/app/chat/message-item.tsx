@@ -405,6 +405,7 @@ function EditForm({ initial, pending, onSave, onCancel, isPublic }: { isPublic: 
 const PENDING_STATUS: Record<OutboxState, [string, string]> = {
   sending: ["Sending", "Sending…"],
   unconfirmed: ["Delivery unconfirmed", "Not confirmed"],
+  unsent: ["Not delivered", "Not delivered"],
   failed: ["Not sent", "Not sent"],
   deleted: ["Sent, then deleted", "Sent, then deleted"],
 };

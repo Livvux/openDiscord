@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { message, messageSend } from "@/db/schema";
 import { acceptInvite, createChannel, createCommunity, createInvite, setChannelOverride } from "@/server/communities";
 import { listRoles } from "@/server/moderation";
-import { deleteMessage, sendMessage } from "@/server/messages";
+import { deleteMessage, sendMessage, sendStatus } from "@/server/messages";
 import { Permission } from "@/server/permissions";
 import { updateAutomod } from "@/server/automod";
 import { exportUserData } from "@/server/account";
@@ -42,6 +42,20 @@ describe("community message delivery", () => {
     await expect(sendMessage(owner, channelId, "changed", [], null, null, null, transaction)).rejects.toMatchObject({ code: "conflict" });
     await expect(sendMessage(owner, other, "original", [], null, null, null, transaction)).rejects.toMatchObject({ code: "conflict" });
     expect(await db.$count(message, eq(message.channelId, other))).toBe(0);
+  });
+
+  it("reports only the caller's own send receipts, without content", async () => {
+    const { owner, channelId } = await fixture();
+    const other = await users.create("Other sender");
+    const [kept, removed, missing] = [randomUUID(), randomUUID(), randomUUID()];
+    await sendMessage(owner, channelId, "kept", [], null, null, null, kept);
+    const gone = await sendMessage(owner, channelId, "removed", [], null, null, null, removed);
+    await deleteMessage(owner, gone.id);
+    expect(await sendStatus(owner, [kept, removed, missing])).toEqual({ [kept]: "sent", [removed]: "deleted" });
+    // Someone else's receipts are invisible, even with the exact ids.
+    expect(await sendStatus(other, [kept, removed])).toEqual({});
+    await expect(sendStatus(owner, ["not-a-uuid"])).rejects.toMatchObject({ code: "invalid" });
+    await expect(sendStatus(owner, Array.from({ length: 21 }, () => randomUUID()))).rejects.toMatchObject({ code: "invalid" });
   });
 
   it("retains a tombstone so retrying a deleted message cannot recreate it", async () => {

@@ -86,7 +86,7 @@ test("drafts and reply references stay with their channel and thread", async ({ 
   } finally { await page.context().close(); }
 });
 
-test("an interrupted send survives a reload and retries without a duplicate", async ({ browser }, info) => {
+test("after a reload a delivered send resolves itself and an undelivered one retries once", async ({ browser }, info) => {
   test.setTimeout(90_000);
   const owner = await newUserPage(browser);
   const errors = watchErrors(owner);
@@ -96,38 +96,49 @@ test("an interrupted send survives a reload and retries without a duplicate", as
     // The invite button lives in the off-canvas channel list on phones.
     if (!(await owner.getByRole("button", { name: "Invite people" }).isVisible())) await owner.getByRole("button", { name: "Open navigation" }).first().click();
     const member = await joinAsNewUser(browser, "Outbox Member", await createInviteLink(owner));
-    const text = "Delivered once across a reload";
-    let interrupted = false;
+    const delivered = "Delivered, response lost";
+    const lost = "Never reached the server";
+    const interrupted = new Set<string>();
     await owner.route("**/app/**", async (route) => {
       const request = route.request();
-      if (!interrupted && request.method() === "POST" && request.headers()["next-action"] && request.postData()?.includes(text)) {
-        await route.fetch();
-        interrupted = true;
+      const text = [delivered, lost].find((t) => request.postData()?.includes(t));
+      if (text && !interrupted.has(text) && request.method() === "POST" && request.headers()["next-action"]) {
+        interrupted.add(text);
+        // The first send is stored and only its response is lost; the second never arrives.
+        if (text === delivered) await route.fetch();
         await route.abort("failed");
       } else await route.continue();
     });
     const composer = owner.getByRole("textbox", { name: "Message #general" });
-    await composer.fill(text);
-    await composer.press("Enter");
-    await expect(owner.getByRole("button", { name: "Retry message", exact: true })).toBeVisible();
+    for (const text of [delivered, lost]) {
+      await composer.fill(text);
+      await composer.press("Enter");
+      await expect(owner.getByLabel("Delivery unconfirmed", { exact: true }).filter({ hasText: text })).toBeVisible();
+    }
     await owner.reload();
 
-    // Restored, never resent on its own.
+    // The stored one shows once, as a real message; the other is clearly not delivered and never resent on its own.
+    const rows = owner.locator("[data-message-id]");
+    await expect(rows.filter({ hasText: delivered })).toHaveCount(1);
+    await expect(owner.getByLabel("Not delivered", { exact: true })).toContainText(lost);
+    await expect(owner.getByLabel(/Delivery unconfirmed|Not delivered|Sending/).filter({ hasText: delivered })).toHaveCount(0);
+    await expect(rows.filter({ hasText: lost })).toHaveCount(0);
     const retry = owner.getByRole("button", { name: "Retry message", exact: true });
-    await expect(retry).toBeVisible();
-    await expect(owner.getByLabel("Delivery unconfirmed", { exact: true })).toContainText(text);
+    await expect(retry).toHaveCount(1);
     await expect(owner.getByRole("button", { name: "Discard message", exact: true })).toBeVisible();
     expect(await noHorizontalOverflow(owner)).toBe(true);
     await owner.screenshot({ path: info.outputPath("outbox-restored.png") });
     await retry.click();
     await expect(retry).toHaveCount(0);
-    await expect(owner.getByLabel("Delivery unconfirmed", { exact: true })).toHaveCount(0);
+    await expect(owner.getByLabel("Not delivered", { exact: true })).toHaveCount(0);
     await expect(owner.getByLabel("Sending", { exact: true })).toHaveCount(0);
-    await expect(owner.locator("[data-message-id]").filter({ hasText: text })).toHaveCount(1);
-    expect(await owner.evaluate((prefix) => Object.entries(sessionStorage).filter(([key]) => key.startsWith(prefix)).map(([, value]) => value).join(""), OUTBOX_PREFIX)).not.toContain(text);
+    await expect(rows.filter({ hasText: lost })).toHaveCount(1);
+    expect(await owner.evaluate((prefix) => Object.entries(sessionStorage).filter(([key]) => key.startsWith(prefix)).map(([, value]) => value).join(""), OUTBOX_PREFIX)).toBe("");
 
+    // A separate member's browser sees each message exactly once.
     await member.reload();
-    await expect(member.locator("[data-message-id]").filter({ hasText: text })).toHaveCount(1);
+    await expect(member.locator("[data-message-id]").filter({ hasText: delivered })).toHaveCount(1);
+    await expect(member.locator("[data-message-id]").filter({ hasText: lost })).toHaveCount(1);
     await member.context().close();
     expect(errors).toEqual([]);
   } finally { await owner.context().close(); }
@@ -152,6 +163,7 @@ test("an offline send stays restorable across navigation and sign-out clears it"
 
     await openChannel(page, "random");
     await openChannel(page, "general");
+    // The same view (kept mounted by the router) still owns the attempt; a reload is covered above.
     await expect(page.getByLabel("Delivery unconfirmed", { exact: true })).toContainText(text);
     await page.screenshot({ path: info.outputPath("outbox-offline.png") });
     await page.getByRole("button", { name: "Retry message", exact: true }).click();
@@ -211,4 +223,57 @@ test("a retry the server refuses offers Edit and Discard", async ({ browser }, i
     expect(await outboxKeys(page)).toEqual([]);
     expect(errors).toEqual([]);
   } finally { await page.context().close(); }
+});
+
+test("a restored send after losing send permission is refused without a duplicate", async ({ browser }, info) => {
+  test.setTimeout(90_000);
+  const owner = await newUserPage(browser);
+  try {
+    await signUp(owner, "Revoking Owner");
+    await createCommunity(owner, "Revocation QA");
+    if (!(await owner.getByRole("button", { name: "Invite people" }).isVisible())) await owner.getByRole("button", { name: "Open navigation" }).first().click();
+    const member = await joinAsNewUser(browser, "Revoked Member", await createInviteLink(owner));
+    const errors = watchErrors(member);
+    const text = "Queued before the permission change";
+    let dropped = false;
+    await member.route("**/app/**", async (route) => {
+      const request = route.request();
+      if (!dropped && request.method() === "POST" && request.headers()["next-action"] && request.postData()?.includes(text)) {
+        dropped = true;
+        await route.abort("failed");
+      } else await route.continue();
+    });
+    const composer = member.getByRole("textbox", { name: "Message #general" });
+    await composer.fill(text);
+    await composer.press("Enter");
+    await expect(member.getByLabel("Delivery unconfirmed", { exact: true })).toContainText(text);
+
+    // Closes the phone's off-canvas channel list that the invite step opened.
+    await owner.reload();
+    await owner.getByRole("button", { name: "Channel settings" }).click();
+    await owner.getByRole("dialog").getByLabel("Send for everyone").selectOption("deny");
+    await owner.keyboard.press("Escape");
+
+    // The override saves asynchronously after the dialog closes.
+    await expect(async () => {
+      await member.reload();
+      await expect(member.getByText("You do not have permission to send messages in this channel.").first()).toBeVisible({ timeout: 2000 });
+    }).toPass();
+    await expect(member.getByLabel("Not delivered", { exact: true })).toContainText(text);
+    await member.getByRole("button", { name: "Retry message", exact: true }).click();
+    await expect(member.getByLabel("Not sent", { exact: true })).toContainText(text);
+    await expect(member.getByRole("alert").filter({ hasText: /permission/i })).toBeVisible();
+    // No composer to edit into: only Discard.
+    await expect(member.getByRole("button", { name: "Edit unsent message", exact: true })).toHaveCount(0);
+    expect(await noHorizontalOverflow(member)).toBe(true);
+    await member.screenshot({ path: info.outputPath("outbox-revoked.png") });
+    await member.getByRole("button", { name: "Discard message", exact: true }).click();
+    await expect(member.getByLabel("Not sent", { exact: true })).toHaveCount(0);
+    expect(await outboxKeys(member)).toEqual([]);
+    await expect(owner.locator("[data-message-id]").filter({ hasText: text })).toHaveCount(0);
+    await owner.reload();
+    await expect(owner.locator("[data-message-id]").filter({ hasText: text })).toHaveCount(0);
+    expect(errors).toEqual([]);
+    await member.context().close();
+  } finally { await owner.context().close(); }
 });

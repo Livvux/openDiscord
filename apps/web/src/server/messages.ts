@@ -255,6 +255,22 @@ export async function sendMessage(
   return sentMessage(messageId);
 }
 
+/** Most restored sends one tab can ask about at once (matches the browser outbox cap). */
+const MAX_STATUS_IDS = 20;
+
+/**
+ * Which of the person's own send ids reached the server, for sends restored after a lost response or
+ * reload: "sent", or "deleted" when the stored message was removed since. Unknown ids were not stored.
+ * Receipts only: no content, and only the caller's own.
+ */
+export async function sendStatus(userId: string, rawIds: unknown): Promise<Record<string, "sent" | "deleted">> {
+  const ids = parse(z.array(uuid).max(MAX_STATUS_IDS), rawIds);
+  if (ids.length === 0) return {};
+  const rows = await db.select({ id: messageSend.transactionId, messageId: messageSend.messageId }).from(messageSend)
+    .where(and(eq(messageSend.userId, userId), inArray(messageSend.transactionId, ids)));
+  return Object.fromEntries(rows.map((r) => [r.id, r.messageId ? "sent" : "deleted"]));
+}
+
 async function loadOwnedMessage(rawMessageId: unknown) {
   const messageId = parse(uuid, rawMessageId);
   const [row] = await db

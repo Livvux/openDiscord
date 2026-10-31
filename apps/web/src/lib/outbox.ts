@@ -6,7 +6,8 @@ import type { Mention } from "./mentions";
  * Not encrypted at rest: community messages are server-visible on delivery and a key kept in the same
  * browser profile would protect nothing. See docs/PRIVACY.md and docs/DECISIONS.md.
  */
-export type OutboxState = "sending" | "unconfirmed" | "failed" | "deleted";
+/** unconfirmed: outcome unknown; unsent: the server has no record of it; failed: refused; deleted: sent, removed since. */
+export type OutboxState = "sending" | "unconfirmed" | "unsent" | "failed" | "deleted";
 
 export interface OutboxEntry {
   /** Doubles as the server send id (`message_send.transaction_id`). */
@@ -28,7 +29,7 @@ export interface OutboxEntry {
 export const OUTBOX_PREFIX = "od.outbox.v1:";
 export const OUTBOX_TTL_MS = 24 * 60 * 60_000;
 export const OUTBOX_CAP = 20;
-const STATES: readonly string[] = ["sending", "unconfirmed", "failed", "deleted"];
+const STATES: readonly string[] = ["sending", "unconfirmed", "unsent", "failed", "deleted"];
 
 const isString = (value: unknown): value is string => typeof value === "string";
 const isNullableString = (value: unknown) => value === null || isString(value);

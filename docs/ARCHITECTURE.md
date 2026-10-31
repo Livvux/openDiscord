@@ -93,8 +93,8 @@ deletion so retries cannot resurrect removed messages. They cascade with their c
 and are included in user-export version 13. Current channel permissions are always required on replay.
 The bot API accepts an optional `transactionId`; legacy callers without one retain non-idempotent sends.
 Unconfirmed browser sends are kept in a tab-scoped `sessionStorage` outbox (`lib/outbox.ts`, 24 h, 20
-per user) and offered for an explicit retry after navigation or reload; they are never resent
-automatically, and DMs never enter it. Composer drafts are memory-only (`lib/chat-drafts.ts`). See D14. Web Push remains best effort and is not transactionally queued.
+per user). After navigation or reload an entry looks up its own send receipt (`sendStatus`): delivered
+entries disappear, the rest offer an explicit retry; nothing is resent automatically, and DMs never enter it. Composer drafts are memory-only (`lib/chat-drafts.ts`). See D14. Web Push remains best effort and is not transactionally queued.
 
 ## Voice
 

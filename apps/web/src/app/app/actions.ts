@@ -74,6 +74,7 @@ export const sendMessage = async (
   publicGeneration: string | null = null,
   transactionId: string | null = null,
 ) => run((u) => messages.sendMessage(u, channelId, content, attachmentIds, replyToId, threadId, publicGeneration, transactionId), false);
+export const sendStatus = async (sendIds: string[]) => run((u) => messages.sendStatus(u, sendIds), false);
 export const toggleReaction = async (messageId: string, emoji: string) => run((u) => messages.toggleReaction(u, messageId, emoji), false);
 export const setPinned = async (messageId: string, pinned: boolean) => run((u) => messages.setPinned(u, messageId, pinned), false);
 export const searchMessages = async (communityId: string, query: string, before?: string) =>

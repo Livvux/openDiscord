@@ -23,8 +23,10 @@ retry; expected first-send rejections restore the editable draft and keep attach
 send IDs. Receipts are included in user-export version 13 and cascade with their channel or account.
 
 Unconfirmed community sends survive in-app navigation and reloads of the same tab (`od.outbox.v1:<userId>`,
-24 hours, at most 20 per user, cleared on tab close and sign-out; D14). Restored entries are never
-sent automatically: Retry reuses the send ID, a coded server refusal is final (Edit/Discard). Drafts
+24 hours, at most 20 per user, cleared on tab close and sign-out; D14). Restored entries look up their
+own send receipt (`sendStatus`, ids only), so a delivered send is not shown twice and an undelivered one is
+marked "Not delivered". They are never sent automatically: Retry reuses the send ID, a coded server
+refusal (for example revoked Send permission) is final (Edit/Discard). Drafts
 (channel, thread, DM) are in memory only and lost on reload by design. Entries for a channel that has
 become inaccessible are not shown (the page 404s) and expire with the TTL or tab.
 

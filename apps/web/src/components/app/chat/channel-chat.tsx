@@ -2,7 +2,7 @@
 
 import { HashIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { markChannelRead, sendMessage } from "@/app/app/actions";
+import { markChannelRead, sendMessage, sendStatus } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
 import type { MessagePage, MessageView } from "@/server/messages";
@@ -54,6 +54,24 @@ export function ChannelChat(props: ChannelChatProps) {
   const pending = useOutbox(currentUserId, channel.id, threadId);
   const [sendError, setSendError] = useState<string | null>(null);
   const sending = useRef(new Set<string>());
+  // Sends this view started or already resolved; anything else in the outbox was restored.
+  const known = useRef(new Set<string>());
+  // Restored after a reload or from an earlier view: the receipt says whether it arrived, so a delivered
+  // message isn't shown twice and an undelivered one is clearly unsent. Retry stays safe either way.
+  useEffect(() => {
+    const ids = pending.filter((p) => p.state === "unconfirmed" && !known.current.has(p.id)).map((p) => p.id);
+    if (ids.length === 0) return;
+    ids.forEach((id) => known.current.add(id));
+    void sendStatus(ids).then((result) => {
+      if (!result.ok) return;
+      for (const id of ids) {
+        if (sending.current.has(id)) continue;
+        const state = result.data[id];
+        if (state === "sent") outbox.remove(currentUserId, id);
+        else outbox.update(currentUserId, id, { state: state ?? "unsent", error: null });
+      }
+    }).catch(() => { /* offline: stays unconfirmed with Retry */ });
+  }, [pending, currentUserId]);
   // Drafts outlive this component (channel switch, closed thread) but stay in memory: lib/chat-drafts.ts.
   const draftScope = threadId ? `thread:${threadId}` : `channel:${channel.id}`;
   const [draft, setDraft] = useState(() => readDraft<MessageView>(currentUserId, draftScope)?.text ?? "");
@@ -152,6 +170,7 @@ export function ChannelChat(props: ChannelChatProps) {
   async function deliver(item: Omit<OutboxEntry, "createdAt">, reply?: MessageView | null): Promise<boolean> {
     if (sending.current.has(item.id)) return true;
     sending.current.add(item.id);
+    known.current.add(item.id);
     outbox.update(currentUserId, item.id, { state: "sending", error: null });
     try {
       // The entry id is the send id: a retry of a send that did arrive returns the stored message.
@@ -304,9 +323,9 @@ export function ChannelChat(props: ChannelChatProps) {
                 {p.state !== "sending" && <li className="flex flex-wrap items-center gap-2 px-5 pb-2 text-sm text-destructive" role="alert">
                   {/* "deleted" already says it all in the row status. */}
                   {p.error && p.state !== "deleted" && <p className="basis-full">{p.error}</p>}
-                  {p.state === "unconfirmed"
+                  {p.state === "unconfirmed" || p.state === "unsent"
                     ? <Button type="button" variant="outline" size="sm" aria-label="Retry message" onClick={() => void deliver(p)}>Retry</Button>
-                    : <Button type="button" variant="outline" size="sm" aria-label="Edit unsent message" onClick={() => editUnsent(p)}>Edit</Button>}
+                    : canSend && <Button type="button" variant="outline" size="sm" aria-label="Edit unsent message" onClick={() => editUnsent(p)}>Edit</Button>}
                   <Button type="button" variant="ghost" size="sm" aria-label="Discard message" onClick={() => outbox.remove(currentUserId, p.id)}>Discard</Button>
                 </li>}
               </Fragment>

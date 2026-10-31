@@ -148,8 +148,9 @@ federation implementation.
 **Decision, 2026-10-31:** composer drafts (channel, thread, DM) live in a module-level in-memory store
 keyed by user and conversation; they are never persisted and never sent to the server. Unconfirmed
 community sends live in a tab-scoped `sessionStorage` outbox (`od.outbox.v1:<userId>`, 24 h TTL, 20
-entries, pruned on every read) and are restored as "unconfirmed" with Retry (same send ID, deduplicated
-by `message_send`) and Discard; they are never resent automatically. A coded server refusal on retry is
+entries, pruned on every read). A restored entry asks the server for its own send receipt (no content):
+a delivered send disappears, a deleted one says so, and one without a receipt shows "Not delivered" with
+Retry (same send ID, deduplicated by `message_send`) and Discard; nothing is resent automatically. A coded server refusal on retry is
 final and offers Edit (new send ID) and Discard. Sign-out removes all outbox keys and drafts; loading
 another account in the tab removes the previous account's keys.
 **Why:** a reload or channel switch must not silently lose a message whose delivery is unknown, while
