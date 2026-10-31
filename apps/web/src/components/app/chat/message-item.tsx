@@ -26,6 +26,7 @@ import { GifEmbed } from "../gif-embed";
 import { gifSource } from "@/lib/gifs";
 import { fmt } from "@/lib/i18n";
 import { useMessages } from "@/lib/i18n/client";
+import type { OutboxState } from "@/lib/outbox";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
@@ -400,13 +401,23 @@ function EditForm({ initial, pending, onSave, onCancel, isPublic }: { isPublic: 
   );
 }
 
-export function PendingItem({ content, mentions, images, failed = false }: { content: string; mentions: Mention[]; images: number; failed?: boolean }) {
+/** [accessible name, visible status] per outbox state. */
+const PENDING_STATUS: Record<OutboxState, [string, string]> = {
+  sending: ["Sending", "Sending…"],
+  unconfirmed: ["Delivery unconfirmed", "Not confirmed"],
+  unsent: ["Not delivered", "Not delivered"],
+  failed: ["Not sent", "Not sent"],
+  deleted: ["Sent, then deleted", "Sent, then deleted"],
+};
+
+export function PendingItem({ content, mentions, images, state }: { content: string; mentions: Mention[]; images: number; state: OutboxState }) {
+  const [label, status] = PENDING_STATUS[state];
   return (
-    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label={failed ? "Delivery unconfirmed" : "Sending"}>
+    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label={label}>
       <div className="w-10 shrink-0" />
       <div className="min-w-0 flex-1 text-base leading-[1.375rem] break-words whitespace-pre-wrap text-foreground">
         <MessageContent content={content} mentions={mentions} />
-        {images > 0 && <span className="block text-[11px] text-zinc-400">{images === 1 ? "1 attachment" : `${images} attachments`}{failed ? " · delivery unconfirmed" : " · sending…"}</span>}
+        <span className="block text-[11px] text-zinc-400">{images > 0 && `${images === 1 ? "1 attachment" : `${images} attachments`} · `}{status}</span>
       </div>
     </li>
   );

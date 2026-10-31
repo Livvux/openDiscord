@@ -26,6 +26,7 @@ import { dmFetch, enrollNewDmDevice, privateMessaging, type PrivateMessaging, ty
 import { searchDmTimeline } from "@/lib/dm/timeline";
 import type { DmOperation } from "@/lib/dm/contracts";
 import { useDmTyping } from "./use-dm-typing";
+import { readDraft, writeDraft } from "@/lib/chat-drafts";
 
 const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring";
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Private messaging could not complete this action.";
@@ -107,12 +108,21 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   const selectedRef = useRef(selected);
   const history = useRef<DirectEnvelope[]>([]);
   const markedRead = useRef<string | null>(null);
+  // The conversation whose draft the composer holds; null while switching, so nothing is saved under the wrong one.
+  const draftScope = useRef<string | null>(null);
   useEffect(() => {
     selectedRef.current = selected; history.current = []; scan.current++; scanning.current = false;
-    const timer = setTimeout(() => { setMessages([]); setReplyTo(null); setSearchOpen(false); setSearchQuery(""); setSearching(false); setSearchComplete(false); setHasMore(false); setText(""); setFiles([]); }, 0);
+    draftScope.current = null;
+    const timer = setTimeout(() => {
+      // Plaintext drafts stay in memory only (lib/chat-drafts.ts); attachments are not kept.
+      const draft = selected ? readDraft<MessageView>(userId, `dm:${selected}`) : undefined;
+      draftScope.current = selected ? `dm:${selected}` : null;
+      setMessages([]); setReplyTo(draft?.replyTo ?? null); setSearchOpen(false); setSearchQuery(""); setSearching(false); setSearchComplete(false); setHasMore(false); setText(draft?.text ?? ""); setFiles([]);
+    }, 0);
     const cancelScan = () => { scan.current++; };
     return () => { clearTimeout(timer); cancelScan(); };
-  }, [selected]);
+  }, [selected, userId]);
+  useEffect(() => { if (draftScope.current) writeDraft(userId, draftScope.current, { text, replyTo }); }, [userId, text, replyTo]);
   const ready = !!client;
 
   useEffect(() => {
@@ -222,7 +232,7 @@ export function PrivateMessages({ userId, userName, userAvatar, target, targetIs
   }
   async function request(targetId: string) {
     const response = await dmFetch<{ id: string }>("/api/dm", { action: "request", target: targetId });
-    setText(""); selectedRef.current = response.id; setSelected(response.id); setVerifications([]); setTrusted([]);
+    selectedRef.current = response.id; setSelected(response.id); setVerifications([]); setTrusted([]);
   }
   async function backups() { const data = await dmFetch<{ backups: typeof backupList }>("/api/dm/backups"); setBackupList(data.backups); }
   async function loadEarlier(): Promise<boolean> {

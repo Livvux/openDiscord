@@ -2,11 +2,13 @@
 
 import { HashIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { markChannelRead, sendMessage } from "@/app/app/actions";
+import { markChannelRead, sendMessage, sendStatus } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
 import type { MessagePage, MessageView } from "@/server/messages";
 import { decodeMentions, type Mention } from "@/lib/mentions";
+import { readDraft, writeDraft } from "@/lib/chat-drafts";
+import { outbox, type OutboxEntry } from "@/lib/outbox";
 import { useRealtime } from "../realtime-provider";
 import { useClearUnread } from "../unread-provider";
 import { Composer } from "./composer";
@@ -14,6 +16,7 @@ import { MessageItem, PendingItem } from "./message-item";
 import { ThreadPanel } from "./thread-panel";
 import { useChannelMessages } from "./use-channel-messages";
 import { useChannelTyping } from "./use-channel-typing";
+import { useOutbox } from "./use-outbox";
 import { useMemberNames } from "../member-list";
 import { typingText } from "@/lib/typing";
 
@@ -34,18 +37,6 @@ interface ChannelChatProps {
   threadRoot?: MessageView;
 }
 
-interface Pending {
-  tempId: string;
-  content: string;
-  mentions: Mention[];
-  images: number;
-  attachmentIds: string[];
-  replyToId: string | null;
-  replyTo: MessageView | null;
-  publicGeneration: string | null;
-  error: string | null;
-}
-
 const GROUP_WINDOW_MS = 5 * 60_000;
 const dayFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "long" });
 const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
@@ -60,11 +51,37 @@ export function ChannelChat(props: ChannelChatProps) {
   // The live root from the list: edits show up, and a deleted root closes its thread.
   const openThread = openThreadId ? (messages.find((m) => m.id === openThreadId) ?? null) : null;
   const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
-  const [pending, setPending] = useState<Pending[]>([]);
+  const pending = useOutbox(currentUserId, channel.id, threadId);
   const [sendError, setSendError] = useState<string | null>(null);
   const sending = useRef(new Set<string>());
-  const [draft, setDraft] = useState("");
-  const [replyTo, setReplyTo] = useState<MessageView | null>(null);
+  // Sends this view started or already resolved; anything else in the outbox was restored.
+  const known = useRef(new Set<string>());
+  // Restored after a reload or from an earlier view: the receipt says whether it arrived, so a delivered
+  // message isn't shown twice and an undelivered one is clearly unsent. Retry stays safe either way.
+  useEffect(() => {
+    const ids = pending.filter((p) => p.state === "unconfirmed" && !known.current.has(p.id)).map((p) => p.id);
+    if (ids.length === 0) return;
+    ids.forEach((id) => known.current.add(id));
+    void sendStatus(ids).then((result) => {
+      if (!result.ok) return;
+      for (const id of ids) {
+        if (sending.current.has(id)) continue;
+        const state = result.data[id];
+        if (state === "sent") outbox.remove(currentUserId, id);
+        else outbox.update(currentUserId, id, { state: state ?? "unsent", error: null });
+      }
+    }).catch(() => { /* offline: stays unconfirmed with Retry */ });
+  }, [pending, currentUserId]);
+  // Drafts outlive this component (channel switch, closed thread) but stay in memory: lib/chat-drafts.ts.
+  const draftScope = threadId ? `thread:${threadId}` : `channel:${channel.id}`;
+  const [draft, setDraft] = useState(() => readDraft<MessageView>(currentUserId, draftScope)?.text ?? "");
+  const [replyTo, setReplyTo] = useState<MessageView | null>(() => readDraft<MessageView>(currentUserId, draftScope)?.replyTo ?? null);
+  useEffect(() => writeDraft(currentUserId, draftScope, { text: draft, replyTo }), [currentUserId, draftScope, draft, replyTo]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
@@ -149,40 +166,57 @@ export function ChannelChat(props: ChannelChatProps) {
     await loadOlder();
   }
 
-  async function deliver(item: Pending, firstAttempt = false): Promise<boolean> {
-    if (sending.current.has(item.tempId)) return true;
-    sending.current.add(item.tempId);
-    setPending((items) => items.map((p) => p.tempId === item.tempId ? { ...p, error: null } : p));
+  /** `reply` is set on the first attempt only: a rejection then goes straight back into the composer. */
+  async function deliver(item: Omit<OutboxEntry, "createdAt">, reply?: MessageView | null): Promise<boolean> {
+    if (sending.current.has(item.id)) return true;
+    sending.current.add(item.id);
+    known.current.add(item.id);
+    outbox.update(currentUserId, item.id, { state: "sending", error: null });
     try {
-      const result = await sendMessage(channel.id, item.content, item.attachmentIds, item.replyToId, threadId, item.publicGeneration, item.tempId);
-      if (!result.ok && result.code && firstAttempt) {
-        setPending((items) => items.filter((p) => p.tempId !== item.tempId));
+      // The entry id is the send id: a retry of a send that did arrive returns the stored message.
+      const result = await sendMessage(channel.id, item.content, item.attachmentIds, item.replyToId, threadId, item.publicGeneration, item.id);
+      if (!result.ok && result.code && reply !== undefined && mounted.current) {
+        outbox.remove(currentUserId, item.id);
         setSendError(result.error);
         setDraft((draft) => draft.trim() ? draft : decodeMentions(item.content, item.mentions));
-        setReplyTo((reply) => reply ?? item.replyTo);
+        setReplyTo((current) => current ?? reply);
         return false;
+      }
+      // Definitive: the server re-checked access and refused, or the stored message was deleted since.
+      if (!result.ok && result.code) {
+        outbox.update(currentUserId, item.id, { state: result.code === "conflict" ? "deleted" : "failed", error: result.error });
+        return true;
       }
       if (!result.ok) throw new Error(result.error);
       upsert(result.data);
-      setPending((items) => items.filter((p) => p.tempId !== item.tempId));
+      outbox.remove(currentUserId, item.id);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Connection interrupted.";
-      setPending((items) => items.map((p) => p.tempId === item.tempId ? { ...p, error: detail } : p));
+      outbox.update(currentUserId, item.id, { state: "unconfirmed", error: detail });
     } finally {
-      sending.current.delete(item.tempId);
+      sending.current.delete(item.id);
     }
     return true;
   }
 
   async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
-    const item: Pending = { tempId: crypto.randomUUID(), content, mentions, images: attachmentIds.length,
-      attachmentIds, replyToId: replyTo?.id ?? null, replyTo, publicGeneration: publicGeneration ?? null, error: null };
+    const item = { id: crypto.randomUUID(), channelId: channel.id, threadId, content, mentions, images: attachmentIds.length,
+      attachmentIds, replyToId: replyTo?.id ?? null, publicGeneration: publicGeneration ?? null, state: "sending" as const, error: null };
     nearBottom.current = true;
     setSendError(null);
     setReplyTo(null);
-    setPending((items) => [...items, item]);
-    // This component owns retries, including the original attachment/reply context.
-    return deliver(item, true);
+    outbox.put(currentUserId, item);
+    // Retries reuse the original attachment/reply context from the outbox entry.
+    return deliver(item, replyTo);
+  }
+
+  /** A refused send goes back into the composer as a new message (new send id). */
+  function editUnsent(item: OutboxEntry) {
+    outbox.remove(currentUserId, item.id);
+    const text = decodeMentions(item.content, item.mentions);
+    setDraft((draft) => draft.trim() ? `${draft}\n${text}` : text);
+    const target = messages.find((m) => m.id === item.replyToId);
+    if (target) setReplyTo((current) => current ?? target);
   }
 
   const column = (
@@ -284,12 +318,15 @@ export function ChannelChat(props: ChannelChatProps) {
               );
             })}
             {pending.map((p) => (
-              <Fragment key={p.tempId}>
-                <PendingItem content={p.content} mentions={p.mentions} images={p.images} failed={!!p.error} />
-                {p.error && <li className="px-5 pb-2 text-sm text-destructive" role="alert">
-                  <p>{p.error} Delivery is unconfirmed. Retry safely without sending a duplicate. Keep this page open until resolved.</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void deliver(p)}>Retry message</Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setPending((items) => items.filter((item) => item.tempId !== p.tempId))}>Dismiss pending message</Button>
+              <Fragment key={p.id}>
+                <PendingItem content={p.content} mentions={p.mentions} images={p.images} state={p.state} />
+                {p.state !== "sending" && <li className="flex flex-wrap items-center gap-2 px-5 pb-2 text-sm text-destructive" role="alert">
+                  {/* "deleted" already says it all in the row status. */}
+                  {p.error && p.state !== "deleted" && <p className="basis-full">{p.error}</p>}
+                  {p.state === "unconfirmed" || p.state === "unsent"
+                    ? <Button type="button" variant="outline" size="sm" aria-label="Retry message" onClick={() => void deliver(p)}>Retry</Button>
+                    : canSend && <Button type="button" variant="outline" size="sm" aria-label="Edit unsent message" onClick={() => editUnsent(p)}>Edit</Button>}
+                  <Button type="button" variant="ghost" size="sm" aria-label="Discard message" onClick={() => outbox.remove(currentUserId, p.id)}>Discard</Button>
                 </li>}
               </Fragment>
             ))}
