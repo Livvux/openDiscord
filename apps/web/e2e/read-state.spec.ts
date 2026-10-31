@@ -8,23 +8,29 @@ import { collectRuntimeErrors } from "./runtime-errors";
 const HISTORY = 65;
 // Longer than the client's read debounce plus a server round trip: a wrongly sent marker would have landed.
 const SETTLE_MS = 1500;
-const db = new Pool({ connectionString: process.env.DATABASE_URL });
-test.afterAll(() => db.end());
+// Created per test group: with fullyParallel a worker can run this file's groups one after another.
+let pool: Pool | null = null;
+const db = () => (pool ??= new Pool({ connectionString: process.env.DATABASE_URL }));
+test.afterAll(async () => {
+  const ended = pool;
+  pool = null;
+  await ended?.end();
+});
 
 interface Room { sender: Page; reader: Page; readerId: string; communityId: string; channelId: string; errors: string[] }
 
 async function userId(email: string): Promise<string> {
-  return (await db.query<{ id: string }>('select id from "user" where email=$1', [email])).rows[0].id;
+  return (await db().query<{ id: string }>('select id from "user" where email=$1', [email])).rows[0].id;
 }
 
 async function marker(room: Room): Promise<string | null> {
-  const { rows } = await db.query<{ last_read_id: string }>(
+  const { rows } = await db().query<{ last_read_id: string }>(
     "select last_read_id from channel_read_state where user_id=$1 and channel_id=$2", [room.readerId, room.channelId]);
   return rows[0]?.last_read_id ?? null;
 }
 
 async function messageId(room: Room, content: string): Promise<string> {
-  return (await db.query<{ id: string }>("select id from message where channel_id=$1 and content=$2", [room.channelId, content])).rows[0].id;
+  return (await db().query<{ id: string }>("select id from message where channel_id=$1 and content=$2", [room.channelId, content])).rows[0].id;
 }
 
 /** UUIDv7 with a chosen timestamp: the database's uuidv7() is not monotonic within one millisecond. */
@@ -53,7 +59,7 @@ async function setup(browser: Browser): Promise<Room> {
   // Backdated so the seed neither trips the author rate limit nor looks live.
   const start = Date.now() - 3_600_000;
   for (let i = 0; i < HISTORY; i++) {
-    await db.query("insert into message (id, channel_id, author_id, content, created_at) values ($1, $2, $3, $4, $5)",
+    await db().query("insert into message (id, channel_id, author_id, content, created_at) values ($1, $2, $3, $4, $5)",
       [uuidv7At(start + i * 1000), channelId, senderId, `History ${i}`, new Date(start + i * 1000)]);
   }
   const reader = await newUserPage(browser);

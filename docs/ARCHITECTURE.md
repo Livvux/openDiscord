@@ -82,7 +82,8 @@ carries only what a notification needs (sender, channel, a 140-character excerpt
 The client moves it only to the newest message whose row was on screen in a visible tab
 (`src/lib/read-marker.ts`), or to the newest loaded message through "Mark as read"; reading older
 messages, a background tab or a reconnect resync never marks unseen messages read. Private
-conversations follow the same rule for their latest message. Mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
+conversations follow the same rule for their latest message; they open scrolled to it and stay there
+while the reader is at the end. Mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
 only over channels the person can view.
 
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every
