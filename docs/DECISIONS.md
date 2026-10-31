@@ -142,3 +142,19 @@ including revoked membership, retry duplicates, private-channel exclusion, attac
 remote deletion limitations and operator shutdown. Until then there are no federation endpoints,
 remote-delivery guarantees or compatibility claims. This completes the research decision, not a
 federation implementation.
+
+## D14. Drafts in memory, unconfirmed community sends in sessionStorage
+
+**Decision, 2026-10-31:** composer drafts (channel, thread, DM) live in a module-level in-memory store
+keyed by user and conversation; they are never persisted and never sent to the server. Unconfirmed
+community sends live in a tab-scoped `sessionStorage` outbox (`od.outbox.v1:<userId>`, 24 h TTL, 20
+entries, pruned on every read) and are restored as "unconfirmed" with Retry (same send ID, deduplicated
+by `message_send`) and Discard; they are never resent automatically. A coded server refusal on retry is
+final and offers Edit (new send ID) and Discard. Sign-out removes all outbox keys and drafts; loading
+another account in the tab removes the previous account's keys.
+**Why:** a reload or channel switch must not silently lose a message whose delivery is unknown, while
+DM plaintext must never leave memory. `sessionStorage` bounds exposure to one tab's lifetime. Encrypting
+at rest would need a key in the same browser profile and so protect nothing against that profile;
+community content is server-visible on delivery anyway. The reply target's content is not copied.
+**Revisit when:** cross-tab/offline delivery or persistent DM sends are required (needs encrypted
+storage with a key the browser profile alone cannot read).

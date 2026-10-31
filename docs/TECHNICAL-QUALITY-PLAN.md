@@ -18,13 +18,19 @@ executed acceptance, release and independent review. It does not claim Discord-s
 
 `0044_message_send_receipts` adds per-author send IDs with payload fingerprints and deletion
 tombstones. Community message creation and mention events use transactional PostgreSQL notifications.
-The browser retains ambiguous attempts in memory for an explicit identical retry; expected first-send
-rejections restore the editable draft and keep attachments available. The bot API accepts optional
+The browser keeps ambiguous attempts in a tab-scoped `sessionStorage` outbox for an explicit identical
+retry; expected first-send rejections restore the editable draft and keep attachments available. The bot API accepts optional
 send IDs. Receipts are included in user-export version 13 and cascade with their channel or account.
 
-This does not provide a durable offline outbox, exactly-once end-to-end delivery, durable event replay,
-guaranteed push delivery, or idempotent reaction toggles/webhook sends. Pending browser attempts are
-lost on navigation/reload. Do not enable automatic retries for non-idempotent mutations.
+Unconfirmed community sends survive in-app navigation and reloads of the same tab (`od.outbox.v1:<userId>`,
+24 hours, at most 20 per user, cleared on tab close and sign-out; D14). Restored entries are never
+sent automatically: Retry reuses the send ID, a coded server refusal is final (Edit/Discard). Drafts
+(channel, thread, DM) are in memory only and lost on reload by design. Entries for a channel that has
+become inaccessible are not shown (the page 404s) and expire with the TTL or tab.
+
+This does not provide a cross-tab or cross-device offline outbox, exactly-once end-to-end delivery,
+durable event replay, guaranteed push delivery, persistent DM sends, or idempotent reaction
+toggles/webhook sends. Do not enable automatic retries for non-idempotent mutations.
 
 ## Validation environment and release constraints
 

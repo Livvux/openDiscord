@@ -64,6 +64,16 @@ and SHA-256 request fingerprint to deduplicate retries. A deleted message leaves
 the receipt does not store a plaintext copy of its text. Receipts persist until channel or account
 deletion and are included in the author's data export. Fingerprints are metadata and can reveal
 whether a guessed request matches; they are not encryption.
+
+Unsent text stays in the browser. Composer drafts (channels, threads and DMs, with the reply reference)
+are held in page memory only: never written to browser storage or sent to the server, lost on reload or
+tab close, and cleared on sign-out or when another account signs in. Community messages whose delivery
+is not confirmed are kept in the tab's `sessionStorage` (`od.outbox.v1:<userId>`): text, mention names,
+attachment and reply IDs, never a copy of the replied-to message. They are removed when delivered or
+discarded, after 24 hours (at most 20 per account), when the tab closes, on sign-out, and when another
+account signs in in the same tab. They are not encrypted at rest because community messages are not
+end-to-end encrypted and the server sees them on delivery; a key stored in the same browser would not
+protect them. Direct messages never enter this storage.
 The Content Security Policy restricts third-party requests. If the operator enables Cloudflare
 Turnstile, the sign-up page contacts Cloudflare, which processes the visitor's IP address and
 browser signals. If image attachments use Cloudflare R2, the server accesses R2 privately;
