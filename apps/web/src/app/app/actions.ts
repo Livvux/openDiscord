@@ -85,7 +85,7 @@ export const editMessage = async (messageId: string, content: string, publicGene
 export const deleteMessage = async (messageId: string) => run((u) => messages.deleteMessage(u, messageId), false);
 
 // Fires often while reading, so it neither refreshes the router nor counts toward the mutation burst limit.
-export const markChannelRead = async (channelId: string, messageId: string) =>
+export const markChannelRead = async (channelId: string, messageId: string | null) =>
   toResult(async () => {
     const user = await requireUser();
     await consume(`read:${user.id}`, 60, 60_000);

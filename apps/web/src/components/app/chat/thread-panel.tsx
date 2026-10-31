@@ -14,11 +14,14 @@ type ThreadPanelProps = Omit<React.ComponentProps<typeof ChannelChat>, "initialP
 
 /** A thread beside the channel (full width on small screens). Escape closes it. */
 export function ThreadPanel({ root, onClose, ...chat }: ThreadPanelProps) {
-  const [page, setPage] = useState<MessagePage | null>(null);
+  // A linked reply arrives with its page from the server.
+  const preset = chat.target?.threadId === root.id ? chat.target.threadPage : null;
+  const [page, setPage] = useState<MessagePage | null>(preset);
   const [error, setError] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
 
   useEffect(() => {
+    if (preset) return;
     let active = true;
     fetch(`/api/channels/${chat.channel.id}/messages?thread=${root.id}`, { cache: "no-store" })
       .then(async (r) => {
@@ -29,10 +32,12 @@ export function ThreadPanel({ root, onClose, ...chat }: ThreadPanelProps) {
       })
       .catch(() => active && setError("Couldn't load the thread."));
     return () => void (active = false);
-  }, [chat.channel.id, root.id]);
+  }, [chat.channel.id, root.id, preset]);
 
-  // Move focus into the panel once, when it opens.
-  useEffect(() => panel.current?.focus(), []);
+  // Move focus into the panel once, when it opens, unless a linked reply already took it.
+  useEffect(() => {
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
+  }, []);
 
   return (
     <aside

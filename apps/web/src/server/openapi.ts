@@ -62,10 +62,17 @@ export const openApiDocument = {
         parameters: [
           { name: "channelId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "before", in: "query", schema: { type: "string", format: "uuid" }, description: "Message id: return the page before it" },
+          { name: "after", in: "query", schema: { type: "string", format: "uuid" }, description: "Message id: return the page after it" },
+          { name: "around", in: "query", schema: { type: "string", format: "uuid" }, description: "Message id: return a page centered on it (only one of before, after, around)" },
           { name: "thread", in: "query", schema: { type: "string", format: "uuid" }, description: "Thread root id: return that thread" },
         ],
         responses: {
-          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: { messages: { type: "array", items: message }, hasMore: { type: "boolean" } } } } } },
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            messages: { type: "array", items: message },
+            hasMore: { type: "boolean", description: "Older messages exist" },
+            hasNewer: { type: "boolean", description: "Newer messages exist (after and around pages)" },
+            unavailable: { type: "boolean", description: "The around message isn't in this channel or thread; this is the newest page" },
+          } } } } },
           ...errors,
         },
       },

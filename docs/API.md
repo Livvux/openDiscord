@@ -17,6 +17,12 @@ curl -H "Authorization: Bot $TOKEN" -H "Content-Type: application/json" \
   -d '{"content":"Hello from a bot"}' https://example.org/api/v1/channels/$CHANNEL/messages
 ```
 
+Message pages hold up to 50 messages, oldest first. Without a cursor you get the newest page; use one
+of `before=<id>` (older), `after=<id>` (newer) or `around=<id>` (centered on that message), plus
+`thread=<rootId>` for a thread. `hasMore` says older messages exist, `hasNewer` newer ones (on `after`
+and `around` pages). If the `around` message isn't in that channel or thread (deleted, elsewhere or
+never there), the answer is the newest page with `unavailable: true`, the same in every case.
+
 Limits: 60 requests per minute per bot, plus the normal message rate limit and AutoMod. Mentions from
 bots notify like any member's.
 

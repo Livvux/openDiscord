@@ -73,7 +73,10 @@ the same escalation rule as editing the role itself.
 4. The client merges events by id. The server sends a `ping` event every 25 s; after 60 s of silence,
    or when the browser comes back online, the client reconnects. After every reconnect it refetches
    the newest page: the page is authoritative for its range (offline deletions disappear), and if more
-   than a page was missed, older local history is dropped rather than leaving a hidden gap.
+   than a page was missed, older local history is dropped rather than leaving a hidden gap. A view
+   opened at an older message (`?m=<id>`, e.g. from search) isn't contiguous with the present: it
+   skips new messages and catch-ups, applies edits/deletes to what it shows, and pages forward with
+   `after` until it reaches the present (or "Jump to present" reloads the newest page).
 
 Personal events (mentions) go to a second stream per tab, `GET /api/me/events`, on the topic
 `user:<id>`. It re-checks that the person can still read the channel before delivering a mention and

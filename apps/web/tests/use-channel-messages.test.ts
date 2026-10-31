@@ -275,3 +275,59 @@ describe("community message catch-up", () => {
     expect(view().loadError).toBeNull();
   });
 });
+
+describe("views opened at an older message", () => {
+  const detached = (messages: MessageView[]): MessagePage => ({ messages, hasMore: true, hasNewer: true });
+
+  it("skips live creates and catch-ups but keeps edits and deletes of shown messages", async () => {
+    props.initialPage = detached([message("10"), message("11"), message("12")]);
+    harness.realtime.state = "open";
+    view();
+    harness.emit({ type: "resync" });
+    expect(requests).toHaveLength(0);
+    harness.emit({ type: "message.created", message: message("90") });
+    harness.emit({ type: "message.updated", message: message("91", { content: "edited elsewhere" }) });
+    harness.emit({ type: "message.updated", message: message("11", { content: "edited" }) });
+    harness.emit({ type: "message.deleted", channelId: "channel", messageId: "12" });
+    expect(ids()).toEqual(["10", "11"]);
+    expect(view().messages[1].content).toBe("edited");
+    expect(view().hasNewer).toBe(true);
+  });
+
+  it("loads newer pages with after, then reattaches with one catch-up", async () => {
+    props.initialPage = detached([message("10"), message("11")]);
+    harness.realtime.state = "open";
+    view();
+    const first = view().loadNewer();
+    expect(requests[0].url).toContain("after=11");
+    requests[0].finish({ messages: [message("12"), message("13")], hasMore: true, hasNewer: true });
+    await first;
+    expect(ids()).toEqual(["10", "11", "12", "13"]);
+    expect(requests).toHaveLength(1);
+    const last = view().loadNewer();
+    expect(requests[1].url).toContain("after=13");
+    requests[1].finish({ messages: [message("14")], hasMore: true, hasNewer: false });
+    await last;
+    expect(view().hasNewer).toBe(false);
+    // A message created during that GET was skipped; the catch-up brings it back.
+    expect(requests).toHaveLength(3);
+    expect(requests[2].url).not.toContain("after=");
+    requests[2].finish({ messages: [message("13"), message("14"), message("15")], hasMore: true });
+    await flush();
+    expect(ids()).toEqual(["10", "11", "12", "13", "14", "15"]);
+    harness.emit({ type: "message.created", message: message("16") });
+    expect(ids().at(-1)).toBe("16");
+  });
+
+  it("replaces the view with the present on a local send", async () => {
+    props.initialPage = detached([message("10")]);
+    harness.realtime.state = "open";
+    view();
+    view().upsert(message("50"));
+    expect(ids()).toEqual(["10"]);
+    requests[0].finish({ messages: [message("40"), message("50")], hasMore: true });
+    await flush();
+    expect(ids()).toEqual(["40", "50"]);
+    expect(view().hasNewer).toBe(false);
+  });
+});
