@@ -44,7 +44,8 @@ const harness = vi.hoisted(() => {
       },
       useState<T>(initial: T) {
         const current = slot();
-        if (!("value" in current)) current.value = initial;
+        // Lazy initializers run once, like React's.
+        if (!("value" in current)) current.value = typeof initial === "function" ? (initial as () => T)() : initial;
         return [current.value as T, (update: T | ((previous: T) => T)) => {
           current.value = typeof update === "function" ? (update as (previous: T) => T)(current.value as T) : update;
         }] as const;
@@ -56,7 +57,7 @@ const harness = vi.hoisted(() => {
 });
 
 vi.mock("react", async (original) => ({ ...await original<typeof import("react")>(), ...harness.react }));
-vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.fn() }));
+vi.mock("@/app/app/actions", () => ({ markChannelRead: vi.fn(), sendMessage: vi.fn(), sendStatus: vi.fn() }));
 vi.mock("@/components/app/realtime-provider", () => ({ useRealtime: () => ({ state: "open" }) }));
 vi.mock("@/components/app/unread-provider", () => ({ useClearUnread: () => harness.clearUnread }));
 vi.mock("@/components/app/chat/use-channel-messages", () => ({ useChannelMessages: () => harness.messages }));
@@ -66,6 +67,8 @@ vi.mock("@/components/ui/button", () => ({ Button: "button" }));
 vi.mock("@/components/app/chat/composer", () => ({ Composer: () => null }));
 vi.mock("@/components/app/chat/message-item", () => ({ MessageItem: () => null, PendingItem: () => null }));
 vi.mock("@/components/app/chat/thread-panel", () => ({ ThreadPanel: () => null }));
+// Stable like the real hook (useSyncExternalStore + useMemo): a new array would re-run the pinning effect.
+vi.mock("@/components/app/chat/use-outbox", () => { const none: never[] = []; return { useOutbox: () => none }; });
 
 import { ChannelChat } from "@/components/app/chat/channel-chat";
 import { markChannelRead } from "@/app/app/actions";
