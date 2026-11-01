@@ -1,7 +1,7 @@
 node_modules
 .env
 .DS_Store
-backups/
+/backups/
 apps/web/load-characterization.json
 apps/web/http-sse-characterization.json
 apps/web/beta-browser-results.json
