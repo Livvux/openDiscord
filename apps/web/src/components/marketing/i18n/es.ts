@@ -12,7 +12,7 @@ export const es: Messages = {
     selfHost: "Autoalojar",
     roadmap: "Hoja de ruta",
     signIn: "Iniciar sesión",
-    join: "Únete a la alfa cerrada",
+    join: "Crear una cuenta",
     language: "Idioma",
   },
   hero: {
@@ -102,7 +102,7 @@ export const es: Messages = {
     stages: [
       {
         label: "Ahora",
-        title: "Alfa cerrada",
+        title: "Pruebas públicas",
         items: ["Canales privados, roles, moderación", "Menciones, hilos, búsqueda, reacciones", "Voz, vídeo y compartir pantalla", "Bots, webhooks, API pública", "MD individuales y grupales cifrados y llamadas por MD", "Apelaciones, normas y controles de retención", "Emojis y stickers propios", "Canales públicos y descubrimiento"],
       },
       {
@@ -120,8 +120,8 @@ export const es: Messages = {
   footer: {
     titleStart: "Lleva tu comunidad",
     titleAccent: "a casa.",
-    lead: "Únete a la alfa cerrada o mira lo que cuesta mantener la instancia alojada.",
-    join: "Únete a la alfa cerrada",
+    lead: "Prueba la instancia alojada o consulta sus costes de funcionamiento.",
+    join: "Crear una cuenta",
     funding: "Financiación y costes",
     tagline: "Mentes abiertas. Más brillantes juntos.",
     nav: "Pie de página",

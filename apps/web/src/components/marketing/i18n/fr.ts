@@ -12,7 +12,7 @@ export const fr: Messages = {
     selfHost: "Auto-héberger",
     roadmap: "Feuille de route",
     signIn: "Se connecter",
-    join: "Rejoindre l’alpha",
+    join: "Créer un compte",
     language: "Langue",
   },
   hero: {
@@ -102,7 +102,7 @@ export const fr: Messages = {
     stages: [
       {
         label: "Maintenant",
-        title: "Alpha fermée",
+        title: "Phase de test publique",
         items: ["Salons privés, rôles, modération", "Mentions, fils, recherche, réactions", "Voix, vidéo et partage d’écran", "Bots, webhooks, API publique", "MP individuels et de groupe chiffrés et appels en MP", "Recours, règles et durées de conservation", "Emojis et stickers personnalisés", "Salons publics et découverte"],
       },
       {
@@ -120,8 +120,8 @@ export const fr: Messages = {
   footer: {
     titleStart: "Ramenez votre communauté",
     titleAccent: "à la maison.",
-    lead: "Rejoignez l’alpha sur invitation, ou découvrez ce que coûte le fonctionnement de l’instance hébergée.",
-    join: "Rejoindre l’alpha",
+    lead: "Essayez l’instance hébergée ou découvrez ses coûts de fonctionnement.",
+    join: "Créer un compte",
     funding: "Financement et coûts de fonctionnement",
     tagline: "Esprits ouverts. Plus brillants ensemble.",
     nav: "Pied de page",
