@@ -1,18 +1,19 @@
 # Hosted web and PWA release runbook
 
-Candidate version: **0.2.0-beta.1, unreleased**. Current decision: **NO-GO**.
-The [readiness checklist](OPEN-BETA-READINESS.md) is the gate ledger. This runbook does not authorize
-turning off Closed Alpha, publishing an Open Beta announcement or exposing native preview downloads.
+Candidate version: **0.2.0-beta.1, unreleased**. Final release approval is outstanding.
+For current production observations and blockers see [2026-11-01 stabilization](BETA-STABILIZATION-2026-11-01.md).
+The [readiness checklist](OPEN-BETA-READINESS.md) retains historical evidence. Public admission is
+already enabled; that setting does not establish release acceptance or native installer readiness.
 
 ## Review and build
 
-1. Review the small component PRs and merge their integration candidate only after the protected
-   checks and a separate approving GitHub review pass. The candidate branch
-   `release/hosted-readiness-2026-10-21` contains all five readiness PRs; its CI must validate their
-   combination. Local branch integration commits do not establish a merge into `main`.
-   `main` requires `check`, `voice-product` and `real-engine`, an up-to-date branch, one approving
-   review, approval after the latest push, resolved discussions and admin enforcement. Do not use
-   an admin bypass, self-review or direct write to satisfy this gate.
+1. Review the final candidate and execute its complete required checks. Re-read branch protection
+   immediately before merge. On November 1, `main` requires `check`, `voice-product` and
+   `real-engine`, an up-to-date branch and administrator enforcement; its required approving-review
+   count is zero. Preserve the actual rules and record the final head and check URLs. The account
+   billing lock prevents jobs from starting; isolated manual validation does not satisfy that gate.
+   Independent release-assurance reviews remain required evidence in the stabilization ledger.
+   Do not use an admin bypass or direct write to satisfy a failed gate.
 2. Record the **final main SHA** and successful main workflow URLs after all merges. PR-head CI and
    a synthetic PR merge SHA are distinct evidence. Re-run acceptance on the final integration.
 3. On the selected checkout verify `git rev-parse HEAD` is that reviewed SHA and
@@ -29,7 +30,7 @@ turning off Closed Alpha, publishing an Open Beta announcement or exposing nativ
 
 1. Check [OPERATIONS.md](OPERATIONS.md): a fresh encrypted off-host bundle, independent recovery
    identity, retention, available RAM/storage and a recent isolated restore with application/media
-   readback. Resolve the aggregate backup-capacity failure before increased admissions. Record the
+   readback. Recheck the database, media, retained-repository and free-disk budgets before growth. Record the
    pre-deploy web/migrate image IDs, configuration version and migration journal for rollback.
 2. Use the compatible-writer rollout in OPERATIONS for database/auth/Voice changes. Stop conflicting
    writers and actual maintenance containers under bounded drain budgets; do not assume stopping a
@@ -40,9 +41,13 @@ turning off Closed Alpha, publishing an Open Beta announcement or exposing nativ
    Start only compatible app/operator images; keep the migrate image available to scheduled jobs.
    Product Voice also requires explicit `room.auto_create: false` in the actual SFU configuration,
    not just the repository's standalone template. Follow the coherent issuer/SFU rollout in OPERATIONS;
-   the hosted inline configuration currently differs and must not be switched under old issuers.
-4. From the clean deployed repository, run the read-only gate with the recorded SHA and the actual
-   serving web/database container names:
+   verify the hosted inline configuration and actual issuer revision before any change.
+4. Build web and migrate images from a clean checkout at the full `RELEASE_SHA`, supplying
+   `OPENDISCORD_SOURCE_COMMIT=$RELEASE_SHA` to Compose build arguments and the web runtime.
+   Verify both image labels and the serving image ID after deployment. Preserve Dokploy-generated
+   routing labels/configuration; use a separate clean release checkout for source proof instead of
+   resetting its managed manifest. From that clean checkout, run the read-only gate with the recorded
+   SHA and actual serving web/database container names:
 
    ```sh
    python3 scripts/production-smoke.py --expected-sha "$RELEASE_SHA" \
@@ -69,8 +74,9 @@ turning off Closed Alpha, publishing an Open Beta announcement or exposing nativ
 ## Capacity and rollback
 
 Existing bounded characterization covers 20 SSE readers and synthetic CI workloads. It does not
-establish production user capacity, CPU/RSS, pool pressure, media bandwidth or an SLO. Keep current
-Closed Alpha admissions until a measured load run on an isolated representative stack establishes
+establish production user capacity, CPU, pool pressure, media bandwidth or an SLO. Sampled RSS
+from the two-process characterization is narrow fixture evidence. Keep admission growth bounded
+until a measured load run on an isolated representative stack establishes
 reader/writer/voice targets and alerts for latency, database pool/locks, memory, disk, backup projection
 and media egress. Retain the measured limits and abort thresholds in the readiness ledger. Never
 stress production or buy/raise storage budgets to infer a beta capacity number.
@@ -90,9 +96,10 @@ responsible external reviewer. Do not publish keys, recovery bundles or private 
 
 ## Publication and support
 
-After every P0 is PASS, obtain explicit owner approval to disable Closed Alpha and publish. Only then
-tag the exact validated SHA as `v0.2.0-beta.1`, attach the changelog, verified deployed revision,
-support/known limitations and recovery date, and repeat post-deploy smoke after the policy change.
+After every P0 is PASS, publish the owner-authorized beta release from the exact validated SHA as
+`v0.2.0-beta.1`, attaching the changelog, verified deployed revision, support/known limitations and
+recovery date. Repeat post-deploy smoke. Registration is already open; any future admission-policy
+change needs its own scoped decision and readback.
 Keep unsigned or unverified desktop installers unpublished; native mobile apps are outside scope.
 See [SUPPORT.md](../SUPPORT.md) and [SECURITY.md](../SECURITY.md). External cryptography/pentest,
 legal sign-off and physical-device evidence must be linked by reviewer/date/scope, never inferred

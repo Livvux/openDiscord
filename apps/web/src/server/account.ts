@@ -1,7 +1,7 @@
 // GDPR: data access/portability (export) and erasure (account deletion via Better Auth).
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { attachment, auditLog, ban, banAppeal, channel, community, communityAsset, member, message, passkey, publicChannel, publicPost, session, user } from "@/db/schema";
+import { attachment, auditLog, ban, banAppeal, channel, community, communityAsset, member, message, messageSend, passkey, publicChannel, publicPost, session, user } from "@/db/schema";
 import { assetText } from "@/lib/community-assets";
 import { exportDirectData } from "./direct-messages";
 import { listBlocked } from "./blocks";
@@ -10,13 +10,14 @@ import { getProfile } from "./profile";
 import { ownAvatar } from "./avatars";
 import { notFound } from "./errors";
 
-/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. 10: profile picture. 11: private message read markers. 12: encrypted private message attachment references. */
-export const EXPORT_FORMAT_VERSION = 12;
+/** 2: images. 3: blocked people. 4: file attachments. 5: own restrictions and appeals. 6: encrypted private messaging data. 7: community image upload attribution. 8: public snapshots and owned publication state. 9: friends and profile text. 10: profile picture. 11: private message read markers. 12: encrypted private message attachment references. 13: community send receipts. */
+export const EXPORT_FORMAT_VERSION = 13;
 
 /** An image (filename null) or another file. */
 export interface ExportedImage { id: string; url: string; contentType: string; filename: string | null; size: number; width: number; height: number; createdAt: string }
 
 export interface UserExport {
+  messageSends: { transactionId: string; channelId: string; messageId: string | null; requestHash: string }[];
   publicPosts: { messageId: string; channelId: string; authorName: string; content: string; createdAt: string; editedAt: string | null }[];
   publicChannels: { channelId: string; communityId: string; generation: string; communityTitle: string; channelTitle: string; createdAt: string; unpublishedAt: string | null }[];
   communityImageUploads: { id: string; communityId: string; name: string; kind: "emoji" | "sticker"; size: number; createdAt: string }[];
@@ -41,7 +42,7 @@ export interface UserExport {
 export async function exportUserData(userId: string): Promise<UserExport> {
   const [profile] = await db.select().from(user).where(eq(user.id, userId));
   if (!profile) throw notFound("Account not found.");
-  const [sessions, passkeys, owned, memberships, messages, blocked, restrictions, appeals, publicPosts, publicChannels, profileText, friends, avatar] = await Promise.all([
+  const [sessions, passkeys, owned, memberships, messages, blocked, restrictions, appeals, publicPosts, publicChannels, profileText, friends, avatar, messageSends] = await Promise.all([
     db.select().from(session).where(eq(session.userId, userId)).orderBy(asc(session.createdAt)),
     db.select().from(passkey).where(eq(passkey.userId, userId)),
     db.select().from(community).where(eq(community.ownerId, userId)),
@@ -80,6 +81,9 @@ export async function exportUserData(userId: string): Promise<UserExport> {
     getProfile(userId),
     listFriends(userId),
     ownAvatar(userId),
+    db.select({ transactionId: messageSend.transactionId, channelId: messageSend.channelId,
+      messageId: messageSend.messageId, requestHash: messageSend.requestHash,
+    }).from(messageSend).where(eq(messageSend.userId, userId)).orderBy(asc(messageSend.transactionId)),
   ]);
   const images = messages.length === 0 ? [] : await db.select({
     id: attachment.id, messageId: attachment.messageId, contentType: attachment.contentType, filename: attachment.filename, size: attachment.size,
@@ -98,6 +102,7 @@ export async function exportUserData(userId: string): Promise<UserExport> {
     communityImageUploads: communityImageUploads.map((asset) => ({ ...asset, createdAt: asset.createdAt.toISOString() })),
     privateMessages: await exportDirectData(userId),
     format: "opendiscord.user-export",
+    messageSends,
     version: EXPORT_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     profile: {

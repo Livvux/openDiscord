@@ -191,6 +191,7 @@ test.describe("context menus", () => {
       await memberRail.click({ button: "right" });
       await memberMenu.getByRole("menuitem", { name: "Community info", exact: true }).click();
       await expect(member).toHaveURL(/\/settings$/);
+      await member.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Notifications", exact: true }).click();
       await expect(member.getByRole("radio", { name: /^Muted/ })).toBeChecked();
       await member.goto(channelUrl);
 

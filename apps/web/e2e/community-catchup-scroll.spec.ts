@@ -137,7 +137,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     });
     await reader.goto(channelUrl);
     const log = reader.getByRole("log", { name: "Messages in #general" });
-    await expect(log.getByRole("listitem")).toHaveCount(3);
+    await expect(log.locator("[data-message-id]")).toHaveCount(3);
     await expect(log.locator("xpath=ancestor::*[@data-realtime][1]")).toHaveAttribute("data-realtime", "open");
     await expect.poll(() => held).toBe(1);
     expect(forwarded).toBe(0);
@@ -153,7 +153,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     expect(await (await response).finished()).toBeNull();
     // Let React commit and its layout effect settle after the real response body finishes.
     await reader.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect(log.getByRole("listitem")).toHaveCount(4);
+    await expect(log.locator("[data-message-id]")).toHaveCount(4);
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeLessThan(2);
     expect(forwarded).toBe(1);
     const scrollProbe = await installScrollProbe(scroller);
@@ -169,7 +169,7 @@ test("initial catch-up preserves a scrolled-up reader and subsequent live messag
     await sendMessage(writer, "Live at the bottom");
     await expect(log.getByText("Live at the bottom", { exact: true })).toBeVisible();
     await scrollProbe.evaluate((probe) => probe.messageObserved());
-    await expect(log.getByRole("listitem")).toHaveCount(5);
+    await expect(log.locator("[data-message-id]")).toHaveCount(5);
     await expect.poll(bottomGap).toBeLessThan(2);
     expect(errors).toEqual([]);
     await reader.screenshot({ path: testInfo.outputPath("community-catchup-scroll.png"), fullPage: true });

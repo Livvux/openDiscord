@@ -17,7 +17,7 @@ export function Nav({ t, locale }: { t: Messages["nav"]; locale: Locale }) {
   return (
     <header className="sticky top-0 z-40 bg-canvas">
       <div className={`${container} flex h-16 items-center gap-6`}>
-        <div className="shrink-0">
+        <div className="shrink-0 max-sm:[&_img:last-child]:hidden">
           <Logo tone="light" href={localePath(locale)} />
         </div>
         <nav aria-label={t.primary} className="hidden gap-0.5 text-[15px] md:flex">

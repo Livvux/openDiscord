@@ -1,5 +1,11 @@
 # Roadmap and gap analysis
 
+Current release work: [beta stabilization, 2026-11-01](BETA-STABILIZATION-2026-11-01.md).
+
+The [technical quality milestones](TECHNICAL-QUALITY-PLAN.md) track the 2026-10-29 reliability,
+Voice/mobile, recovery, capacity and independent-assurance work. Implementation and release evidence
+are tracked separately; the historical checkpoints below are not current deployment attestations.
+
 Readiness reconciliation: 2026-10-22. The hosted beta has public registration enabled.
 Implementation, automated acceptance, deployment and external review remain separate evidence states.
 The production checkpoint below refers to `d969304`; the DM conversation tools in this change need
@@ -40,8 +46,8 @@ operator policies, 16-year signup self-attestation, funding disclosure and auth-
 are implemented. Desktop/mobile automated web acceptance passes. Real HTTP/SSE characterization,
 real ClamAV-engine rejection and populated operational-backup recovery now have isolated CI evidence.
 The official instance has ClamAV configured in the app and a healthy private scanner/monitor
-(verified 2026-10-21). Isolated real-engine CI is green; current clean/EICAR production uploads through
-an authenticated browser remain an explicit acceptance gate. See [ops/scanner](../ops/scanner/README.md)
+(verified 2026-10-21). The previously recorded isolated real-engine CI evidence is separate from the current billing-blocked
+checks. Authenticated production clean upload/readback and EICAR rejection passed on 2026-11-01. See [ops/scanner](../ops/scanner/README.md)
 and [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
@@ -90,13 +96,13 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Communities and channels | ✅ | |
 | Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
 | Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
-| DM conversation tools | 🟡 implementation in this change | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` and candidate-specific checks/deployment required. Community typing remains a follow-up |
+| DM conversation tools | ✅ implementation | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` is included; candidate-specific checks/deployment remain required |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
 | Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local private volume and optional fail-closed ClamAV protocol integration implemented; production uses R2 and private fail-closed ClamAV |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
-| Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K |
+| Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K. Results open the exact message (`?m=<id>`, reload-safe): centered and highlighted with its context, also old messages and thread replies (thread panel); access is re-checked on every load, and deleted or unreadable targets show the same "no longer available" notice with the newest page |
 | Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | ✅ | Expiring/revocable invites, join requirements and versioned rules acknowledgement, enforced on joins and content mutations |
@@ -124,7 +130,7 @@ remain gates in [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | 🟡 release review | Tests cover non-member access, role escalation and HTML injection. User push endpoints are allowlisted; storage/SFU fetches use operator configuration. Confirmed mutation-authorization races were fixed in #126, integrated through #130 and deployed at the 2026-10-22 checkpoint; external pentest remains open |
-| Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Production web namespace passed clean/EICAR with fresh loaded signatures on 2026-10-21; authenticated production upload acceptance remains separate (THREAT-MODEL T23) |
+| Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Authenticated production clean upload/readback and EICAR rejection passed on 2026-11-01; unavailable-engine behavior remains isolated-test evidence (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |
@@ -185,7 +191,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Item | Status | Acceptance criteria |
 | --- | --- | --- |
 | Private channels with granular role permissions | ✅ | Hidden channels never appear in lists, message APIs, reports or the realtime stream for members without access (tests) |
-| Unread state, @mentions, notifications | ✅ | Unread markers per channel, community and private conversation; mentions notify only members who can read the channel; new DMs notify by sender only (desktop and Web Push, never text); opt-in desktop notifications |
+| Unread state, @mentions, notifications | ✅ | Unread markers per channel, community and private conversation, advanced only by messages actually on screen in a visible tab or by "Mark as read"; mentions notify only members who can read the channel; new DMs notify by sender only (desktop and Web Push, never text); opt-in desktop notifications |
 | Blocking, anti-raid, invite controls | ✅ | Blocked users' messages collapsed and their mentions silent; owners pause invites; join-rate limit and minimum account age per community |
 | Production readiness | ✅ | Lint, types, unit/integration, build, Playwright, `pnpm audit` and Docker build green; full Compose stack smoke-tested locally (fresh migrations, TLS, sign-up, export, SSE through Caddy); HSTS sent by the app behind any proxy. Rolling the release out to opendiscord.app is an operator step |
 
@@ -195,7 +201,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | --- | --- | --- |
 | Voice channels (LiveKit) | ✅ | Optional compose profile with LiveKit; join/speak permissions enforced by short-lived server-issued tokens (official TURN/TLS relay on TCP443 accepted with synthetic two-client Chromium media; physical devices and voice E2EE remain open) |
 | Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback. Unread counts, live list/Home updates over the personal event stream and content-free push added 2026-10-17. Group DMs (#112) and encrypted files (#110) added; E2EE voice/video calls with screen sharing in 1:1 and group conversations reuse the Voice call stack (conversation membership instead of channel permissions, revocation on leave/removal/block/suspension, content-free ringing and missed calls kept in the browser; Chromium and Firefox product e2e, no physical-device or Safari acceptance) |
-| Search | ✅ | Postgres full-text search limited to readable channels |
+| Search | ✅ | Postgres full-text search limited to readable channels; results open at the exact message |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
 | Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |
 | Basic AutoMod | ✅ | Per-community blocked words and link rules, audited |
@@ -217,9 +223,9 @@ license declaration checks and federation research (D13) are complete; professio
   calls/CallKit and native push require separate work and device acceptance.
 - Desktop remains a preview: publisher signing/notarization, native notifications and full Windows/macOS
   runtime acceptance are not complete.
-- Community-wide typing indicators, cross-community search, voice-note recording, polls, forum channels,
-  scheduled messages and translated UI are not implemented. These are explicit follow-ups, not beta
-  launch requirements and not implicitly included in the DM tools.
+- Community typing and DE/EN application localization are implemented. Cross-community search,
+  voice-note recording, polls, forum channels and scheduled messages remain follow-ups, outside the
+  hosted web/PWA beta launch requirements.
 - DM search never uploads its query or decrypted index. It covers the current conversation's history
   available to the current device; unreceived keys or history before joining a group cannot be searched.
 - Deletion removes live original/update ciphertext and unlinks encrypted files for the existing object

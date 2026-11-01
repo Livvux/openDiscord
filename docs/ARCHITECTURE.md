@@ -61,7 +61,9 @@ the same escalation rule as editing the role itself.
 
 ## Realtime
 
-1. A write commits, then the service calls `pg_notify('opendiscord_events', {type, ids})`.
+1. Community message creation calls `pg_notify('opendiscord_events', {type, ids})` inside its write
+   transaction, including mention events. PostgreSQL delivers them only after commit; publication
+   failure rolls back the message. Other domain services may still publish after their write.
    Payloads carry ids only (NOTIFY is limited to 8 kB and must not carry private content).
 2. Each web process keeps one `LISTEN` connection and fans events out to its subscribers.
 3. `GET /api/communities/:id/events` is an SSE stream (max. 8 per user and process). It checks
@@ -71,17 +73,36 @@ the same escalation rule as editing the role itself.
 4. The client merges events by id. The server sends a `ping` event every 25 s; after 60 s of silence,
    or when the browser comes back online, the client reconnects. After every reconnect it refetches
    the newest page: the page is authoritative for its range (offline deletions disappear), and if more
-   than a page was missed, older local history is dropped rather than leaving a hidden gap.
+   than a page was missed, older local history is dropped rather than leaving a hidden gap. A view
+   opened at an older message (`?m=<id>`, e.g. from search) isn't contiguous with the present: it
+   skips new messages and catch-ups, applies edits/deletes to what it shows, and pages forward with
+   `after` until it reaches the present (or "Jump to present" reloads the newest page).
 
 Personal events (mentions) go to a second stream per tab, `GET /api/me/events`, on the topic
 `user:<id>`. It re-checks that the person can still read the channel before delivering a mention and
 carries only what a notification needs (sender, channel, a 140-character excerpt). Unread state is a
-`channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward);
-mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
+`channel_read_state` row per person and channel (the last read UUIDv7 id, only ever moved forward).
+The client moves it only to the newest message whose row was on screen in a visible tab
+(`src/lib/read-marker.ts`), or through "Mark as read" (to the newest loaded message, or to the channel's
+newest top-level message in a view opened at an older message, which is never treated as at the present); reading older
+messages, a background tab or a reconnect resync never marks unseen messages read. Private
+conversations follow the same rule for their latest message; they open scrolled to it and stay there
+while the reader is at the end. Mentions are `<@userId>` tokens in the content, indexed in `mention` for counts. Counts are computed
 only over channels the person can view.
 
 This works across several web replicas without Redis because Postgres delivers each NOTIFY to every
 listener. Delivery is at-most-once; the resync on reconnect is the recovery path.
+
+The chat client assigns a UUID send ID and reuses its complete payload on an explicit retry after an
+ambiguous response. A per-author `message_send` receipt is committed with the message; concurrent
+retries return the same message without consuming another message-rate slot or sending duplicate
+events. Reusing an ID with different input fails. Receipts retain a null message reference after
+deletion so retries cannot resurrect removed messages. They cascade with their channel or account
+and are included in user-export version 13. Current channel permissions are always required on replay.
+The bot API accepts an optional `transactionId`; legacy callers without one retain non-idempotent sends.
+Unconfirmed browser sends are kept in a tab-scoped `sessionStorage` outbox (`lib/outbox.ts`, 24 h, 20
+per user). After navigation or reload an entry looks up its own send receipt (`sendStatus`): delivered
+entries disappear, the rest offer an explicit retry; nothing is resent automatically, and DMs never enter it. Composer drafts are memory-only (`lib/chat-drafts.ts`). See D14. Web Push remains best effort and is not transactionally queued.
 
 ## Voice
 

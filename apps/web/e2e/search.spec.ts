@@ -18,8 +18,13 @@ test.describe("search", () => {
     await sendMessage(owner, "picnic budget stays between us");
 
     const member = await joinAsNewUser(browser, "Mona Member", invitePath);
-    await member.keyboard.press("ControlOrMeta+k");
+    // Open once through its hydrated trigger, then verify the global keyboard shortcut.
     const dialog = member.getByRole("dialog", { name: "Search Archive" });
+    await member.getByRole("button", { name: "Search messages", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await member.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await member.keyboard.press("ControlOrMeta+k");
     await dialog.getByRole("searchbox", { name: "Search messages" }).fill("picn satur");
     await expect(dialog.getByRole("status")).toHaveText("1 result, newest first.");
     await expect(dialog.getByText("The picnic moves to Saturday")).toBeVisible();

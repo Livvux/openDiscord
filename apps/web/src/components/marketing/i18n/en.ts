@@ -10,7 +10,7 @@ export const en = {
     selfHost: "Self-host",
     roadmap: "Roadmap",
     signIn: "Sign in",
-    join: "Join the alpha",
+    join: "Create an account",
     language: "Language",
   },
   hero: {
@@ -100,7 +100,7 @@ export const en = {
     stages: [
       {
         label: "Now",
-        title: "Closed alpha",
+        title: "Public testing",
         items: ["Private channels, roles, moderation", "Mentions, threads, search, reactions", "Voice, video and screen sharing", "Bots, webhooks, public API", "Encrypted 1:1/group DMs and DM calls", "Appeals, rules and retention controls", "Custom emoji and stickers", "Public channels and discovery"],
       },
       {
@@ -118,8 +118,8 @@ export const en = {
   footer: {
     titleStart: "Bring your community",
     titleAccent: "home.",
-    lead: "Join the invite-only alpha, or see what it costs to run the hosted instance.",
-    join: "Join the alpha",
+    lead: "Try the hosted instance, or see what it costs to run it.",
+    join: "Create an account",
     funding: "Funding and running costs",
     tagline: "Open minds. Brighter together.",
     nav: "Footer",

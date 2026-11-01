@@ -5,9 +5,11 @@ import { useState, type ReactNode } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { dmSignOutLosesHistory, wipeDmDevice } from "@/lib/dm/sign-out";
+import { clearDrafts } from "@/lib/chat-drafts";
+import { outbox } from "@/lib/outbox";
 
 /**
- * Sign-out that first removes this account's encrypted-message device from the browser. When this is
+ * Sign-out that first removes unsent drafts and messages and this account's encrypted-message device from the browser. When this is
  * the only device and no recovery backup exists, asks first: the wipe would lose access to history.
  */
 export function useDmSignOut(userId: string, signOut: () => Promise<void>): { request: () => Promise<void>; busy: boolean; dialog: ReactNode } {
@@ -17,6 +19,8 @@ export function useDmSignOut(userId: string, signOut: () => Promise<void>): { re
     setBusy(true);
     try {
       // Local wipe first and independent of the network: an offline sign-out must not leave keys behind.
+      clearDrafts();
+      outbox.clear();
       await wipeDmDevice(userId);
       await signOut();
     } finally { setBusy(false); setOpen(false); }

@@ -1,5 +1,9 @@
 # Open Beta readiness
 
+Current stabilization work: [2026-11-01 evidence and remaining gates](BETA-STABILIZATION-2026-11-01.md).
+The ledger below is historical; its old missing-timer, admission and unmerged-PR statements are not
+current production findings. A new verified release still requires the outstanding acceptance gates.
+
 > Operational update, 2026-10-22: the owner explicitly authorized public beta admissions.
 > Registration is open and Closed Alpha is off. Revision `d969304` was deployed with passing
 > production smoke, a real signup/verification-email/login flow, repaired retention and a fresh

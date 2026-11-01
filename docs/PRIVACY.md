@@ -57,8 +57,24 @@ See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [OPEN-BETA-READINESS.md](OPEN
 | Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Open reports remain until resolved; resolved reports are purged 180 days after resolution by maintenance. Reporter/resolver links are removed on account deletion |
 | Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; 180-day retention through the operator maintenance job. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
+| Optional error diagnostics (`GLITCHTIP_DSN`) | Diagnose application failures | Operator-configured error monitor | Error category, release revision and static script frame locations only; no error message, account identifier, page URL, cookies, request body, breadcrumbs or conversation content. Operator controls monitor retention |
 
 There are no built-in analytics, tracking pixels, advertising identifiers or third-party fonts.
+Community message send receipts store the author, channel, random transaction ID, message reference
+and SHA-256 request fingerprint to deduplicate retries. A deleted message leaves a null reference;
+the receipt does not store a plaintext copy of its text. Receipts persist until channel or account
+deletion and are included in the author's data export. Fingerprints are metadata and can reveal
+whether a guessed request matches; they are not encryption.
+
+Unsent text stays in the browser. Composer drafts (channels, threads and DMs, with the reply reference)
+are held in page memory only: never written to browser storage or sent to the server, lost on reload or
+tab close, and cleared on sign-out or when another account signs in. Community messages whose delivery
+is not confirmed are kept in the tab's `sessionStorage` (`od.outbox.v1:<userId>`): text, mention names,
+attachment and reply IDs, never a copy of the replied-to message. They are removed when delivered or
+discarded, after 24 hours (at most 20 per account), when the tab closes, on sign-out, and when another
+account signs in in the same tab. They are not encrypted at rest because community messages are not
+end-to-end encrypted and the server sees them on delivery; a key stored in the same browser would not
+protect them. Direct messages never enter this storage.
 The Content Security Policy restricts third-party requests. If the operator enables Cloudflare
 Turnstile, the sign-up page contacts Cloudflare, which processes the visitor's IP address and
 browser signals. If image attachments use Cloudflare R2, the server accesses R2 privately;
@@ -97,6 +113,11 @@ require membership. Instance administration separately requires global rights an
 Backups made with `scripts/backup.sh` contain all of the above. Store them encrypted, restrict access,
 and delete them on a schedule; deleted accounts disappear from the live database immediately and from
 backups when those expire.
+
+Hosted recovery snapshots retain 30 daily copies. The dedicated Backblaze repository uses a
+one-day grace period for provider cleanup of versions already hidden by pruning, with no
+upload-age expiry for current objects. Provider processing is asynchronous; logical snapshot
+expiry is not immediate physical erasure. Legacy recovery archives retain their existing policy.
 
 ## Scheduled maintenance
 

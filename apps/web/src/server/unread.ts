@@ -1,7 +1,7 @@
 // Unread state: one "last read" message id per person and channel. A channel is unread when someone
 // else posted after it; mentions are counted the same way. Counts only cover channels the caller passes
 // in, and callers pass only channels the person can view.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { channel, channelReadState, mention, message, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, requireChannel } from "./access";
@@ -24,14 +24,23 @@ export const MENTION_COUNT_CAP = 100;
 
 export const NOTHING_UNREAD: ChannelUnread = { unread: false, mentions: 0, lastReadId: null };
 
-/** Moves the read marker forward (never back) to `messageId`. */
+/**
+ * Moves the read marker forward (never back) to `messageId`, or with `null` to the channel's newest
+ * top-level message ("Mark as read" from a view that hasn't loaded the present).
+ */
 export async function markChannelRead(userId: string, rawChannelId: unknown, rawMessageId: unknown): Promise<void> {
   const channelId = parse(uuid, rawChannelId);
-  const messageId = parse(uuid, rawMessageId);
+  const wanted = rawMessageId === null ? null : parse(uuid, rawMessageId);
   await requireChannel(db, channelId, userId);
   // Only real messages of this channel: a forged far-future id would hide unread state forever.
-  const [known] = await db.select({ id: message.id }).from(message).where(and(eq(message.id, messageId), eq(message.channelId, channelId)));
-  if (!known) throw notFound("Message not found.");
+  const [known] = await db.select({ id: message.id }).from(message)
+    .where(and(eq(message.channelId, channelId), wanted ? eq(message.id, wanted) : isNull(message.threadId)))
+    .orderBy(desc(message.id)).limit(1);
+  if (!known) {
+    if (wanted) throw notFound("Message not found.");
+    return;
+  }
+  const messageId = known.id;
   // UUIDv7 ids sort by time, so the newer marker is the greater id.
   await db
     .insert(channelReadState)

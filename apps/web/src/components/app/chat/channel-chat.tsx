@@ -1,19 +1,23 @@
 "use client";
 
 import { HashIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { markChannelRead, sendMessage } from "@/app/app/actions";
+import { sendMessage, sendStatus } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import type { ChannelSummary } from "@/server/communities";
-import type { MessagePage, MessageView } from "@/server/messages";
+import type { MessagePage, MessageTarget, MessageView } from "@/server/messages";
 import { decodeMentions, type Mention } from "@/lib/mentions";
+import { readDraft, writeDraft } from "@/lib/chat-drafts";
+import { outbox, type OutboxEntry } from "@/lib/outbox";
 import { useRealtime } from "../realtime-provider";
-import { useClearUnread } from "../unread-provider";
 import { Composer } from "./composer";
 import { MessageItem, PendingItem } from "./message-item";
 import { ThreadPanel } from "./thread-panel";
 import { useChannelMessages } from "./use-channel-messages";
 import { useChannelTyping } from "./use-channel-typing";
+import { useOutbox } from "./use-outbox";
+import { useReadMarker } from "./use-read-marker";
 import { useMemberNames } from "../member-list";
 import { typingText } from "@/lib/typing";
 
@@ -32,13 +36,10 @@ interface ChannelChatProps {
   blockedIds: string[];
   /** Set when this instance shows a thread (in the side panel) instead of the channel. */
   threadRoot?: MessageView;
-}
-
-interface Pending {
-  tempId: string;
-  content: string;
-  mentions: Mention[];
-  images: number;
+  /** Opened from a message link (`?m=`): the message to center and highlight. */
+  target?: MessageTarget | null;
+  /** The linked message is deleted or not in this channel. */
+  unavailable?: boolean;
 }
 
 const GROUP_WINDOW_MS = 5 * 60_000;
@@ -47,61 +48,64 @@ const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Dat
 const NEAR_BOTTOM_PX = 120;
 
 export function ChannelChat(props: ChannelChatProps) {
-  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot, publicGeneration } = props;
+  const { channel, initialPage, currentUserId, canSend, canModerate, mediaEnabled, communityId, lastReadId, blockedIds, threadRoot, publicGeneration, target, unavailable } = props;
   const { state } = useRealtime();
+  const router = useRouter();
   const threadId = threadRoot?.id ?? null;
-  const { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
-  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const { messages, hasMore, hasNewer, loadingOlder, loadError, loadOlder, loadNewer, loadPresent, upsert, remove } = useChannelMessages(channel.id, initialPage, threadId);
+  // A linked thread reply: the channel centers its root, the thread panel the reply.
+  const focusId = threadId ? (target?.threadId === threadId ? target.id : null) : (target?.threadId ?? target?.id ?? null);
+  const [openThreadId, setOpenThreadId] = useState<string | null>(threadId ? null : (target?.threadId ?? null));
+  const [threadTarget, setThreadTarget] = useState(target?.threadId ? target : null);
   // The live root from the list: edits show up, and a deleted root closes its thread.
   const openThread = openThreadId ? (messages.find((m) => m.id === openThreadId) ?? null) : null;
   const setOpenThread = (m: MessageView | null) => setOpenThreadId(m?.id ?? null);
-  const [pending, setPending] = useState<Pending[]>([]);
+  const pending = useOutbox(currentUserId, channel.id, threadId);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [replyTo, setReplyTo] = useState<MessageView | null>(null);
+  const sending = useRef(new Set<string>());
+  // Sends this view started or already resolved; anything else in the outbox was restored.
+  const known = useRef(new Set<string>());
+  // Restored after a reload or from an earlier view: the receipt says whether it arrived, so a delivered
+  // message isn't shown twice and an undelivered one is clearly unsent. Retry stays safe either way.
+  useEffect(() => {
+    const ids = pending.filter((p) => p.state === "unconfirmed" && !known.current.has(p.id)).map((p) => p.id);
+    if (ids.length === 0) return;
+    ids.forEach((id) => known.current.add(id));
+    void sendStatus(ids).then((result) => {
+      if (!result.ok) return;
+      for (const id of ids) {
+        if (sending.current.has(id)) continue;
+        const state = result.data[id];
+        if (state === "sent") outbox.remove(currentUserId, id);
+        else outbox.update(currentUserId, id, { state: state ?? "unsent", error: null });
+      }
+    }).catch(() => { /* offline: stays unconfirmed with Retry */ });
+  }, [pending, currentUserId]);
+  // Drafts outlive this component (channel switch, closed thread) but stay in memory: lib/chat-drafts.ts.
+  const draftScope = threadId ? `thread:${threadId}` : `channel:${channel.id}`;
+  const [draft, setDraft] = useState(() => readDraft<MessageView>(currentUserId, draftScope)?.text ?? "");
+  const [replyTo, setReplyTo] = useState<MessageView | null>(() => readDraft<MessageView>(currentUserId, draftScope)?.replyTo ?? null);
+  useEffect(() => writeDraft(currentUserId, draftScope, { text: draft, replyTo }), [currentUserId, draftScope, draft, replyTo]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  const nearBottom = useRef(true);
+  const nearBottom = useRef(!focusId);
   // Discord's "viewing older messages" bar, once the reader is more than a screen above the newest message.
   const [farFromPresent, setFarFromPresent] = useState(false);
   const heightBeforeOlder = useRef<number | null>(null);
   const [dividerAfter] = useState(lastReadId);
   const firstUnread = dividerAfter ? messages.find((m) => m.id > dividerAfter && m.authorId !== currentUserId)?.id : undefined;
-  const clearUnread = useClearUnread();
   const typing = useChannelTyping(channel.id, currentUserId, blockedIds);
   const typingNow = typingText(useMemberNames(threadId ? [] : typing.typing));
   const announceTyping = typing.changed;
   // The draft drives the notice; threads keep their typing to themselves.
   useEffect(() => { if (!threadId && canSend) announceTyping(!!draft.trim()); }, [draft, threadId, canSend, announceTyping]);
-  const newest = messages.at(-1)?.id;
-
-  // Reading the newest message while the tab is visible marks the channel read (threads don't move the marker).
-  useEffect(() => {
-    if (!newest || threadId) return;
-    let stopped = false, inFlight = false, marked = false;
-    const mark = async () => {
-      if (stopped || inFlight || marked || document.visibilityState !== "visible") return;
-      inFlight = true;
-      // Navigation/offline can reject the transport before the action returns a result.
-      // Leave the marker pending for a later visibility/online/reconnect attempt.
-      const result = await markChannelRead(channel.id, newest).catch(() => null);
-      inFlight = false;
-      if (!stopped && result?.ok) {
-        marked = true;
-        clearUnread?.(channel.id);
-      }
-    };
-    const request = () => { void mark(); };
-    const timer = setTimeout(request, 500);
-    document.addEventListener("visibilitychange", request);
-    window.addEventListener("online", request);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", request);
-      window.removeEventListener("online", request);
-    };
-  }, [newest, threadId, channel.id, clearUnread, state]);
+  // Only messages that were on screen in a visible tab, or "Mark as read", move the marker (threads don't).
+  const read = useReadMarker({ channelId: channel.id, enabled: !threadId, messages, currentUserId, lastReadId, scroller, connection: state, detached: hasNewer });
 
   // Keep the view pinned to the newest message unless the reader scrolled up;
   // keep the reading position stable when older messages are prepended.
@@ -117,8 +121,21 @@ export function ChannelChat(props: ChannelChatProps) {
   }, [messages, pending]);
 
   useEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, []);
+    const el = scroller.current;
+    if (!el) return;
+    const row = focusId ? el.querySelector<HTMLElement>(`[data-message-id="${focusId}"]`) : null;
+    if (!row) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    row.scrollIntoView({ block: "center" });
+    if (focusId !== target?.id) return;
+    row.focus({ preventScroll: true });
+    // Styled in globals.css; reduced motion gets a static highlight.
+    row.dataset.highlighted = "";
+    const timer = setTimeout(() => delete row.dataset.highlighted, 4000);
+    return () => clearTimeout(timer);
+  }, [focusId, target?.id]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -143,23 +160,59 @@ export function ChannelChat(props: ChannelChatProps) {
     await loadOlder();
   }
 
-  async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
-    const tempId = crypto.randomUUID();
-    setSendError(null);
-    nearBottom.current = true;
-    setPending((p) => [...p, { tempId, content, mentions, images: attachmentIds.length }]);
-    const replyToId = replyTo?.id ?? null;
-    setReplyTo(null);
-    const result = await sendMessage(channel.id, content, attachmentIds, replyToId, threadId, publicGeneration);
-    setPending((p) => p.filter((x) => x.tempId !== tempId));
-    if (result.ok) {
-      upsert(result.data);
-      return true;
+  /** `reply` is set on the first attempt only: a rejection then goes straight back into the composer. */
+  async function deliver(item: Omit<OutboxEntry, "createdAt">, reply?: MessageView | null): Promise<boolean> {
+    if (sending.current.has(item.id)) return true;
+    sending.current.add(item.id);
+    known.current.add(item.id);
+    outbox.update(currentUserId, item.id, { state: "sending", error: null });
+    try {
+      // The entry id is the send id: a retry of a send that did arrive returns the stored message.
+      const result = await sendMessage(channel.id, item.content, item.attachmentIds, item.replyToId, threadId, item.publicGeneration, item.id);
+      if (!result.ok && result.code && reply !== undefined && mounted.current) {
+        outbox.remove(currentUserId, item.id);
+        setSendError(result.error);
+        setDraft((draft) => draft.trim() ? draft : decodeMentions(item.content, item.mentions));
+        setReplyTo((current) => current ?? reply);
+        return false;
+      }
+      // Definitive: the server re-checked access and refused, or the stored message was deleted since.
+      if (!result.ok && result.code) {
+        outbox.update(currentUserId, item.id, { state: result.code === "conflict" ? "deleted" : "failed", error: result.error });
+        return true;
+      }
+      if (!result.ok) throw new Error(result.error);
+      // Sent from a channel view opened at an older message: the present replaces it, and the link goes.
+      if (hasNewer && !threadId && mounted.current) router.replace(`/app/c/${communityId}/${channel.id}`, { scroll: false });
+      else upsert(result.data);
+      outbox.remove(currentUserId, item.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Connection interrupted.";
+      outbox.update(currentUserId, item.id, { state: "unconfirmed", error: detail });
+    } finally {
+      sending.current.delete(item.id);
     }
-    setSendError(result.error);
-    // Put the text back unless the person already started a new message.
-    setDraft((d) => (d.trim() ? d : decodeMentions(content, mentions)));
-    return false;
+    return true;
+  }
+
+  async function onSend(content: string, attachmentIds: string[], mentions: Mention[]): Promise<boolean> {
+    const item = { id: crypto.randomUUID(), channelId: channel.id, threadId, content, mentions, images: attachmentIds.length,
+      attachmentIds, replyToId: replyTo?.id ?? null, publicGeneration: publicGeneration ?? null, state: "sending" as const, error: null };
+    nearBottom.current = true;
+    setSendError(null);
+    setReplyTo(null);
+    outbox.put(currentUserId, item);
+    // Retries reuse the original attachment/reply context from the outbox entry.
+    return deliver(item, replyTo);
+  }
+
+  /** A refused send goes back into the composer as a new message (new send id). */
+  function editUnsent(item: OutboxEntry) {
+    outbox.remove(currentUserId, item.id);
+    const text = decodeMentions(item.content, item.mentions);
+    setDraft((draft) => draft.trim() ? `${draft}\n${text}` : text);
+    const target = messages.find((m) => m.id === item.replyToId);
+    if (target) setReplyTo((current) => current ?? target);
   }
 
   const column = (
@@ -169,18 +222,43 @@ export function ChannelChat(props: ChannelChatProps) {
           Connection lost. Reconnecting…
         </p>
       )}
+      {!threadId && unavailable && (
+        <p role="status" className="bg-muted px-4 py-1.5 text-center text-sm text-muted-foreground">This message is no longer available.</p>
+      )}
       {!threadId && state === "closed" && (
         <p role="status" className="bg-destructive/15 px-4 py-1.5 text-center text-sm">
           Live updates stopped. <button className="underline" onClick={() => window.location.reload()}>Reload</button>
         </p>
+      )}
+      {read.unseen && (
+        <div className="relative z-10 mx-4 flex h-7 shrink-0 items-center justify-between gap-2 rounded-b-lg bg-primary px-3 text-sm font-semibold text-primary-foreground">
+          <button
+            type="button"
+            aria-label="Jump to new messages"
+            className="truncate rounded px-1 hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
+            onClick={() => scroller.current?.querySelector(`[data-message-id="${read.unseen}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" })}
+          >
+            New messages
+          </button>
+          <button
+            type="button"
+            className="shrink-0 rounded px-1 hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
+            onClick={read.markAll}
+          >
+            Mark as read
+          </button>
+        </div>
       )}
       <div
         ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget;
           const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-          nearBottom.current = distance < NEAR_BOTTOM_PX;
+          // A view opened at an older message never pins; reaching its end loads the next page.
+          nearBottom.current = distance < NEAR_BOTTOM_PX && !hasNewer;
           setFarFromPresent(distance > el.clientHeight);
+          if (hasNewer && distance < NEAR_BOTTOM_PX) void loadNewer();
+          read.schedule();
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
@@ -261,24 +339,38 @@ export function ChannelChat(props: ChannelChatProps) {
               );
             })}
             {pending.map((p) => (
-              <PendingItem key={p.tempId} content={p.content} mentions={p.mentions} images={p.images} />
+              <Fragment key={p.id}>
+                <PendingItem content={p.content} mentions={p.mentions} images={p.images} state={p.state} />
+                {p.state !== "sending" && <li className="flex flex-wrap items-center gap-2 px-5 pb-2 text-sm text-destructive" role="alert">
+                  {/* "deleted" already says it all in the row status. */}
+                  {p.error && p.state !== "deleted" && <p className="basis-full">{p.error}</p>}
+                  {p.state === "unconfirmed" || p.state === "unsent"
+                    ? <Button type="button" variant="outline" size="sm" aria-label="Retry message" onClick={() => void deliver(p)}>Retry</Button>
+                    : canSend && <Button type="button" variant="outline" size="sm" aria-label="Edit unsent message" onClick={() => editUnsent(p)}>Edit</Button>}
+                  <Button type="button" variant="ghost" size="sm" aria-label="Discard message" onClick={() => outbox.remove(currentUserId, p.id)}>Discard</Button>
+                </li>}
+              </Fragment>
             ))}
           </ol>
           </div>
         </div>
       </div>
-      {sendError && (
-        <p role="alert" className="px-5 pb-1 text-sm text-destructive">
-          {sendError}
-        </p>
-      )}
-      {farFromPresent && (
+      {sendError && <p role="alert" className="px-5 pb-1 text-sm text-destructive">{sendError}</p>}
+      {(farFromPresent || hasNewer) && (
         <div className="relative z-0 mx-4 -mb-2 flex items-center justify-between gap-2 rounded-t-lg bg-primary px-4 pt-1 pb-3 text-sm font-medium text-primary-foreground">
           <span className="truncate">You&apos;re viewing older messages</span>
           <button
             type="button"
             className="shrink-0 rounded px-1 font-semibold hover:underline focus-visible:outline-2 focus-visible:outline-primary-foreground"
-            onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })}
+            onClick={() => {
+              if (!hasNewer) scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
+              // The channel reloads without `?m`; a thread swaps in its newest page.
+              else if (!threadId) router.replace(`/app/c/${communityId}/${channel.id}`, { scroll: false });
+              else {
+                nearBottom.current = true;
+                void loadPresent();
+              }
+            }}
           >
             Jump to present
           </button>
@@ -325,7 +417,7 @@ export function ChannelChat(props: ChannelChatProps) {
     <div className="flex min-h-0 flex-1">
       {column}
       {openThread && (
-        <ThreadPanel key={openThread.id} {...props} root={openThread} onClose={() => setOpenThreadId(null)} />
+        <ThreadPanel key={openThread.id} {...props} target={threadTarget} root={openThread} onClose={() => { setOpenThreadId(null); setThreadTarget(null); }} />
       )}
     </div>
   );

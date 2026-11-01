@@ -9,24 +9,33 @@ import { useRealtime } from "../realtime-provider";
 type MessageUpdate = (messages: MessageView[]) => MessageView[];
 type Catchup = { controller: AbortController; updates: MessageUpdate[]; summaryRoots: Set<string>; timeout?: ReturnType<typeof setTimeout> };
 
-async function fetchPage(channelId: string, threadId: string | null, before?: string, signal?: AbortSignal): Promise<MessagePage> {
+async function fetchPage(channelId: string, threadId: string | null, cursor: { before?: string; after?: string }, signal?: AbortSignal): Promise<MessagePage> {
   const query = new URLSearchParams();
-  if (before) query.set("before", before);
+  if (cursor.before) query.set("before", cursor.before);
+  if (cursor.after) query.set("after", cursor.after);
   if (threadId) query.set("thread", threadId);
   const res = await fetch(`/api/channels/${channelId}/messages?${query}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? "Could not load messages.");
   return res.json() as Promise<MessagePage>;
 }
 
-/** Messages of a channel's main list, or of one thread when `threadId` is set; kept live from the stream. */
+/**
+ * Messages of a channel's main list, or of one thread when `threadId` is set; kept live from the stream.
+ * A page opened around an older message (`hasNewer`) isn't contiguous with the present: new messages
+ * then wait for `loadNewer`/`loadPresent` instead of being appended, and catch-ups leave the view alone.
+ */
 export function useChannelMessages(channelId: string, initialPage: MessagePage, threadId: string | null = null) {
   const { subscribe, state: connectionState } = useRealtime();
   const libraryGeneration = useRef(0);
   const catchup = useRef<Catchup | null>(null);
   const requestCatchup = useRef<((queueIfRunning: boolean) => void) | null>(null);
   const scopeSignal = useRef<AbortSignal | null>(null);
-  const [state, setState] = useState<LoadedMessages>(initialPage);
-  const { messages, hasMore } = state;
+  const [state, setState] = useState<LoadedMessages & { hasNewer: boolean }>({
+    messages: initialPage.messages, hasMore: initialPage.hasMore, hasNewer: !!initialPage.hasNewer,
+  });
+  const { messages, hasMore, hasNewer } = state;
+  // Read by stream handlers and updaters, which outlive a render.
+  const detached = useRef(state.hasNewer);
   const setMessages = useCallback((update: MessageUpdate, summaryRoot?: string) => {
     const pending = catchup.current;
     if (pending && !pending.controller.signal.aborted) {
@@ -36,6 +45,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
     setState((s) => ({ ...s, messages: update(s.messages) }));
   }, []);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingNewer = useRef(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -45,7 +55,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
     scopeSignal.current = scope.signal;
 
     const refresh = (queueIfRunning: boolean, allowSummaryFollowup = true) => {
-      if (stopped) return;
+      if (stopped || detached.current) return;
       if (catchup.current) {
         queued ||= queueIfRunning;
         return;
@@ -58,7 +68,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
         request.updates = [];
         request.summaryRoots.clear();
       }, 30_000);
-      void fetchPage(channelId, threadId, undefined, request.controller.signal).then((page) => {
+      void fetchPage(channelId, threadId, {}, request.controller.signal).then((page) => {
         if (stopped || request.controller.signal.aborted) return;
         const updates = [...request.updates];
         const summaryRoots = new Set(request.summaryRoots);
@@ -73,7 +83,7 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
             const live = s.messages.find((current) => current.id === message.id);
             return live ? { ...message, thread: live.thread } : message;
           });
-          return { ...next, messages };
+          return { ...s, ...next, messages };
         });
       }).catch(() => {}).finally(() => {
         clearTimeout(request.timeout);
@@ -97,7 +107,8 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
         case "message.updated": {
           const msg = event.message;
           if (msg.channelId !== channelId) break;
-          if (msg.threadId === threadId) setMessages((m) => syncReplies(mergeMessages(m, [msg]), { updated: msg }));
+          // Detached from the present: only refresh messages already shown.
+          if (msg.threadId === threadId) setMessages((m) => syncReplies(detached.current && !m.some((x) => x.id === msg.id) ? m : mergeMessages(m, [msg]), { updated: msg }));
           // A new reply in a thread: the main list only bumps its root's summary.
           else if (threadId === null && event.type === "message.created" && msg.threadId) {
             setMessages((m) => m.map((x) => (x.id === msg.threadId
@@ -162,9 +173,9 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
     setLoadingOlder(true);
     setLoadError(null);
     try {
-      const page = await fetchPage(channelId, threadId, messages[0].id, signal ?? undefined);
+      const page = await fetchPage(channelId, threadId, { before: messages[0].id }, signal ?? undefined);
       if (signal?.aborted) return;
-      setState((s) => signal?.aborted ? s : { messages: mergeMessages(page.messages, s.messages), hasMore: page.hasMore });
+      setState((s) => signal?.aborted ? s : { ...s, messages: mergeMessages(page.messages, s.messages), hasMore: page.hasMore });
     } catch (error) {
       if (!signal?.aborted) setLoadError(error instanceof Error ? error.message : "Could not load messages.");
     } finally {
@@ -172,8 +183,47 @@ export function useChannelMessages(channelId: string, initialPage: MessagePage, 
     }
   }, [channelId, threadId, loadingOlder, messages]);
 
-  const upsert = useCallback((message: MessageView) => setMessages((m) => mergeMessages(m, [message])), [setMessages]);
+  const loadNewer = useCallback(async () => {
+    const last = messages.at(-1);
+    if (loadingNewer.current || !hasNewer || !last) return;
+    const signal = scopeSignal.current;
+    loadingNewer.current = true;
+    setLoadError(null);
+    try {
+      const page = await fetchPage(channelId, threadId, { after: last.id }, signal ?? undefined);
+      if (signal?.aborted) return;
+      detached.current = !!page.hasNewer;
+      setState((s) => ({ ...s, messages: mergeMessages(s.messages, page.messages), hasNewer: !!page.hasNewer }));
+      // Messages created while detached were skipped: one catch-up closes that gap.
+      if (!page.hasNewer) requestCatchup.current?.(true);
+    } catch (error) {
+      if (!signal?.aborted) setLoadError(error instanceof Error ? error.message : "Could not load messages.");
+    } finally {
+      loadingNewer.current = false;
+    }
+  }, [channelId, threadId, hasNewer, messages]);
+
+  /** Replaces a detached view with the newest page. */
+  const loadPresent = useCallback(async () => {
+    const signal = scopeSignal.current;
+    setLoadError(null);
+    try {
+      const page = await fetchPage(channelId, threadId, {}, signal ?? undefined);
+      if (signal?.aborted) return;
+      detached.current = false;
+      setState({ messages: page.messages, hasMore: page.hasMore, hasNewer: false });
+      requestCatchup.current?.(true);
+    } catch (error) {
+      if (!signal?.aborted) setLoadError(error instanceof Error ? error.message : "Could not load messages.");
+    }
+  }, [channelId, threadId]);
+
+  // A message sent from a detached view belongs to the present, which then replaces the view.
+  const upsert = useCallback((message: MessageView) => {
+    if (detached.current) void loadPresent();
+    else setMessages((m) => mergeMessages(m, [message]));
+  }, [setMessages, loadPresent]);
   const remove = useCallback((id: string) => setMessages((m) => syncReplies(m.filter((x) => x.id !== id), { deletedId: id })), [setMessages]);
 
-  return { messages, hasMore, loadingOlder, loadError, loadOlder, upsert, remove };
+  return { messages, hasMore, hasNewer, loadingOlder, loadError, loadOlder, loadNewer, loadPresent, upsert, remove };
 }

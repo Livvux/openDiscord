@@ -209,6 +209,19 @@ export const message = pgTable(
   ],
 );
 
+/** Send receipts survive message deletion so an ambiguous retry cannot resurrect it. */
+export const messageSend = pgTable("message_send", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  transactionId: uuid("transaction_id").notNull(),
+  channelId: uuid("channel_id").notNull().references(() => channel.id, { onDelete: "cascade" }),
+  requestHash: text("request_hash").notNull(),
+  messageId: uuid("message_id").references(() => message.id, { onDelete: "set null" }),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.transactionId] }),
+  index("message_send_channel_idx").on(t.channelId),
+  index("message_send_message_idx").on(t.messageId),
+]);
+
 /** One emoji reaction by one person on one message. */
 export const reaction = pgTable(
   "reaction",

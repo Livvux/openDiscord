@@ -316,3 +316,15 @@ html {
     font-size: max(16px, 1em);
   }
 }
+
+/* A message opened from a link (?m=) glows, then fades back; reduced motion keeps it static until removed. */
+@keyframes message-highlight {
+  0%, 50% { background-color: color-mix(in oklab, var(--primary) 22%, transparent); }
+}
+[data-highlighted] {
+  animation: message-highlight 4s ease-out;
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-highlighted] { background-color: color-mix(in oklab, var(--primary) 22%, transparent); }
+}
