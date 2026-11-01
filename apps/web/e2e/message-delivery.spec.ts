@@ -1,5 +1,32 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, newUserPage, sendMessage, signUp } from "./helpers";
+import { createCommunity, expectNoA11yViolations, newUserPage, sendMessage, signUp } from "./helpers";
+
+test("pending message status remains readable before delivery is acknowledged", async ({ browser }) => {
+  const page = await newUserPage(browser);
+  const text = "Read this while delivery is pending";
+  let resumeSend: (() => void) | undefined;
+  const sendGate = new Promise<void>((resolve) => { resumeSend = resolve; });
+  try {
+    await signUp(page, "Pending contrast QA");
+    await createCommunity(page, "Pending contrast QA");
+    await page.route("**/app/**", async (route) => {
+      const request = route.request();
+      if (request.method() === "POST" && request.headers()["next-action"] && request.postData()?.includes(text)) await sendGate;
+      await route.continue();
+    });
+    const composer = page.getByRole("textbox", { name: "Message #general" });
+    await composer.fill(text);
+    await composer.press("Enter");
+    await expect(page.getByLabel("Sending", { exact: true })).toBeVisible();
+    await expectNoA11yViolations(page);
+    resumeSend?.();
+    await expect(page.locator("[data-message-id]").getByText(text, { exact: true })).toBeVisible();
+  } finally {
+    resumeSend?.();
+    await page.unrouteAll({ behavior: "wait" });
+    await page.context().close();
+  }
+});
 
 test("a lost send response can be retried without duplicating the stored message", async ({ browser }, info) => {
   const page = await newUserPage(browser);
