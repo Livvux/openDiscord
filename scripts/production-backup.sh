@@ -3,12 +3,12 @@
 # restic repository off host. Unchanged media is neither re-downloaded nor re-uploaded.
 set -euo pipefail
 umask 077
-config=/etc/opendiscord-backup/rclone.conf
-password=/etc/opendiscord-backup/restic-password
+config=${RCLONE_CONFIG:-/etc/opendiscord-backup/rclone.conf}
+password=${RESTIC_PASSWORD_FILE:-/etc/opendiscord-backup/restic-password}
 state=/var/backups/opendiscord
 # Plaintext media mirror on the root disk (root-only, like the database volume beside it).
 mirror=/var/lib/opendiscord-backup/media
-export RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
+export RESTIC_REPOSITORY=${RESTIC_REPOSITORY:-rclone:opendiscord-backup:opendiscord-backups-private/restic}
 export RESTIC_PASSWORD_FILE=$password RCLONE_CONFIG=$config RESTIC_CACHE_DIR=/var/cache/opendiscord-restic
 : "${OPENDISCORD_DB_CONTAINER:?Set the deployed database container}"
 : "${OPENDISCORD_WEB_CONTAINER:?Set the deployed web container}"
@@ -16,7 +16,7 @@ export RESTIC_PASSWORD_FILE=$password RCLONE_CONFIG=$config RESTIC_CACHE_DIR=/va
 : "${OPENDISCORD_VOICE_COMPOSE_DIR:?Set the deployed voice checkout}"
 exec 9>"$state/backup.lock"
 flock -n 9 || exit 1
-test -s "$config" && test -s "$password"
+test -s "$password"
 restic cat config > /dev/null
 # A fixed staging path keeps snapshot paths stable, so restic finds its parent snapshot.
 work=/dev/shm/opendiscord-backup

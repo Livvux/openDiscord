@@ -30,9 +30,13 @@ For an operational handover, record deployment revision, external health/readine
 
 `scripts/production-backup.sh` is a Linux operator job for the Dokploy installation. It writes a
 PostgreSQL custom dump, all private object-storage media and recovery configuration (including
-secrets) as one snapshot into an encrypted, deduplicating [restic](https://restic.net) repository at
-`opendiscord-backups-private/restic` (rclone backend, bucket-scoped credentials in
-`/etc/opendiscord-backup/rclone.conf`, mode 600). restic encrypts client-side (AES-256 +
+secrets) as one snapshot into an encrypted, deduplicating [restic](https://restic.net) repository.
+The hosted operator uses Backblaze B2 (`lvxbackups/restic/dokploy/opendiscord-recovery`) through
+the native S3 backend, configured in root-only `/etc/opendiscord-backup/b2-restic.env` and loaded
+by the backup service drop-in. Self-hosters may supply `RESTIC_REPOSITORY`,
+`RESTIC_PASSWORD_FILE` and the matching backend credentials. The default remains
+`rclone:opendiscord-backup:opendiscord-backups-private/restic`, with rclone credentials in
+`/etc/opendiscord-backup/rclone.conf` (mode 600). restic encrypts client-side (AES-256 +
 Poly1305). The repository password is `/etc/opendiscord-backup/restic-password` (mode 600); its
 recovery copy is in the operator's 1Password item "openDiscord Private Backup Recovery". Without that
 copy a lost host makes the repository unreadable.
@@ -52,15 +56,18 @@ Set `OPENDISCORD_DB_CONTAINER`, `OPENDISCORD_WEB_CONTAINER`, `OPENDISCORD_COMPOS
 `OPENDISCORD_VOICE_COMPOSE_DIR` to the verified deployed resources. Run only with an outer deadline:
 systemd `TimeoutStartSec=1800` and `KillMode=control-group`. The dump has a 30-second lock-wait timeout.
 
-Encrypted age bundles written before 2026-10-22 under `daily/` stay untouched and expire through
-the existing 30-day lifecycle rule; their age identity stays in 1Password. **No lifecycle rule may
+Legacy encrypted age bundles under `daily/`, including the November 1 archive delivered by the
+central Backblaze adapter, stay untouched. Preserve their existing retention policy and the age
+identity in 1Password; the new native restic retention applies only to its dedicated repository. **No lifecycle rule may
 match the `restic/` prefix**: expiring repository objects corrupts every snapshot.
 
 #### Backup capacity budgets and early warning
 
 The owner approved an Open Beta capacity of **50 GiB stored media** on 2026-10-22. The app
 refuses uploads beyond `MEDIA_STORAGE_LIMIT_BYTES` (hosted default in `docker-compose.dokploy.yml`:
-53687091200), so accepted uploads cannot exceed what backups are sized for. The budgets live in
+53687091200), matching the live-media backup budget. Retained deleted objects and database growth
+can still exhaust the separate repository budget; this is an operating limit, not a guarantee for
+every 50 GiB workload. The budgets live in
 `scripts/backup-capacity.py`. Each run records every measurement (byte counts and limits, never
 content) in `/var/backups/opendiscord/capacity.json` before checking it:
 
@@ -100,6 +107,8 @@ test -s /etc/opendiscord-backup/restic-password || exit 1
 export RCLONE_CONFIG=/etc/opendiscord-backup/rclone.conf
 export RESTIC_PASSWORD_FILE=/etc/opendiscord-backup/restic-password
 export RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
+# Native S3/B2 instead: load the protected operator EnvironmentFile and its existing password.
+# Never apply object-expiration lifecycle rules to the dedicated restic prefix.
 # Fresh, empty repository only: store this password in 1Password, then run `restic init` once.
 # Existing repositories: use the existing password from 1Password; never reinitialize or replace it.
 restic cat config > /dev/null || exit 1
