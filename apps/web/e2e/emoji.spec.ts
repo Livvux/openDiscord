@@ -21,7 +21,7 @@ test("emoji search, insertion, local images and full reactions", async ({ browse
   await expect(composer).toHaveValue("Hello 🎉");
   await expect(composer).toBeFocused();
   await composer.press("Enter");
-  const row = page.getByRole("log").getByRole("listitem").filter({ has: page.getByRole("img", { name: "🎉", exact: true }) }).first();
+  const row = page.getByRole("log").locator("[data-message-id]").filter({ has: page.getByRole("img", { name: "🎉", exact: true }) }).first();
   await expect(row.getByRole("img", { name: "🎉", exact: true })).toHaveAttribute("src", "/twemoji/17.0.3/svg/1f389.svg");
   await openReactionPicker(row);
   const reactions = page.getByRole("dialog", { name: "Add a reaction", exact: true });

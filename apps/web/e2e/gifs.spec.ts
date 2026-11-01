@@ -20,7 +20,8 @@ test("GIF links require consent before an external media request", async ({ brow
   await composer.fill("https://media4.giphy.com/media/test/giphy.gif");
   await composer.press("Enter");
 
-  const load = page.getByRole("button", { name: "Load GIF from GIPHY" });
+  // The optimistic row is replaced on acknowledgement; test consent on the persisted message.
+  const load = page.locator("[data-message-id]").getByRole("button", { name: "Load GIF from GIPHY" });
   await expect(load).toBeVisible();
   expect(requested).toEqual([]);
   await load.click();
