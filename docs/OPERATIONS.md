@@ -39,7 +39,9 @@ by the backup service drop-in. Self-hosters may supply `RESTIC_REPOSITORY`,
 `/etc/opendiscord-backup/rclone.conf` (mode 600). restic encrypts client-side (AES-256 +
 Poly1305). The repository password is `/etc/opendiscord-backup/restic-password` (mode 600); its
 recovery copy is in the operator's 1Password item "openDiscord Private Backup Recovery". Without that
-copy a lost host makes the repository unreadable.
+copy a lost host makes the repository unreadable. The hosted B2 backend key, endpoint and bucket
+are recovered from the separate central 1Password recovery record, in its Dokploy section; recover
+both records. Historical R2 fields in the app recovery item are not the native B2 destination.
 
 - The database dump and configuration are staged only in `/dev/shm/opendiscord-backup` and removed on exit.
 - Media is mirrored incrementally (`rclone sync`) to `/var/lib/opendiscord-backup/media` (root-only, on
@@ -58,8 +60,12 @@ systemd `TimeoutStartSec=1800` and `KillMode=control-group`. The dump has a 30-s
 
 Legacy encrypted age bundles under `daily/`, including the November 1 archive delivered by the
 central Backblaze adapter, stay untouched. Preserve their existing retention policy and the age
-identity in 1Password; the new native restic retention applies only to its dedicated repository. **No lifecycle rule may
-match the `restic/` prefix**: expiring repository objects corrupts every snapshot.
+identity in 1Password; the new native restic retention applies only to its dedicated repository.
+**Never expire current repository objects by upload age**: that corrupts snapshots whose packs
+remain referenced. B2 uses a prefix-specific hidden-version rule only for
+`restic/dokploy/opendiscord-recovery/`: `daysFromUploadingToHiding=null`,
+`daysFromHidingToDeleting=1`. This permanently removes versions already hidden by restic
+pruning after a one-day grace period. The rule does not target the central legacy archive repository.
 
 #### Backup capacity budgets and early warning
 
@@ -80,6 +86,8 @@ content) in `/var/backups/opendiscord/capacity.json` before checking it:
 
 Incremental snapshots store each object once, so retained dailies no longer multiply media: a
 repository holds roughly current media + media deleted within 30 days + 30 compressed dumps.
+B2 hidden versions awaiting provider cleanup add temporary billable storage beyond restic
+`stats --mode raw-data`; the 80 GiB metric does not count those versions.
 The 20 GiB disk reserve protects PostgreSQL on the shared root disk. Raising the media capacity
 requires raising `MEDIA_STORAGE_LIMIT_BYTES`, `MEDIA_BUDGET`/`REPOSITORY_BUDGET` and disk together.
 
@@ -108,7 +116,7 @@ export RCLONE_CONFIG=/etc/opendiscord-backup/rclone.conf
 export RESTIC_PASSWORD_FILE=/etc/opendiscord-backup/restic-password
 export RESTIC_REPOSITORY=rclone:opendiscord-backup:opendiscord-backups-private/restic
 # Native S3/B2 instead: load the protected operator EnvironmentFile and its existing password.
-# Never apply object-expiration lifecycle rules to the dedicated restic prefix.
+# Never expire current repository objects by upload age; B2 may clean already-hidden versions.
 # Fresh, empty repository only: store this password in 1Password, then run `restic init` once.
 # Existing repositories: use the existing password from 1Password; never reinitialize or replace it.
 restic cat config > /dev/null || exit 1

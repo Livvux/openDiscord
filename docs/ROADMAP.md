@@ -1,5 +1,7 @@
 # Roadmap and gap analysis
 
+Current release work: [beta stabilization, 2026-11-01](BETA-STABILIZATION-2026-11-01.md).
+
 The [technical quality milestones](TECHNICAL-QUALITY-PLAN.md) track the 2026-10-29 reliability,
 Voice/mobile, recovery, capacity and independent-assurance work. Implementation and release evidence
 are tracked separately; the historical checkpoints below are not current deployment attestations.
@@ -44,8 +46,8 @@ operator policies, 16-year signup self-attestation, funding disclosure and auth-
 are implemented. Desktop/mobile automated web acceptance passes. Real HTTP/SSE characterization,
 real ClamAV-engine rejection and populated operational-backup recovery now have isolated CI evidence.
 The official instance has ClamAV configured in the app and a healthy private scanner/monitor
-(verified 2026-10-21). Isolated real-engine CI is green; current clean/EICAR production uploads through
-an authenticated browser remain an explicit acceptance gate. See [ops/scanner](../ops/scanner/README.md)
+(verified 2026-10-21). The previously recorded isolated real-engine CI evidence is separate from the current billing-blocked
+checks. Authenticated production clean upload/readback and EICAR rejection passed on 2026-11-01. See [ops/scanner](../ops/scanner/README.md)
 and [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 
 Production SFU and forced TURN/TLS transport passed controlled two-Chromium synthetic-media checks.
@@ -94,7 +96,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Communities and channels | ✅ | |
 | Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
 | Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
-| DM conversation tools | 🟡 implementation in this change | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` and candidate-specific checks/deployment required. Community typing remains a follow-up |
+| DM conversation tools | ✅ implementation | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` is included; candidate-specific checks/deployment remain required |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
 | Replies, mentions, reactions | ✅ | Mentions with autocomplete, badges and opt-in desktop notifications; replies with previews; emoji reactions (quick set, max 20 per message) |
 | Threads | ✅ | Threads on top-level messages, shown in a side panel; the channel shows a reply summary |
@@ -128,7 +130,7 @@ remain gates in [OPEN-BETA-READINESS.md](OPEN-BETA-READINESS.md).
 | Anti-raid | ✅ | Per-community invite pause, minimum account age, raid protection that auto-pauses invites after N joins in 10 minutes (default 30); all audited |
 | Sessions and permission enforcement | ✅ | Every service call re-checks membership and permissions; integration-tested |
 | IDOR, XSS, CSRF, SSRF, SQLi, privilege escalation | 🟡 release review | Tests cover non-member access, role escalation and HTML injection. User push endpoints are allowlisted; storage/SFU fetches use operator configuration. Confirmed mutation-authorization races were fixed in #126, integrated through #130 and deployed at the 2026-10-22 checkpoint; external pentest remains open |
-| Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Production web namespace passed clean/EICAR with fresh loaded signatures on 2026-10-21; authenticated production upload acceptance remains separate (THREAT-MODEL T23) |
+| Upload security | 🟡 | Images re-encoded, private authorized delivery; fail-closed ClamAV real-engine cases (#68). Authenticated production clean upload/readback and EICAR rejection passed on 2026-11-01; unavailable-engine behavior remains isolated-test evidence (THREAT-MODEL T23) |
 | Audit logs | ✅ | Moderation and role changes; never message content |
 | Secret management and key rotation | ✅ support | Native Better Auth versioned encryption keys, legacy fallback and Compose passthrough. Real TOTP/backup-code and browser tests; retain keys needed by old ciphertext/backups. Primary-key changes can invalidate cookies/tokens. No automatic bulk re-encryption or scheduled key retirement |
 | Dependency scanning | ✅ | `pnpm audit` in CI, Dependabot |
@@ -221,9 +223,9 @@ license declaration checks and federation research (D13) are complete; professio
   calls/CallKit and native push require separate work and device acceptance.
 - Desktop remains a preview: publisher signing/notarization, native notifications and full Windows/macOS
   runtime acceptance are not complete.
-- Community-wide typing indicators, cross-community search, voice-note recording, polls, forum channels,
-  scheduled messages and translated UI are not implemented. These are explicit follow-ups, not beta
-  launch requirements and not implicitly included in the DM tools.
+- Community typing and DE/EN application localization are implemented. Cross-community search,
+  voice-note recording, polls, forum channels and scheduled messages remain follow-ups, outside the
+  hosted web/PWA beta launch requirements.
 - DM search never uploads its query or decrypted index. It covers the current conversation's history
   available to the current device; unreceived keys or history before joining a group cannot be searched.
 - Deletion removes live original/update ciphertext and unlinks encrypted files for the existing object

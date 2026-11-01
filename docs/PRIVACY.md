@@ -57,6 +57,7 @@ See [PRIVATE-MESSAGES.md](PRIVATE-MESSAGES.md) and [OPEN-BETA-READINESS.md](OPEN
 | Abuse reports: reporter, target IDs, reason, decision | Review member reports | Instance administrators | Open reports remain until resolved; resolved reports are purged 180 days after resolution by maintenance. Reporter/resolver links are removed on account deletion |
 | Instance audit log | Administrative accountability | Instance administrators with a live authenticated session | Retained independently of community deletion; 180-day retention through the operator maintenance job. Stores reasons and target IDs, never copies message bodies |
 | Server logs | Debugging errors | Operator | Errors only; Caddy access logs are off by default |
+| Optional error diagnostics (`GLITCHTIP_DSN`) | Diagnose application failures | Operator-configured error monitor | Error category, release revision and static script frame locations only; no error message, account identifier, page URL, cookies, request body, breadcrumbs or conversation content. Operator controls monitor retention |
 
 There are no built-in analytics, tracking pixels, advertising identifiers or third-party fonts.
 Community message send receipts store the author, channel, random transaction ID, message reference
@@ -112,6 +113,11 @@ require membership. Instance administration separately requires global rights an
 Backups made with `scripts/backup.sh` contain all of the above. Store them encrypted, restrict access,
 and delete them on a schedule; deleted accounts disappear from the live database immediately and from
 backups when those expire.
+
+Hosted recovery snapshots retain 30 daily copies. The dedicated Backblaze repository uses a
+one-day grace period for provider cleanup of versions already hidden by pruning, with no
+upload-age expiry for current objects. Provider processing is asynchronous; logical snapshot
+expiry is not immediate physical erasure. Legacy recovery archives retain their existing policy.
 
 ## Scheduled maintenance
 
