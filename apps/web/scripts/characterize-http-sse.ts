@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, writeFile } from "node:fs/promises";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -37,6 +37,9 @@ function recordFailure(error: unknown) {
 }
 
 const origin = "http://localhost:3300";
+const replicas = Number(process.env.OPENDISCORD_LOAD_REPLICAS ?? "1");
+assert.ok(replicas === 1 || replicas === 2, "Only one or two isolated replicas are supported");
+const origins = Array.from({ length: replicas }, (_, i) => `http://localhost:${3300 + i}`);
 const connection = new URL(process.env.DATABASE_URL ?? "postgres://invalid");
 if (process.env.GITHUB_ACTIONS !== "true" || process.env.OPENDISCORD_ISOLATED_LOAD !== "1"
   || !["localhost", "127.0.0.1"].includes(connection.hostname) || connection.pathname !== "/opendiscord"
@@ -49,18 +52,36 @@ const streams: ReturnType<typeof openStream>[] = [];
 const controller = new AbortController();
 const watchdog = setTimeout(() => controller.abort(), 120_000);
 let communityId: string | undefined;
-let server: ReturnType<typeof spawn> | undefined;
+const servers: ReturnType<typeof spawn>[] = [];
+const peakRssKiB = Array.from({ length: replicas }, () => 0);
+const resourceSamples = Array.from({ length: replicas }, () => 0);
+let sampling = Promise.resolve();
+const resourceTimer = setInterval(() => {
+  sampling = sampling.then(async () => {
+    await Promise.all(servers.map(async (server, index) => {
+      if (!server.pid) return;
+      try {
+        const status = await readFile(`/proc/${server.pid}/status`, "utf8");
+        const rss = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1]);
+        if (!Number.isFinite(rss) || rss <= 0) return;
+        resourceSamples[index]++;
+        peakRssKiB[index] = Math.max(peakRssKiB[index], rss);
+      } catch { /* The owned server may have exited between samples. */ }
+    }));
+  });
+}, 100);
 const report: Record<string, unknown> = {
-  scope: "Single production-build process, real HTTP cookie-auth reads/SSE and bot-token-auth writes. Synthetic fixtures; excludes browsers, media, multi-replica capacity and production capacity/SLO claims.",
+  scope: "One or two isolated production-build processes, real HTTP cookie-auth reads/SSE and bot-token-auth writes. Synthetic fixtures; excludes browsers, media, production capacity/SLO and failover claims.",
+  replicas,
   executedMergeSha: process.env.GITHUB_SHA,
   sourceHead: process.env.OPENDISCORD_SOURCE_HEAD,
   phases, progress, statuses,
-  environment: { node: process.version, platform: process.platform, logicalCpus: cpus().length, hostMemoryMiB: Math.round(totalmem() / 1048576), resourceMeasurement: "Host metadata only; application CPU/RSS not measured." },
+  environment: { node: process.version, platform: process.platform, logicalCpus: cpus().length, hostMemoryMiB: Math.round(totalmem() / 1048576), resourceMeasurement: "Application RSS sampling attempted every 100 ms on Linux; see per-process sample counts. CPU and browser rendering not measured." },
   fixture: { readers: 20, history: 3000, historyRequests: 100, botWriters: 4, writes: 16, reconnectWrites: 1 },
   passed: false,
 };
-async function request(path: string, init: RequestInit = {}) {
-  return fetch(`${origin}${path}`, { ...init, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+async function request(path: string, init: RequestInit = {}, replica = 0) {
+  return fetch(`${origins[replica % replicas]}${path}`, { ...init, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
 }
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = performance.now() + 10_000;
@@ -70,13 +91,13 @@ async function until(check: () => boolean | Promise<boolean>) {
     await delay(20, undefined, { signal: controller.signal });
   }
 }
-function openStream(cookie: string) {
+function openStream(cookie: string, replica = 0) {
   const abort = new AbortController();
   const received = new Map<string, number>();
   let ready = false;
   let failure: unknown;
   const task = (async () => {
-    const response = await fetch(`${origin}/api/communities/${communityId}/events`, {
+    const response = await fetch(`${origins[replica % replicas]}/api/communities/${communityId}/events`, {
       headers: { cookie }, signal: AbortSignal.any([abort.signal, controller.signal]),
     });
     recordStatus("sse", response.status);
@@ -140,28 +161,33 @@ async function run() {
     enter("start-server");
     await cp(".next/static", ".next/standalone/apps/web/.next/static", { recursive: true });
     await cp("public", ".next/standalone/apps/web/public", { recursive: true });
-    server = spawn(process.execPath, [".next/standalone/apps/web/server.js"], { env: { ...process.env, PORT: "3300", HOSTNAME: "127.0.0.1" }, stdio: ["ignore", "ignore", "pipe"] });
     let serverStderrBytes = 0;
-    server.stderr?.on("data", (chunk: Buffer) => { serverStderrBytes += chunk.length; report.serverStderrBytes = serverStderrBytes; });
-    await until(async () => { assert.equal(server?.exitCode, null); return request("/api/ready").then((r) => { recordStatus("ready", r.status); return r.status === 200; }).catch(() => false); });
+    for (let replica = 0; replica < replicas; replica++) {
+      const server = spawn(process.execPath, [".next/standalone/apps/web/server.js"], { env: { ...process.env, PORT: String(3300 + replica), HOSTNAME: "127.0.0.1" }, stdio: ["ignore", "ignore", "pipe"] });
+      servers.push(server);
+      let spawnFailure: Error | undefined;
+      server.on("error", (error: Error) => { spawnFailure = error; });
+      server.stderr?.on("data", (chunk: Buffer) => { serverStderrBytes += chunk.length; report.serverStderrBytes = serverStderrBytes; });
+      await until(async () => { if (spawnFailure) throw spawnFailure; assert.equal(server.exitCode, null); return request("/api/ready", {}, replica).then((r) => { recordStatus("ready", r.status); return r.status === 200; }).catch(() => false); });
+    }
     const readPath = `/api/channels/${created.channelId}/messages`;
     enter("outsider-denial");
-    for (const path of [readPath, `/api/communities/${communityId}/events`]) {
-      const denied = await request(path, { headers: { cookie: cookies[20] } });
+    for (let replica = 0; replica < replicas; replica++) for (const path of [readPath, `/api/communities/${communityId}/events`]) {
+      const denied = await request(path, { headers: { cookie: cookies[20] } }, replica);
       recordStatus(path === readPath ? "outsider-history" : "outsider-sse", denied.status);
       assert.equal(denied.status, 404); await denied.arrayBuffer();
     }
     enter("open-streams");
-    for (const cookie of cookies.slice(0, 20)) { streams.push(openStream(cookie)); progress.streamsOpened++; }
+    for (const [index, cookie] of cookies.slice(0, 20).entries()) { streams.push(openStream(cookie, index)); progress.streamsOpened++; }
     await until(() => streams.every((s) => s.ready()));
     enter("history-reads");
     const reads: number[] = [];
     let next = 0;
     const started = performance.now();
-    await Promise.all(cookies.slice(0, 20).map(async (cookie) => {
+    await Promise.all(cookies.slice(0, 20).map(async (cookie, replica) => {
       while (next++ < 100) {
         const start = performance.now();
-        const response = await request(readPath, { headers: { cookie } });
+        const response = await request(readPath, { headers: { cookie } }, replica);
         recordStatus("history", response.status);
         assert.equal(response.status, 200);
         const page = await response.json();
@@ -179,7 +205,7 @@ async function run() {
       const response = await request(`/api/v1/channels/${created.channelId}/messages`, {
         method: "POST", headers: { authorization: `Bot ${bots[index % 4].token}`, "content-type": "application/json" },
         body: JSON.stringify({ content: `HTTP synthetic write ${index}` }),
-      });
+      }, index);
       recordStatus("write", response.status);
       assert.equal(response.status, 201);
       const result = await response.json();
@@ -198,7 +224,7 @@ async function run() {
     enter("reconnect");
     streams[0].abort.abort(); await streams[0].task;
     const reconnectStart = performance.now();
-    const reconnected = openStream(cookies[0]); streams.push(reconnected); progress.streamsOpened++;
+    const reconnected = openStream(cookies[0], replicas - 1); streams.push(reconnected); progress.streamsOpened++;
     await until(() => reconnected.ready());
     const reconnectReadyMs = performance.now() - reconnectStart;
     enter("sentinel");
@@ -221,12 +247,16 @@ async function run() {
       }
     } finally {
       enter("server-cleanup");
-      if (server) {
+      clearInterval(resourceTimer);
+      await sampling;
+      report.resources = peakRssKiB.map((rss, index) => ({ samples: resourceSamples[index], peakRssKiB: resourceSamples[index] ? rss : null }));
+      for (const server of servers) {
+        if (!server.pid || server.exitCode !== null || server.signalCode !== null) continue;
         server.kill("SIGTERM");
-        await Promise.race([new Promise<void>((resolve) => server!.once("exit", () => resolve())), delay(5000)]);
-        if (server.exitCode === null && server.signalCode === null) { server.kill("SIGKILL"); await new Promise<void>((resolve) => server!.once("exit", () => resolve())); }
+        await Promise.race([new Promise<void>((resolve) => server.once("exit", () => resolve())), delay(5000)]);
+        if (server.exitCode === null && server.signalCode === null) { server.kill("SIGKILL"); await new Promise<void>((resolve) => server.once("exit", () => resolve())); }
       }
-      report.serverExit = { code: server?.exitCode ?? null, signal: server?.signalCode ?? null };
+      report.serverExits = servers.map((server) => ({ code: server.exitCode, signal: server.signalCode }));
       enter("fixture-cleanup");
       if (rateKeys.length) await db.delete(applicationRateLimit).where(inArray(applicationRateLimit.key, rateKeys));
       if (communityId) await db.delete(community).where(eq(community.id, communityId));
@@ -237,6 +267,7 @@ async function run() {
 }
 void run().catch((error: unknown) => { recordFailure(error); report.passed = false; report.failure = "Harness assertion or bounded operation failed; credentials and payloads omitted."; process.exitCode = 1; }).finally(async () => {
   clearTimeout(watchdog);
+  clearInterval(resourceTimer);
   await writeFile("http-sse-characterization.json", `${JSON.stringify(report, null, 2)}\n`);
   await db.$client.end();
 });

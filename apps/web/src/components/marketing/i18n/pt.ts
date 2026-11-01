@@ -12,7 +12,7 @@ export const pt: Messages = {
     selfHost: "Auto-hospedar",
     roadmap: "Roadmap",
     signIn: "Entrar",
-    join: "Entrar na alfa",
+    join: "Criar uma conta",
     language: "Idioma",
   },
   hero: {
@@ -102,7 +102,7 @@ export const pt: Messages = {
     stages: [
       {
         label: "Agora",
-        title: "Alfa fechado",
+        title: "Teste público",
         items: ["Canais privados, cargos, moderação", "Menções, threads, busca, reações", "Voz, vídeo e compartilhamento de tela", "Bots, webhooks, API pública", "DMs individuais e de grupo criptografadas e chamadas por DM", "Recursos, regras e controles de retenção", "Emojis e figurinhas próprios", "Canais públicos e descoberta"],
       },
       {
@@ -120,8 +120,8 @@ export const pt: Messages = {
   footer: {
     titleStart: "Traga sua comunidade",
     titleAccent: "para casa.",
-    lead: "Entre na alfa por convite ou veja quanto custa manter a instância hospedada.",
-    join: "Entrar na alfa",
+    lead: "Experimente a instância hospedada ou veja quanto custa mantê-la.",
+    join: "Criar uma conta",
     funding: "Financiamento e custos",
     tagline: "Mentes abertas. Mais brilhantes juntos.",
     nav: "Rodapé",

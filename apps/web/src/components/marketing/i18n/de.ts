@@ -12,7 +12,7 @@ export const de: Messages = {
     selfHost: "Selbst hosten",
     roadmap: "Roadmap",
     signIn: "Anmelden",
-    join: "Zur Alpha",
+    join: "Konto erstellen",
     language: "Sprache",
   },
   hero: {
@@ -102,7 +102,7 @@ export const de: Messages = {
     stages: [
       {
         label: "Jetzt",
-        title: "Geschlossene Alpha",
+        title: "Öffentliche Testphase",
         items: ["Private Kanäle, Rollen, Moderation", "Erwähnungen, Threads, Suche, Reaktionen", "Sprache, Video und Bildschirmfreigabe", "Bots, Webhooks, öffentliche API", "Verschlüsselte 1:1-/Gruppen-DMs und DM-Anrufe", "Einsprüche, Regeln und Aufbewahrungsfristen", "Eigene Emojis und Sticker", "Öffentliche Kanäle und Verzeichnis"],
       },
       {
@@ -120,8 +120,8 @@ export const de: Messages = {
   footer: {
     titleStart: "Hol deine Community",
     titleAccent: "nach Hause.",
-    lead: "Mach mit bei der Alpha mit Einladung – oder sieh dir an, was der Betrieb der gehosteten Instanz kostet.",
-    join: "Zur Alpha",
+    lead: "Teste die gehostete Instanz oder sieh dir an, was ihr Betrieb kostet.",
+    join: "Konto erstellen",
     funding: "Finanzierung und Betriebskosten",
     tagline: "Offen denken. Gemeinsam heller.",
     nav: "Fußzeile",

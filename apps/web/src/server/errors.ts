@@ -1,4 +1,6 @@
 import { unstable_rethrow } from "next/navigation";
+import { sanitizedError } from "@/lib/error-report-client";
+import { reportError } from "./error-report";
 
 export type AppErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "rate_limited" | "conflict" | "call_full";
 
@@ -38,6 +40,7 @@ export async function toResult<T>(fn: () => Promise<T>): Promise<ActionResult<T>
     // Rethrow Next.js control flow (redirect/notFound) untouched.
     unstable_rethrow(error);
     console.error("[action] unexpected error", error);
+    await reportError(sanitizedError(error, "server-action"));
     return { ok: false, error: "Something went wrong. Please try again." };
   }
 }

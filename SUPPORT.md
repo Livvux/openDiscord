@@ -1,7 +1,9 @@
 # Support and known limitations
 
-OpenDiscord remains Closed Alpha. The proposed hosted web/PWA release `0.2.0-beta.1` is not
-published or approved. Track its blockers in [OPEN-BETA-READINESS.md](docs/OPEN-BETA-READINESS.md).
+The official instance accepts public registrations. The hosted web/PWA release `0.2.0-beta.1`
+remains an unreleased candidate. Current work and evidence are recorded in
+[BETA-STABILIZATION-2026-11-01.md](docs/BETA-STABILIZATION-2026-11-01.md);
+[OPEN-BETA-READINESS.md](docs/OPEN-BETA-READINESS.md) retains the historical gate ledger.
 
 Support is best effort by the project maintainers, without a response-time or uptime commitment.
 Use [GitHub issues](https://github.com/Livvux/openDiscord/issues) for reproducible product bugs:
@@ -27,5 +29,6 @@ Known acceptance limits:
 - Physical-device screen sharing, hostile-network TURN/TLS, screen-reader acceptance and actual
   push/inbox alert delivery must be recorded separately. Synthetic media, axe and SMTP submission
   do not certify those outcomes.
-- The current full-bundle backup budget is unsuitable for increased media traffic. No production
-  capacity or service-level objective has been established. Public admissions remain gated.
+- Backblaze B2 is the hosted recovery destination. Database snapshots and encrypted recovery
+  archives have separate schedules; successful delivery is not an application-restore proof.
+  No production concurrency or service-level objective has been established.

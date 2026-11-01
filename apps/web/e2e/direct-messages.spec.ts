@@ -196,7 +196,8 @@ test("real SAS, ciphertext transport, offline delivery, persistent history and r
   await openConversation(alice, "Private Charlie");
   await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("");
   await openConversation(alice, "Private Bob");
-  await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("");
+  // Drafts are retained in memory for their own conversation; they never follow the user to Charlie.
+  await expect(alice.getByLabel("Encrypted message", { exact: true })).toHaveValue("Draft intended only for Bob");
   await charlie.context().close();
 
   await bob.route("**/api/dm?conversation=*", async (route) => {

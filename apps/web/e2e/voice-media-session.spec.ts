@@ -2,6 +2,7 @@ import { expect, test, type JSHandle, type Page, type Request, type Response } f
 import type { MediaHarness } from "./fixtures/voice-media-session";
 import { buildVoiceMediaHarness } from "./fixtures/voice-media-build";
 import { legitimateStartupConflict, type MediaEpoch } from "./fixtures/voice-media-observer";
+import { voiceKeyingBudgetMs } from "../src/lib/voice/retry";
 import { createCommunity, createInviteLink, joinAsNewUser, newUserPage, signUp } from "./helpers";
 
 type Handle = JSHandle<MediaHarness>;
@@ -16,26 +17,27 @@ function controlRequest(request: Request, origin: string): { action: string; exp
   return { action: body.action, expectedGeneration };
 }
 async function verify(a: Handle, b: Handle) {
+  // Observe each native handshake phase within the existing public HTTP fixture's 12-second bound.
   const aId = await a.evaluate(h => h.view().selfMemberId), bId = await b.evaluate(h => h.view().selfMemberId);
   const [first, second, firstId, secondId] = aId < bId ? [a, b, aId, bId] as const : [b, a, bId, aId] as const;
   await first.evaluate((h, id) => h.request(id), secondId);
-  await expect.poll(() => second.evaluate((h, id) => h.view().sas.some(s => s.peer.memberId === id), firstId)).toBe(true);
+  await expect.poll(() => second.evaluate((h, id) => h.view().sas.some(s => s.peer.memberId === id), firstId), { timeout: 12_000 }).toBe(true);
   const remote = await second.evaluate((h, id) => h.view().sas.find(s => s.peer.memberId === id)!.handle, firstId);
   await second.evaluate((h, handle) => h.step(handle, "accept"), remote);
-  await expect.poll(() => first.evaluate((h, id) => h.view().sas.some(s => s.peer.memberId === id && s.ready), secondId)).toBe(true);
+  await expect.poll(() => first.evaluate((h, id) => h.view().sas.some(s => s.peer.memberId === id && s.ready), secondId), { timeout: 12_000 }).toBe(true);
   const local = await first.evaluate((h, id) => h.view().sas.find(s => s.peer.memberId === id)!.handle, secondId);
   await first.evaluate((h, handle) => h.step(handle, "start"), local);
-  // Request.ready predates SAS start. Allow the same one-poll delivery window
-  // as the accepted native integration fixture before accepting real SAS.
-  await second.evaluate(() => new Promise(resolve => setTimeout(resolve, 1_200)));
+  // The product UI accepts SAS only after the native SAS object exists.
+  await expect.poll(() => second.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)?.hasSas ?? false, remote), { timeout: 12_000 }).toBe(true);
   await second.evaluate((h, handle) => h.step(handle, "accept-sas"), remote);
-  await expect.poll(() => first.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)?.emojiIndices?.length ?? 0, local)).toBe(7);
+  await expect.poll(() => first.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)?.emojiIndices?.length ?? 0, local), { timeout: 12_000 }).toBe(7);
   const lhs = await first.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)!.emojiIndices, local);
-  await expect.poll(() => second.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)?.emojiIndices ?? null, remote)).toEqual(lhs);
+  await expect.poll(() => second.evaluate((h, handle) => h.view().sas.find(s => s.handle === handle)?.emojiIndices ?? null, remote), { timeout: 12_000 }).toEqual(lhs);
   await first.evaluate((h, handle) => h.step(handle, "confirm"), local);
   await second.evaluate((h, handle) => h.step(handle, "confirm"), remote);
-  await expect.poll(() => first.evaluate((h, handle) => h.view().sas.some(s => s.handle === handle && s.done), local)).toBe(true);
-  await expect.poll(() => second.evaluate((h, handle) => h.view().sas.some(s => s.handle === handle && s.done), remote)).toBe(true);
+  // Completion includes native poll/ack cycles; use the existing public HTTP fixture's 12-second bound.
+  await expect.poll(() => first.evaluate((h, handle) => h.view().sas.some(s => s.handle === handle && s.done), local), { timeout: 12_000 }).toBe(true);
+  await expect.poll(() => second.evaluate((h, handle) => h.view().sas.some(s => s.handle === handle && s.done), remote), { timeout: 12_000 }).toBe(true);
   await first.evaluate((h, id) => h.admit(id), secondId); await second.evaluate((h, id) => h.admit(id), firstId);
 }
 
@@ -49,6 +51,7 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
     type TokenRecord = { epoch: MediaEpoch; pageIndex: number; status?: number; protocolFinished: boolean; failure: "none" | "aborted" | "network" };
     type RequestMeta = { startup: boolean; expectedGeneration: number; token?: TokenRecord };
     const requests = new WeakMap<Request, RequestMeta>(), tokens: TokenRecord[] = [];
+    const httpCounts: Record<string, number>[] = [{}, {}, {}];
     const conflicts: { method: string; path: string; action: string; status: number; startup: boolean; expectedGeneration: number }[][] = [[], [], []];
     const resource409s = [0, 0, 0], removeListeners: (() => void)[] = [];
     let epoch: MediaEpoch = "initial", startup = true, primaryFailure = false;
@@ -59,7 +62,8 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       finally { clearTimeout(timer); }
     }));
     async function grantBarrier(phase: MediaEpoch): Promise<void> {
-      await expect.poll(() => tokens.filter(record => record.epoch === phase).length, { timeout: 10_000 }).toBe(3);
+      // Three peers have a 26s production keying budget; token creation follows key exchange.
+      await expect.poll(() => tokens.filter(record => record.epoch === phase).length, { timeout: voiceKeyingBudgetMs(2) }).toBe(3);
       const ordinal = phase === "initial" ? 1 : 2;
       for (const handle of handles) await expect.poll(() => handle.evaluate(h => h.grants().length), { timeout: 10_000 }).toBe(ordinal);
       for (const handle of handles) await expect.poll(() => handle.evaluate((h, ordinal) => h.grants()[ordinal - 1]?.settled, ordinal), { timeout: 12_000 }).toBe(true);
@@ -116,6 +120,9 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
           const path = new URL(response.url()).pathname;
           if (path.startsWith("/__voice-media-ci/") && response.ok()) assets.add(path);
           const request = response.request(), input = controlRequest(request, origin); if (!input) return;
+          const action = ["join", "heartbeat", "leave", "token", "crypto"].includes(input.action) ? input.action : "other";
+          const category = `${action}:${response.status()}`;
+          httpCounts[index][category] = (httpCounts[index][category] ?? 0) + 1;
           const meta = requests.get(request);
           if (response.status() === 409) conflicts[index].push({ method: request.method(), path, action: input.action, status: response.status(), startup: meta?.startup ?? false, expectedGeneration: meta?.expectedGeneration ?? 0 });
           if (input.action !== "token") return;
@@ -145,7 +152,9 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       await verify(handles[0], handles[1]); await verify(handles[0], handles[2]); await verify(handles[1], handles[2]);
       const sorted = await Promise.all(handles.map(async handle => ({ handle, id: await handle.evaluate(h => h.view().selfMemberId) })));
       sorted.sort((a, b) => a.id.localeCompare(b.id));
-      for (const { handle } of sorted.slice(1)) await handle.evaluate(h => h.confirm());
+      // Independent listeners consent concurrently; do not spend one listener's context
+      // deadline waiting for another browser's action before starting the leader.
+      await Promise.all(sorted.slice(1).map(({ handle }) => handle.evaluate(h => h.confirm())));
       await sorted[0].handle.evaluate(h => h.confirm());
       await grantBarrier("initial");
       for (const handle of handles) {
@@ -213,7 +222,7 @@ test.describe("unactivated production MediaSession real cookie/native/SFU listen
       expect(errors).toEqual([]);
     } catch (error) {
       primaryFailure = true;
-      await test.info().attach("media-state-diagnostic.json", { contentType: "application/json", body: JSON.stringify({ epoch, states: await diagnostics(), tokenRequests: tokens, grants: await Promise.all(handles.map(handle => handle.evaluate(h => h.grants()).catch(() => []))) }) });
+      await test.info().attach("media-state-diagnostic.json", { contentType: "application/json", body: JSON.stringify({ epoch, states: await diagnostics(), httpCounts, tokenRequests: tokens, grants: await Promise.all(handles.map(handle => handle.evaluate(h => h.grants()).catch(() => []))) }) });
       throw error;
     } finally {
       await Promise.all(handles.map(handle => handle.evaluate(h => h.settleGrants()).catch(() => {})));

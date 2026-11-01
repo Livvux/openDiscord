@@ -58,6 +58,16 @@ test("landing page is available in other languages with hreflang alternates", as
   }
 });
 
+test("localized navigation fits a narrow phone viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const path of ["/", "/de", "/es", "/fr", "/pt"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), path).toBe(true);
+  }
+});
+
 test("sends the security headers on every page, with or without a TLS proxy in front", async ({ request }) => {
   const headers = (await request.get("/")).headers();
   expect(headers["strict-transport-security"]).toBe("max-age=31536000");

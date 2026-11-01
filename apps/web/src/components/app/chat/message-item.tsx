@@ -414,7 +414,7 @@ const PENDING_STATUS: Record<OutboxState, [string, string]> = {
 export function PendingItem({ content, mentions, images, state }: { content: string; mentions: Mention[]; images: number; state: OutboxState }) {
   const [label, status] = PENDING_STATUS[state];
   return (
-    <li className="flex gap-4 py-0.5 pr-12 pl-4 opacity-60" aria-label={label}>
+    <li className="flex gap-4 py-0.5 pr-12 pl-4" aria-label={label}>
       <div className="w-10 shrink-0" />
       <div className="min-w-0 flex-1 text-base leading-[1.375rem] break-words whitespace-pre-wrap text-foreground">
         <MessageContent content={content} mentions={mentions} />

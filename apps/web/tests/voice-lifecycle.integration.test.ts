@@ -529,10 +529,12 @@ describe("integration membership and expiry boundaries", () => {
   });
   it("an expired own session denial does not claim reaping; independent sweep commits it", async () => {
     const f = await fixture();
-    await db.update(session).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(session.id, f.sessionId));
+    // Only this fixture is eligible within the bounded sweep's historical cutoff.
+    const now = new Date("2001-01-01T00:00:00Z");
+    await db.update(session).set({ expiresAt: new Date(now.getTime() - 1) }).where(eq(session.id, f.sessionId));
     await expect(heartbeatVoiceControl({ userId: f.userId, sessionId: f.sessionId, memberId: f.snapshot.memberId, secret: f.secret }, { callId: f.snapshot.callId, memberId: f.snapshot.memberId, joinNonce: f.snapshot.joinNonce, expectedGeneration: f.snapshot.generation })).rejects.toMatchObject({ code: "forbidden" });
     expect(await state(f.snapshot.memberId)).toBe("waiting");
-    const result = await sweepVoiceLifecycle({ apply: true, now: new Date(), batchSize: 1000, maxBatches: 1 });
+    const result = await sweepVoiceLifecycle({ apply: true, now, batchSize: 1000, maxBatches: 1 });
     expect(result.closedCallIds).toContain(f.snapshot.callId);
     expect(await state(f.snapshot.memberId)).toBe("left");
   });

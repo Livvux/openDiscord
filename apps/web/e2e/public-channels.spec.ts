@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, signUp } from "./helpers";
+import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, openMessageMenu, signUp } from "./helpers";
 
 test("explicit public creation, member consent, anonymous discovery, report and terminal unpublish", async ({ browser, isMobile }, testInfo) => {
   const owner = await newUserPage(browser);
@@ -33,7 +33,7 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   await expect(member.getByText(/Public channel: your display name/).filter({ visible: true })).toBeVisible();
   const composer = member.getByRole("textbox", { name: "Message #public-workshop", exact: true });
   await composer.fill("Hello from the explicitly public workshop <script>alert('no')</script>");
-  await expect(member.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  await expect(member.getByRole("button", { name: "Send message", exact: true, includeHidden: true })).toBeDisabled();
   await member.getByRole("checkbox", { name: "I acknowledge public posting in this channel.", exact: true }).check();
   const posting = member.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === appPath);
   await member.getByRole("button", { name: "Send message", exact: true }).click();
@@ -44,8 +44,13 @@ test("explicit public creation, member consent, anonymous discovery, report and 
   const messageId = await posted.getAttribute("data-message-id");
   expect(messageId).toMatch(/^[0-9a-f-]{36}$/);
   const row = member.locator(`[data-message-id="${messageId}"]`);
-  await row.hover();
-  await row.getByRole("button", { name: "Edit message", exact: true }).click();
+  if (isMobile) {
+    await openMessageMenu(row);
+    await member.getByRole("menuitem", { name: "Edit message", exact: true }).click();
+  } else {
+    await row.hover();
+    await row.getByRole("button", { name: "Edit message", exact: true }).click();
+  }
   await row.getByRole("textbox", { name: "Edit message", exact: true }).fill("Edited public workshop text");
   await expect(row.getByRole("button", { name: "save", exact: true })).toBeDisabled();
   await row.getByRole("checkbox", { name: "I acknowledge publishing this edit.", exact: true }).check();
