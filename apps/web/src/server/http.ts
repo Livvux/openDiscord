@@ -1,5 +1,7 @@
 import { unstable_rethrow } from "next/navigation";
 import { AppError, forbidden, HTTP_STATUS } from "./errors";
+import { sanitizedError } from "@/lib/error-report-client";
+import { reportError } from "./error-report";
 
 /** JSON error response for route handlers; unexpected errors are logged, not leaked. */
 export function errorResponse(error: unknown): Response {
@@ -9,6 +11,7 @@ export function errorResponse(error: unknown): Response {
     return Response.json({ error: error.message }, { status: HTTP_STATUS[error.code] });
   }
   console.error("[api] unexpected error", error);
+  void reportError(sanitizedError(error, "server-route"));
   return Response.json({ error: "Something went wrong." }, { status: 500 });
 }
 
