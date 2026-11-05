@@ -1,4 +1,4 @@
-FROM node:25-alpine AS base
+FROM node:26-alpine AS base
 # The image bundles Yarn launchers that conflict with Corepack's shims.
 RUN rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     && npm install --global corepack@0.34.5 \
@@ -18,7 +18,7 @@ ARG SOURCE_COMMIT=unverified
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 CMD ["pnpm", "--filter", "web", "db:migrate"]
 
-FROM node:25-alpine AS web
+FROM node:26-alpine AS web
 ARG SOURCE_COMMIT=unverified
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
