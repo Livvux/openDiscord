@@ -126,7 +126,7 @@ function withRows(rows: { id: string; top: number; bottom: number }[]) {
 
 const props: ComponentProps<typeof ChannelChat> = {
   channel: { id: "channel", name: "general", topic: null, kind: "text", categoryId: null, permissions: 0,
-    isPrivate: true, unread: false, mentions: 0, lastReadId: null },
+    isPrivate: true, notifications: null, unread: false, mentions: 0, lastReadId: null },
   initialPage: { messages: [], hasMore: true }, currentUserId: "reader", canSend: true, canModerate: false,
   mediaEnabled: false, communityId: "community", lastReadId: null, blockedIds: [],
 };

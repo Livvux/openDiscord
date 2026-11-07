@@ -9,6 +9,7 @@ import { VoiceRoom } from "@/components/app/voice/voice-room";
 import { voiceEnabled } from "@/server/voice";
 import { HashIcon, Volume2Icon } from "lucide-react";
 import { SearchDialog } from "@/components/app/search-dialog";
+import { ChannelNotifications } from "@/components/app/channel-notifications";
 import { MemberListPanel, MemberListToggle } from "@/components/app/member-list";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { mediaEnabled } from "@/server/media";
@@ -53,6 +54,7 @@ async function Channel({ params, searchParams }: PageProps<"/app/c/[communityId]
           <p className="hidden min-w-0 truncate border-l pl-3 text-sm text-muted-foreground sm:block">{channel.topic}</p>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1 text-muted-foreground [&>button]:hover:text-foreground">
+          <ChannelNotifications key={channel.id} channelId={channel.id} channelName={channel.name} level={channel.notifications} communityLevel={view.notifications} />
           {channel.kind === "text" && <PinnedDialog channelId={channel.id} channelName={channel.name} />}
           {has(view.authority, Permission.ManageChannels) && (
             <ChannelSettingsDialog

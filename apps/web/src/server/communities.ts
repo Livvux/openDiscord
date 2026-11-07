@@ -15,6 +15,7 @@ import { lockVoiceLifecycle } from "./voice-locks";
 import { captureVoiceCapabilities, invalidateLostVoiceCapabilities, invalidateVoiceMembership } from "./voice-control";
 import { NOTHING_UNREAD, unreadState } from "./unread";
 import { listed } from "./discovery";
+import { channelNotificationLevels } from "./presence";
 import { z } from "zod";
 import { channelName, channelTopic, communityName, inviteCode, inviteOptions, parse, uuid } from "./validation";
 
@@ -40,6 +41,8 @@ export interface ChannelSummary {
   permissions: number;
   /** Hidden from the default role. */
   isPrivate: boolean;
+  /** The viewer's own level for this channel; null follows the community's. */
+  notifications: "mentions" | "muted" | null;
   unread: boolean;
   mentions: number;
   lastReadId: string | null;
@@ -123,8 +126,8 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
   const visible = rows
     .map((r) => ({ ...r, permissions: perms.get(r.id)!.permissions, isPrivate: hidden.some((h) => h.channelId === r.id) }))
     .filter((r) => (r.permissions & Permission.ViewChannels) !== 0);
-  const unread = await unreadState(userId, visible.map((r) => r.id));
-  const channels = visible.map((r) => ({ ...r, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
+  const [unread, levels] = await Promise.all([unreadState(userId, visible.map((r) => r.id)), channelNotificationLevels(userId, visible.map((r) => r.id))]);
+  const channels = visible.map((r) => ({ ...r, notifications: levels.get(r.id) ?? null, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
   const [own] = await db.select({ notifications: member.notifications }).from(member)
     .where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
   return {
