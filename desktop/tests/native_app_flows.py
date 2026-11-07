@@ -415,8 +415,12 @@ class Native:
                 metadata['dm_pointer_capability'] = 'unsupported'
             raise
         metadata['dm_pointer_capability'] = 'supported'
+        dm_progress(self.profile, 'open_message_actions')
+        actions = unique('/element/' + message + '/elements', DM_MENU_XPATH)
+        wait(lambda: self.command('GET', '/element/' + actions + '/displayed'))
+        self.command('POST', '/element/' + actions + '/click', {})
         dm_progress(self.profile, 'locate_private_message_link')
-        link = unique('/element/' + message + '/elements', DM_LINK_XPATH)
+        link = unique('/elements', DM_LINK_XPATH)
         dm_progress(self.profile, 'await_private_message_link_visible')
         wait(lambda: self.command('GET', '/element/' + link + '/displayed'))
         dm_progress(self.profile, 'await_private_message_link_enabled')
@@ -636,13 +640,15 @@ def auth_progress(profile, action):
 
 
 DM_MESSAGE_XPATH = '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]]'
-DM_LINK_XPATH = './/a[@aria-label="Message Native Bob privately"]'
+DM_MENU_XPATH = './/button[@aria-label="More message actions"]'
+# The private-message entry lives in the message's actions menu, rendered outside the row.
+DM_LINK_XPATH = '//*[@role="menuitem"][normalize-space(.)="Message Native Bob privately"]'
 DM_COMPOSER_XPATH = '//textarea[@id=//label[starts-with(normalize-space(.),"Message #")]/@for]'
 DM_ACTIONS = {
     'open_member_channel', 'locate_community_composer', 'fill_community_message',
     'send_community_message', 'await_sender_message_commit', 'open_owner_channel',
     'await_owner_channel', 'locate_community_message',
-    'hover_community_message', 'locate_private_message_link',
+    'hover_community_message', 'open_message_actions', 'locate_private_message_link',
     'await_private_message_link_visible', 'await_private_message_link_enabled',
     'click_private_message_link', 'send_message_request', 'open_member_inbox',
     'select_message_request', 'accept_message_request', 'await_verify_device',
@@ -1447,7 +1453,7 @@ def main():
                 email = alice.signup('Native Alice')
                 bob.signup('Native Bob')
                 auth_progress(alice.profile, 'open_account_settings')
-                alice.goto('/app/settings')
+                alice.goto('/app/settings#Sessions-heading')
                 auth_progress(alice.profile, 'sign_out')
                 alice.click('Sign out')
                 auth_progress(alice.profile, 'await_signout_navigation')
@@ -1503,6 +1509,8 @@ def main():
                 metadata['attachment'] = {'sha256': hashlib.sha256(payload).hexdigest(), 'bytes': len(payload), 'outsider_status': status}
             with stage('community_export'):
                 alice.click('Community settings', 'a')
+                # The settings modal shows one category at a time (#153).
+                alice.click('Export')
                 exported = sandbox / 'community.json'
                 alice.save(exported, lambda: alice.click('Download community export', 'a'))
                 data = complete_json(exported, export_shape)
@@ -1598,7 +1606,7 @@ def main():
                 recovery.unlink()
             with stage('logout'):
                 dm_progress(bob.profile, 'open_logout_settings')
-                bob.goto('/app/settings')
+                bob.goto('/app/settings#Sessions-heading')
                 dm_progress(bob.profile, 'sign_out')
                 bob.click('Sign out')
                 dm_progress(bob.profile, 'await_signout_navigation')

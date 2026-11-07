@@ -43,6 +43,14 @@ class ObservedWorker extends StrictVoiceWorker {
       if (data.readableStream instanceof ReadableStream && data.writableStream instanceof WritableStream) {
         const direction = message.kind;
         if (direction === "encode") metrics.encodeSetups++; else metrics.decodeSetups++;
+        // Chromium on macOS decodes only key frames once receive frames hop through the main thread,
+        // so receive streams go straight to the worker (as in the product) unless the test must tamper.
+        if (direction === "decode" && currentMedia === "video" && currentScenario !== "tamper") {
+          observedDecode = false;
+          if (Array.isArray(transferOrOptions)) super.postMessage(message, transferOrOptions);
+          else super.postMessage(message, transferOrOptions);
+          return;
+        }
         const observe = new TransformStream<Frame, Frame>({ transform: (frame, controller) => {
           if (direction === "encode") {
             this.originals.set(frame.timestamp, new Uint8Array(frame.data.slice(0)));
@@ -79,8 +87,11 @@ class ObservedWorker extends StrictVoiceWorker {
 }
 
 let currentScenario: Scenario = "normal";
+let observedDecode = true;
+let currentMedia: Media = "audio";
 async function start(input: { url: string; senderToken: string; receiverToken: string; scenario: Scenario; media?: Media }): Promise<void> {
   currentScenario = input.scenario;
+  currentMedia = input.media ?? "audio"; observedDecode = true;
   const failure = (reason: string) => {
     if (metrics.framesAtFailure === null) metrics.framesAtFailure = metrics.decoded;
     metrics.errors.push(reason);
@@ -168,6 +179,8 @@ async function snapshot(): Promise<Metrics> {
     if (entry.type !== "inbound-rtp") return;
     if (typeof entry.totalAudioEnergy === "number") metrics.energy = entry.totalAudioEnergy;
     if (typeof entry.framesDecoded === "number") metrics.framesDecoded = entry.framesDecoded;
+    // Unobserved receive streams: only frames the worker decrypted can reach the decoder.
+    if (!observedDecode && typeof entry.framesDecoded === "number") metrics.decoded = entry.framesDecoded;
     if (typeof entry.frameWidth === "number") metrics.videoWidth = entry.frameWidth;
     const codec = report.get(entry.codecId);
     if (typeof codec?.mimeType === "string") metrics.codec = codec.mimeType;
