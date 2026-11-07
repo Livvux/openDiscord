@@ -782,21 +782,21 @@ class NativeSupportTests(unittest.TestCase):
                             client.wait_channel(path)
                         self.assertEqual(clock[0], 30)
 
-    def test_dm_real_pointer_reveals_only_the_uniquely_scoped_message_link(self):
-        for failure in [None, 'ambiguous_message', 'ambiguous_link', 'unsupported', 'disconnected']:
+    def test_dm_real_pointer_opens_the_scoped_message_menu_and_its_unique_entry(self):
+        message_xpath = '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]][@data-message-id="018f1234-1234-7000-8000-123456789abc"]'
+        for failure in [None, 'ambiguous_message', 'ambiguous_menu', 'ambiguous_link', 'unsupported', 'disconnected']:
             with self.subTest(failure=failure):
                 client = flows.Native.__new__(flows.Native)
                 client.profile = 0
                 hovered = False
+                menu_open = False
                 events = []
 
                 def command(method, path, body=None):
-                    nonlocal hovered
+                    nonlocal hovered, menu_open
                     events.append((method, path, body))
-                    if (method, path) == ('POST', '/elements'):
-                        # A global author-link lookup would also select an unrelated message.
-                        self.assertEqual(body, {'using': 'xpath', 'value':
-                            '//li[@data-message-id][.//div[normalize-space(.)="Native community greeting"]][@data-message-id="018f1234-1234-7000-8000-123456789abc"]'})
+                    if (method, path) == ('POST', '/elements') and body['value'] == message_xpath:
+                        # A global author lookup would also select an unrelated message.
                         return [{flows.ELEMENT: 'message'}] * (2 if failure == 'ambiguous_message' else 1)
                     if (method, path) == ('GET', '/element/message/displayed'):
                         return True
@@ -814,15 +814,24 @@ class NativeSupportTests(unittest.TestCase):
                         return None
                     if (method, path) == ('POST', '/element/message/elements'):
                         self.assertTrue(hovered)
-                        self.assertEqual(body, {'using': 'xpath', 'value': './/a[@aria-label="Message Native Bob privately"]'})
-                        return [{flows.ELEMENT: 'scoped-link'}] * (2 if failure == 'ambiguous_link' else 1)
-                    if (method, path) == ('GET', '/element/scoped-link/displayed'):
+                        self.assertEqual(body, {'using': 'xpath', 'value': flows.DM_MENU_XPATH})
+                        return [{flows.ELEMENT: 'menu'}] * (2 if failure == 'ambiguous_menu' else 1)
+                    if (method, path) == ('GET', '/element/menu/displayed'):
                         return hovered
-                    if (method, path) == ('GET', '/element/scoped-link/enabled'):
-                        self.assertEqual(events[-2][:2], ('GET', '/element/scoped-link/displayed'))
+                    if (method, path) == ('POST', '/element/menu/click'):
+                        menu_open = True
+                        return None
+                    if (method, path) == ('POST', '/elements'):
+                        self.assertTrue(menu_open)
+                        self.assertEqual(body, {'using': 'xpath', 'value': flows.DM_LINK_XPATH})
+                        return [{flows.ELEMENT: 'entry'}] * (2 if failure == 'ambiguous_link' else 1)
+                    if (method, path) == ('GET', '/element/entry/displayed'):
+                        return menu_open
+                    if (method, path) == ('GET', '/element/entry/enabled'):
+                        self.assertEqual(events[-2][:2], ('GET', '/element/entry/displayed'))
                         return True
-                    if (method, path) == ('POST', '/element/scoped-link/click'):
-                        self.assertEqual(events[-2][:2], ('GET', '/element/scoped-link/enabled'))
+                    if (method, path) == ('POST', '/element/entry/click'):
+                        self.assertEqual(events[-2][:2], ('GET', '/element/entry/enabled'))
                         return None
                     self.fail('Unexpected command: no JS, style mutation, navigation or action replay allowed')
 
@@ -835,12 +844,14 @@ class NativeSupportTests(unittest.TestCase):
                         client.open_private_message("018f1234-1234-7000-8000-123456789abc")
                     self.assertEqual(sum(path == '/actions' for _, path, _ in events),
                                      0 if failure == 'ambiguous_message' else 1)
-                    self.assertEqual(sum(path.endswith('/click') for _, path, _ in events), 0 if failure else 1)
+                    self.assertEqual(sum(path == '/element/entry/click' for _, path, _ in events), 0 if failure else 1)
+                    self.assertEqual(sum(path == '/element/menu/click' for _, path, _ in events),
+                                     1 if failure in (None, 'ambiguous_link') else 0)
                     if failure == 'unsupported':
                         self.assertEqual(flows.metadata['dm_pointer_capability'], 'unsupported')
                     self.assertNotIn('private-value', json.dumps(flows.metadata))
 
-    def test_dm_hidden_link_times_out_without_second_hover_or_click(self):
+    def test_dm_hidden_entry_times_out_without_second_hover_or_click(self):
         client = flows.Native.__new__(flows.Native)
         client.profile = 0
         events = []
@@ -849,17 +860,19 @@ class NativeSupportTests(unittest.TestCase):
         def command(method, path, body=None):
             events.append(path)
             if path == '/elements':
-                return [{flows.ELEMENT: 'message'}]
+                return [{flows.ELEMENT: 'entry' if body['value'] == flows.DM_LINK_XPATH else 'message'}]
             if path == '/element/message/elements':
-                return [{flows.ELEMENT: 'link'}]
-            if path == '/element/message/displayed':
+                return [{flows.ELEMENT: 'menu'}]
+            if path in ('/element/message/displayed', '/element/menu/displayed'):
                 return True
-            if path == '/element/link/displayed':
+            if path == '/element/menu/click':
+                return None
+            if path == '/element/entry/displayed':
                 clock[0] += 10
                 return False
             if path == '/actions':
                 return None
-            self.fail('Hidden link must not be enabled or clicked')
+            self.fail('Hidden entry must not be enabled or clicked')
 
         client.command = command
         with patch.object(flows, 'persist'), patch.dict(flows.metadata, {}, clear=True), \
@@ -869,6 +882,7 @@ class NativeSupportTests(unittest.TestCase):
                 client.open_private_message("018f1234-1234-7000-8000-123456789abc")
             self.assertEqual(clock[0], 30)
             self.assertEqual(events.count('/actions'), 1)
+            self.assertEqual(events.count('/element/menu/click'), 1)
             self.assertEqual(flows.metadata['dm_action']['action'], 'await_private_message_link_visible')
 
     def test_dm_diagnostic_allowlists_actions_routes_counts_and_booleans(self):
