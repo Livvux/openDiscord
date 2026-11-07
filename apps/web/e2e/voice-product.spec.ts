@@ -331,6 +331,9 @@ test.describe("genuine Next product encrypted Voice", () => {
       // when that close beats its own handling of the LeaveRequest (seen on main 2026-10-22).
       const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))) || (entry.code === "signal-read" && entry.transport.some(part => part.name === "ConnectionError" && part.connectionReason === "websocket")));
       expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
+      // The owner keeps Connect (owners bypass channel overrides), so its own call must still be active.
+      const ownerStatus = await owner.getByRole("region", { name: "Voice connection" }).getByRole("status").first().textContent({ timeout: 2_000 }).catch(() => "no voice connection region");
+      await expect(owner.getByRole("button", { name: "Leave Voice", exact: true }).first(), `owner voice status: ${ownerStatus}`).toBeVisible({ timeout: 10_000 });
       await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
     } catch (error) {
