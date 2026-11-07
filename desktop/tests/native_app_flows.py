@@ -1447,7 +1447,7 @@ def main():
                 email = alice.signup('Native Alice')
                 bob.signup('Native Bob')
                 auth_progress(alice.profile, 'open_account_settings')
-                alice.goto('/app/settings')
+                alice.goto('/app/settings#Sessions-heading')
                 auth_progress(alice.profile, 'sign_out')
                 alice.click('Sign out')
                 auth_progress(alice.profile, 'await_signout_navigation')
@@ -1598,7 +1598,7 @@ def main():
                 recovery.unlink()
             with stage('logout'):
                 dm_progress(bob.profile, 'open_logout_settings')
-                bob.goto('/app/settings')
+                bob.goto('/app/settings#Sessions-heading')
                 dm_progress(bob.profile, 'sign_out')
                 bob.click('Sign out')
                 dm_progress(bob.profile, 'await_signout_navigation')
