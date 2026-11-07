@@ -470,7 +470,7 @@ class Native:
         auth_progress(self.profile, 'submit_signup')
         self.click('Create account')
         auth_progress(self.profile, 'await_signup_navigation')
-        wait(lambda: urllib.parse.urlsplit(self.command('GET', '/url')).path == '/app/welcome')
+        wait(lambda: at_app_path(self.command('GET', '/url'), '/app/welcome'))
         # New accounts start in the onboarding; this flow is about the app behind it.
         auth_progress(self.profile, 'skip_onboarding')
         self.click('Skip')
