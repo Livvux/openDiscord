@@ -12,6 +12,7 @@ import * as communities from "@/server/communities";
 import * as discovery from "@/server/discovery";
 import * as friends from "@/server/friends";
 import * as integrations from "@/server/integrations";
+import * as onboarding from "@/server/onboarding";
 import { invalid, toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as publicChannels from "@/server/public-channels";
@@ -158,3 +159,9 @@ export const setLocale = async (locale: string) =>
     if (!isAppLocale(locale)) throw invalid("Unsupported language.");
     (await cookies()).set(LOCALE_COOKIE, locale, { path: "/", maxAge: 60 * 60 * 24 * 365, sameSite: "lax", httpOnly: true, secure: process.env.NODE_ENV === "production" });
   });
+
+export const setOnboardingOptions = async (communityId: string, options: { roleId: string; label: string }[]) =>
+  run((u) => onboarding.setOnboardingOptions(u, communityId, options));
+export const chooseOnboarding = async (communityId: string, optionIds: string[]) =>
+  run((u) => onboarding.chooseOnboarding(u, communityId, optionIds));
+export const reopenOnboarding = async (communityId: string) => run((u) => onboarding.reopenOnboarding(u, communityId));

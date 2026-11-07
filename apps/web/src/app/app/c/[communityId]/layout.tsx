@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { CommunityRules } from "@/components/app/community-rules";
 import { getCommunityRules } from "@/server/community-trust";
+import { OnboardingPicker } from "@/components/app/onboarding-picker";
+import { getOnboarding } from "@/server/onboarding";
 import { ChannelSidebar } from "@/components/app/channel-sidebar";
 import { MemberListProvider } from "@/components/app/member-list";
 import { MobilePanel } from "@/components/app/mobile-nav";
@@ -26,7 +28,8 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
   const user = await requirePageUser();
   const [view, blocked] = await Promise.all([loadCommunityView(user.id, communityId), blockedIds(user.id)]);
   // After the view: non-members must get its not-found page, not listMembers' error.
-  const [rules, members] = await Promise.all([getCommunityRules(user.id, view.id), listMembers(user.id, view.id)]);
+  const [rules, members, onboarding] = await Promise.all([getCommunityRules(user.id, view.id), listMembers(user.id, view.id), getOnboarding(user.id, view.id)]);
+  const rulesPending = rules.required && !rules.accepted;
   return (
     <RealtimeProvider communityId={view.id}>
       <PresenceProvider communityId={view.id}>
@@ -40,7 +43,7 @@ async function CommunityShell({ params, children }: Pick<LayoutProps<"/app/c/[co
       <MobilePanel label="Channels" data-sidebar className="flex w-(--sidebar-w) shrink-0 flex-col border-r bg-panel max-md:left-(--rail-w)">
         <ChannelSidebar view={view} />
       </MobilePanel>
-      <div className="flex min-w-0 flex-1 flex-col">{rules.required && !rules.accepted && <section aria-label="Required community rules" className="max-h-[50dvh] shrink-0 overflow-y-auto border-b p-4"><h2 className="mb-2 font-semibold">Community rules updated</h2><CommunityRules communityId={view.id} rules={rules} /></section>}{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col">{rulesPending && <section aria-label="Required community rules" className="max-h-[50dvh] shrink-0 overflow-y-auto border-b p-4"><h2 className="mb-2 font-semibold">Community rules updated</h2><CommunityRules communityId={view.id} rules={rules} /></section>}{!rulesPending && onboarding.pending && <OnboardingPicker communityId={view.id} communityName={view.name} options={onboarding.options} />}{children}</div>
       </MemberListProvider>
       </UnreadProvider>
       </PresenceProvider>
