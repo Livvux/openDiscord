@@ -12,6 +12,8 @@ test("a new account walks through the onboarding and lands on Home once", async 
     await expect(page.getByRole("heading", { level: 1, name: "Set up your profile" })).toBeVisible();
     await expect(page.getByLabel("Display name")).toHaveValue("Olli Onboarding");
     await expectNoA11yViolations(page);
+    // Not saved by hand: Next saves it.
+    await page.getByLabel("Custom status").fill("Just arrived");
     await page.getByRole("button", { name: "Next" }).click();
 
     await expect(page.getByRole("heading", { level: 1, name: "Make it yours" })).toBeFocused();
@@ -44,6 +46,8 @@ test("a new account walks through the onboarding and lands on Home once", async 
 
     await page.goto("/app/welcome");
     await expect(page).toHaveURL(/\/app$/);
+    await page.goto("/app/settings");
+    await expect(page.getByLabel("Custom status")).toHaveValue("Just arrived");
   } finally {
     await page.context().close();
   }

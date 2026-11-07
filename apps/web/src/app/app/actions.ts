@@ -116,8 +116,9 @@ export const setCustomStatus = async (text: string) => run((u) => profile.setCus
 export const completeOnboarding = async () => run((u) => profile.completeOnboarding(u), false);
 /** Form action, so Skip and Finish work before the page has hydrated. */
 export async function finishOnboarding(form: FormData) {
-  const result = await run((u) => profile.completeOnboarding(u), false);
-  if (result.ok) redirect(safeNextPath(String(form.get("next") ?? "")));
+  // On failure Home decides: sign-in for an expired session, back here otherwise.
+  await run((u) => profile.completeOnboarding(u), false);
+  redirect(safeNextPath(String(form.get("next") ?? "")));
 }
 
 // A read: the service applies its own rate limit instead of the mutation burst limit.

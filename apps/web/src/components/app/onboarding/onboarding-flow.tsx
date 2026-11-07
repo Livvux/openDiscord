@@ -23,6 +23,7 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
   const [step, setStep] = useState(0);
   const done = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const steps = [
     { title: t.profile, content: profile },
     { title: t.appearance, content: appearance },
@@ -40,6 +41,10 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
   }, [last]);
 
   function go(to: number) {
+    // Save edits the person made but did not submit (the profile form) instead of dropping them.
+    const form = body.current?.querySelector<HTMLFormElement>(`[data-step="${step}"] form`);
+    const dirty = form && Array.from(form.elements).some((el) => (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.type !== "hidden" && el.value !== el.defaultValue);
+    if (dirty) form.requestSubmit();
     setStep(to);
     requestAnimationFrame(() => heading.current?.focus());
   }
@@ -53,10 +58,10 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
           </li>
         ))}
       </ol>
-      <section aria-labelledby={STEP_TITLE_ID} className="grid gap-5">
+      <section ref={body} aria-labelledby={STEP_TITLE_ID} className="grid gap-5">
         <h1 id={STEP_TITLE_ID} ref={heading} tabIndex={-1} className="text-2xl font-semibold outline-none">{steps[step].title}</h1>
         {/* All steps stay mounted so going back keeps unsaved input. */}
-        {steps.map((s, i) => <div key={s.title} hidden={i !== step} className="grid gap-5">{s.content}</div>)}
+        {steps.map((s, i) => <div key={s.title} data-step={i} hidden={i !== step} className="grid gap-5">{s.content}</div>)}
       </section>
       <div className="flex flex-wrap items-center gap-2 border-t pt-4">
         {step > 0 && <Button variant="ghost" onClick={() => go(step - 1)}>{t.back}</Button>}
