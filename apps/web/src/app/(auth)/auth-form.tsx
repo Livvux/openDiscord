@@ -40,6 +40,8 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
   const captchaRequired = isSignUp && !!turnstileSiteKey;
   const next = safeNextPath(params.get("next"));
   const nextQuery = next === "/app" ? "" : `?next=${encodeURIComponent(next)}`;
+  // New accounts start in the onboarding unless sign-up was headed somewhere (an invite, a friend link).
+  const landing = isSignUp && !params.has("next") ? "/app/welcome" : next;
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -60,7 +62,7 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
 
     const { data, error } = isSignUp
       ? await authClient.signUp.email(
-          { email, password, name: String(form.get("name")), callbackURL: next },
+          { email, password, name: String(form.get("name")), callbackURL: landing },
           { headers: { [REGISTRATION_HEADER]: registrationAttestation(minimumAge), ...(captchaToken ? { "x-captcha-response": captchaToken } : {}) } },
         )
       : await authClient.signIn.email({ email, password, callbackURL: next });
@@ -101,7 +103,7 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
 
   function done() {
     // Auth endpoints change cookies outside Server Actions. Discard cached signed-out redirects.
-    window.location.assign(next);
+    window.location.assign(landing);
   }
 
   async function signInWithPasskey() {

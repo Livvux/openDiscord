@@ -17,26 +17,25 @@ import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Welcome" };
 
-export default function WelcomePage({ searchParams }: PageProps<"/app/welcome">) {
+export default function WelcomePage() {
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <Suspense fallback={<div className="m-auto text-primary"><DiamondOrbitSmoothLoader /></div>}>
-        <Welcome searchParams={searchParams} />
+        <Welcome />
       </Suspense>
     </main>
   );
 }
 
-async function Welcome({ searchParams }: Pick<PageProps<"/app/welcome">, "searchParams">) {
+async function Welcome() {
   const user = await requirePageUser();
-  const [{ add }, onboarding, profile, avatar, { channels }] = await Promise.all([
-    searchParams, needsOnboarding(user.id), getProfile(user.id), ownAvatar(user.id), listPublicChannels(),
+  const [onboarding, profile, avatar, { channels }] = await Promise.all([
+    needsOnboarding(user.id), getProfile(user.id), ownAvatar(user.id), listPublicChannels(),
   ]);
-  const next = typeof add === "string" && add.length <= 64 ? `/app?add=${encodeURIComponent(add)}` : "/app";
-  if (!onboarding) redirect(next);
+  if (!onboarding) redirect("/app");
   return (
     <OnboardingFlow
-      next={next}
+      next="/app"
       profile={<>
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />

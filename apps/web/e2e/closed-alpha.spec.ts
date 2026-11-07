@@ -61,8 +61,7 @@ test("closed alpha: requests wait for approval, approved accounts get in", async
     await applicant.getByLabel("Email").fill(applicantEmail);
     await applicant.getByLabel("Password").fill(PASSWORD);
     await applicant.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(applicant).toHaveURL(/\/app\/welcome$/);
-    await applicant.getByRole("button", { name: "Skip" }).click();
+    await expect(applicant).toHaveURL(/\/app/);
     await expect(applicant.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
   } finally {
     await db.query("update instance_settings set closed_alpha = false");

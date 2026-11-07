@@ -75,27 +75,21 @@ export async function signUp(page: Page, name: string, path = "/sign-up", { onbo
     }
     diagnostics.phase = "redirect";
     const responded = performance.now();
-    // Home sends new accounts to the onboarding; other destinations (an invite) are left alone.
-    const home = new URL(destination).pathname === "/app";
-    await expect(page).toHaveURL(home ? /\/app\/welcome(\?|$)/ : destination, { timeout: 5_000 });
+    // Without a `next`, new accounts start in the onboarding.
+    const welcome = !signupUrl.searchParams.has("next");
+    await expect(page).toHaveURL(welcome ? /\/app\/welcome$/ : destination, { timeout: 5_000 });
     diagnostics.redirectMs = Math.round(performance.now() - responded);
     diagnostics.phase = "complete";
   } finally {
     // Aggregate timings/status only: never write response bodies, account data, cookies or tokens.
     await writeFile(test.info().outputPath("signup-diagnostics.json"), JSON.stringify(diagnostics));
   }
-  if (!onboarding) await skipOnboarding(page, destination);
+  // Most specs are about something else: get past the onboarding to Home.
+  if (!onboarding && new URL(page.url()).pathname === "/app/welcome") {
+    await page.getByRole("button", { name: "Skip" }).click();
+    await expect(page).toHaveURL(destination);
+  }
   return email;
-}
-
-/** Most specs are about something else: get past the first-run onboarding and back to where sign-up was headed. */
-async function skipOnboarding(page: Page, destination: string) {
-  const onWelcome = new URL(page.url()).pathname === "/app/welcome";
-  const welcome = onWelcome ? page : await page.context().newPage();
-  if (!onWelcome) await welcome.goto("/app/welcome");
-  await welcome.getByRole("button", { name: "Skip" }).click();
-  await expect(welcome).toHaveURL(onWelcome ? destination : /\/app(\?|$)/);
-  if (!onWelcome) await welcome.close();
 }
 
 export async function createCommunity(page: Page, name: string) {

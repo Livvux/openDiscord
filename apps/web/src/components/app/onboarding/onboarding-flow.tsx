@@ -14,7 +14,7 @@ interface OnboardingFlowProps {
   appearance: React.ReactNode;
   invite: React.ReactNode;
   community: React.ReactNode;
-  /** Where Home continues afterwards, keeping a friend link (?add=) that brought the person here. */
+  /** Where Skip and Finish continue. */
   next: string;
 }
 

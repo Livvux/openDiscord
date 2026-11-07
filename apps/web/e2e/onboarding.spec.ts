@@ -53,7 +53,7 @@ test("a new account walks through the onboarding and lands on Home once", async 
   }
 });
 
-test("skipping keeps a friend link and invite sign-ups go straight to the invite", async ({ browser, isMobile }) => {
+test("sign-ups headed to an invite or a friend link skip the onboarding", async ({ browser, isMobile }) => {
   test.skip(isMobile, "the invite helper drives the desktop sidebar");
   const owner = await newUserPage(browser);
   const friend = await newUserPage(browser);
@@ -66,11 +66,7 @@ test("skipping keeps a friend link and invite sign-ups go straight to the invite
     await signUp(guest, "Gil Guest", `/sign-up?next=${encodeURIComponent(invitePath)}`, { onboarding: true });
     await expect(guest.getByRole("button", { name: "Accept invite" })).toBeVisible();
 
-    await signUp(friend, "Fay Friend", "/sign-up", { onboarding: true });
-    await friend.goto("/app?add=some-friend-code");
-    await expect(friend).toHaveURL(/\/app\/welcome\?add=some-friend-code$/);
-    await friend.getByRole("button", { name: "Skip" }).click();
-    await expect(friend).toHaveURL(/\/app\?add=some-friend-code$/);
+    await signUp(friend, "Fay Friend", `/sign-up?next=${encodeURIComponent("/app?add=some-friend-code")}`, { onboarding: true });
     await expect(friend.getByLabel("Friend code")).toHaveValue("some-friend-code");
   } finally {
     await Promise.all([owner.context().close(), friend.context().close(), guest.context().close()]);
