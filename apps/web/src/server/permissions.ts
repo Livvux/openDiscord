@@ -26,6 +26,10 @@ export const ALL_PERMISSIONS = Object.values(Permission).reduce((a, b) => a | b,
 export const DEFAULT_MEMBER_PERMISSIONS =
   Permission.ViewChannels | Permission.SendMessages | Permission.CreateInvites | Permission.Connect | Permission.Speak | Permission.Video;
 
+/** Bits a role members pick for themselves during onboarding may carry. */
+export const SELF_ASSIGNABLE =
+  Permission.ViewChannels | Permission.SendMessages | Permission.CreateInvites | Permission.Connect | Permission.Speak | Permission.Video;
+
 /** The permissions a channel can allow or deny per role. */
 export const CHANNEL_PERMISSIONS =
   Permission.ViewChannels | Permission.SendMessages | Permission.ManageMessages | Permission.Connect | Permission.Speak | Permission.Video;
