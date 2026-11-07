@@ -111,6 +111,7 @@ export const setPresenceVisible = async (visible: boolean) => run((u) => presenc
 export const setPresenceStatus = async (choice: string) => run((u) => presence.setPresenceStatus(u, choice));
 export const updateProfile = async (input: { bio: string; customStatus: string }) => run((u) => profile.updateProfile(u, input));
 export const setCustomStatus = async (text: string) => run((u) => profile.setCustomStatus(u, text));
+export const completeOnboarding = async () => run((u) => profile.completeOnboarding(u), false);
 
 // A read: the service applies its own rate limit instead of the mutation burst limit.
 export const getProfileCard = async (userId: string) =>

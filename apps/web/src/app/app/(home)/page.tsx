@@ -1,11 +1,13 @@
 import { UsersIcon } from "lucide-react";
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { FriendsView } from "@/components/app/home/friends-view";
 import { ActiveNow } from "@/components/app/home/active-now";
 import { MobileNavToggle } from "@/components/app/mobile-nav";
 import { listBlocked } from "@/server/blocks";
 import { homeFriends } from "@/server/home";
+import { needsOnboarding } from "@/server/profile";
 import { listPublicChannels } from "@/server/public-channels";
 import { requirePageUser } from "@/server/session";
 import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
@@ -25,7 +27,8 @@ export default function AppHome({ searchParams }: PageProps<"/app">) {
 
 async function Friends({ searchParams }: Pick<PageProps<"/app">, "searchParams">) {
   const user = await requirePageUser();
-  const [friends, blocked, params] = await Promise.all([homeFriends(user.id), listBlocked(user.id), searchParams]);
+  const [friends, blocked, params, onboarding] = await Promise.all([homeFriends(user.id), listBlocked(user.id), searchParams, needsOnboarding(user.id)]);
+  if (onboarding) redirect(typeof params.add === "string" ? `/app/welcome?add=${encodeURIComponent(params.add)}` : "/app/welcome");
   // Nothing is sent until the person confirms the prefilled code.
   const add = typeof params.add === "string" && params.add.length <= 64 && params.add !== user.id ? params.add : "";
   // Only newcomers see the getting-started links; skip the query for everyone else.
