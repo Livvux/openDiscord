@@ -84,6 +84,7 @@ export class CallSession {
   private transitionTarget?: VoiceSnapshot;
   private transitionFlight?: Promise<void>;
   private lastPollStart = -Infinity;
+  private lastRosterRefresh = -Infinity;
   private retrying = 0;
   // Retries exhausted on a network/5xx failure; the Owner then stops and names it in its fence.
   private transportFailure?: string;
@@ -325,7 +326,7 @@ export class CallSession {
     try {
       this.checkCurrent(); this.prune();
       if (this.state === "retry-required" || this.transitionActive || this.actionFlight || this.requests.length + 4 > HTTP_LIMIT - PRIORITY_RESERVE) return;
-      if (!await this.prepareKeys() || this.transitionActive || this.preparedKeysGeneration !== this.authority!.snapshot.generation) return;
+      if (!await this.prepareKeys() || this.transitionActive || this.preparedKeysGeneration !== this.authority!.snapshot.generation) { await this.refreshJoiningRoster(); return; }
       this.checkCurrent();
       const owner = this.owner!; this.lastPollStart = performance.now();
       const start = performance.now(), events = await owner.receiveAgreement();
@@ -333,6 +334,16 @@ export class CallSession {
       await this.process(events, start);
       this.sas = await owner.verificationStates(); this.checkCurrent(); this.emit();
     } catch (error) { this.fail(error); }
+  }
+  // A peer still publishing keys blocks polling, so the 10 s heartbeat alone would hide later joins.
+  private async refreshJoiningRoster(): Promise<void> {
+    const snapshot = this.authority!.snapshot;
+    if (this.transitionActive || !snapshot.members.some(member => member.memberId !== snapshot.memberId && member.state !== "active")) return;
+    if (performance.now() - this.lastRosterRefresh < 2 * POLL_MS) return;
+    this.lastRosterRefresh = performance.now();
+    await this.reconcile(await this.heartbeat());
+    await this.prepareKeys();
+    this.emit();
   }
   private assertAttempt(attempt: Attempt): void {
     this.checkCurrent();
