@@ -4,7 +4,7 @@ import { assetsForMessages, validateCommunityAssetRefs } from "./community-asset
 import { and, asc, count, countDistinct, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, max, notExists, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLog, channel, integration, message, messageSend, publicPost, reaction, user, userBlock } from "@/db/schema";
+import { auditLog, channel, community, integration, member, message, messageSend, publicPost, reaction, user, userBlock } from "@/db/schema";
 import { channelAuthorities, loadMember, lockCommunity, requireChannel, type Db } from "./access";
 import { enforceAutomod } from "./automod";
 import { avatarOf } from "./avatars";
@@ -484,23 +484,37 @@ export function toPrefixQuery(q: string): string | null {
 
 export interface SearchResult extends MessageView {
   channelName: string;
+  communityId: string;
+  communityName: string;
 }
 
+/** Most communities searched at once; a person in more gets results from their most recently joined. */
+export const SEARCH_COMMUNITY_LIMIT = 100;
+
 /**
- * Full-text search over the channels of one community that the person can read, newest first.
- * Messages from people they blocked are left out.
+ * Full-text search over the channels the person can read, newest first: in one community, or with a
+ * null community in every community they belong to. Messages from people they blocked are left out.
  */
 export async function searchMessages(userId: string, rawCommunityId: unknown, rawQuery: unknown, rawBefore?: unknown): Promise<SearchResult[]> {
-  const communityId = parse(uuid, rawCommunityId);
+  const communityId = rawCommunityId === null ? null : parse(uuid, rawCommunityId);
   const query = toPrefixQuery(parse(z.string().max(200), rawQuery ?? ""));
   const before = rawBefore ? parse(uuid, rawBefore) : undefined;
-  const ctx = await loadMember(db, communityId, userId);
-  if (!ctx) throw notFound("Community not found.");
-  if (!query) return [];
-  const channels = await db.select({ id: channel.id, name: channel.name }).from(channel).where(eq(channel.communityId, communityId));
-  const perms = await channelAuthorities(db, ctx, channels.map((c) => c.id));
-  const readable = channels.filter((c) => has(perms.get(c.id)!, Permission.ViewChannels));
-  if (readable.length === 0) return [];
+  const communityIds = communityId
+    ? [communityId]
+    : (await db.select({ id: member.communityId }).from(member).where(eq(member.userId, userId)).orderBy(desc(member.joinedAt)).limit(SEARCH_COMMUNITY_LIMIT)).map((m) => m.id);
+  const readable: { id: string; name: string; communityId: string }[] = [];
+  for (const id of communityIds) {
+    const ctx = await loadMember(db, id, userId);
+    if (!ctx) {
+      if (communityId) throw notFound("Community not found.");
+      continue;
+    }
+    if (!query) continue;
+    const channels = await db.select({ id: channel.id, name: channel.name, communityId: channel.communityId }).from(channel).where(eq(channel.communityId, id));
+    const perms = await channelAuthorities(db, ctx, channels.map((c) => c.id));
+    readable.push(...channels.filter((c) => has(perms.get(c.id)!, Permission.ViewChannels)));
+  }
+  if (!query || readable.length === 0) return [];
   const rows = await db
     .select(viewColumns)
     .from(message)
@@ -515,6 +529,11 @@ export async function searchMessages(userId: string, rawCommunityId: unknown, ra
     )
     .orderBy(desc(message.id))
     .limit(SEARCH_LIMIT);
-  const names = new Map(readable.map((c) => [c.id, c.name]));
-  return (await toViews(rows)).map((m) => ({ ...m, channelName: names.get(m.channelId) ?? "" }));
+  const channelsById = new Map(readable.map((c) => [c.id, c]));
+  const names = new Map((await db.select({ id: community.id, name: community.name }).from(community)
+    .where(inArray(community.id, [...new Set(readable.map((c) => c.communityId))]))).map((c) => [c.id, c.name]));
+  return (await toViews(rows)).map((m) => {
+    const ch = channelsById.get(m.channelId);
+    return { ...m, channelName: ch?.name ?? "", communityId: ch?.communityId ?? "", communityName: names.get(ch?.communityId ?? "") ?? "" };
+  });
 }
