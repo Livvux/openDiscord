@@ -18,7 +18,7 @@ Before relying on the service, check the current release notes and hosted-instan
 
 Known acceptance limits:
 
-- Chromium/Firefox/Edge/WebKit automation is evidence for the engines and cases actually run.
+- Chromium/Firefox/WebKit automation is evidence for the engines and cases actually run.
   iPhone/Android emulation is not iOS Safari/Android Chrome physical-device acceptance.
 - PWA install/offline UX is the mobile scope. Native mobile applications are not implemented.
   Desktop builds are unsigned/unverified previews and are excluded from the hosted launch.

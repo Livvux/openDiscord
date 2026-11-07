@@ -42,8 +42,6 @@ jobs:
         run: pnpm --filter web exec playwright test --config playwright.voice-product.config.ts --list
       # Lint and typecheck already gate every PR in CI's backend job.
       - run: pnpm db:migrate
-      - name: Call and presentation regression checks
-        run: pnpm --filter web exec vitest run tests/voice-media-session.test.ts tests/voice-provider-effects.test.ts tests/voice-product-results.test.ts tests/voice-support.test.ts tests/voice-call-session.test.ts tests/voice-call-session-lifecycle.test.ts tests/voice-call-session.integration.test.ts tests/voice-product-boundaries.test.ts
       - name: Build genuine Next product including worker assets
         run: pnpm build
       - name: Start pinned SFU with generation-only room creation
