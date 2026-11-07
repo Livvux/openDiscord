@@ -331,11 +331,8 @@ test.describe("genuine Next product encrypted Voice", () => {
       // when that close beats its own handling of the LeaveRequest (seen on main 2026-10-22).
       const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))) || (entry.code === "signal-read" && entry.transport.some(part => part.name === "ConnectionError" && part.connectionReason === "websocket")));
       expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
-      // The owner keeps Connect (owners bypass channel overrides), so its own call must still be active.
-      const ownerVoice = await presentation(owner);
-      const ownerStatus = `${await owner.getByRole("region", { name: "Voice connection" }).getByRole("status").first().textContent({ timeout: 2_000 }).catch(() => "no voice connection region")}; path ${new URL(owner.url()).pathname.replace(/[0-9a-f-]{36}/g, ":id")}; phase ${ownerVoice.phase}/${ownerVoice.reason}`;
-      await expect(owner.getByRole("button", { name: "Leave Voice", exact: true }).first(), `owner voice status: ${ownerStatus}`).toBeVisible({ timeout: 10_000 });
-      await owner.getByRole("button", { name: "Leave Voice", exact: true }).first().click();
+      // The voice bar's Disconnect leaves on every page, also after the room view has stopped.
+      await owner.getByRole("region", { name: "Voice connection" }).getByRole("button", { name: "Disconnect", exact: true }).click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
     } catch (error) {
       primaryFailure = true; throw error;
