@@ -330,7 +330,10 @@ test.describe("genuine Next product encrypted Voice", () => {
       // rejects with ConnectionError(reason websocket) and logs "error reading from signal stream"
       // when that close beats its own handling of the LeaveRequest (seen on main 2026-10-22).
       const revocationTeardown = (entry: (typeof consoleErrors)[number]) => entry.revoking && (entry.code === "data-channel-closed" || (entry.code === "data-channel-error" && entry.transport.some(part => part.detail === "sctp-failure" && (part.cause === 12 || part.cause === null))) || (entry.code === "signal-read" && entry.transport.some(part => part.name === "ConnectionError" && part.connectionReason === "websocket")));
-      expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry))).toEqual([]);
+      // Firefox reports a router fetch that a test navigation (page.goto) aborts as a TypeError; Next then logs
+      // this fallback and completes the navigation as a full page load. Seen on main 2026-11-07 (04a7181).
+      const abortedRouterFetch = (entry: (typeof consoleErrors)[number]) => test.info().project.name.includes("firefox") && entry.fingerprint === "Failed to fetch RSC payload for";
+      expect(runtimeErrors).toEqual([]); expect(consoleErrors.filter(entry => !revocationTeardown(entry) && !abortedRouterFetch(entry))).toEqual([]);
       // The voice bar's Disconnect leaves on every page, also after the room view has stopped.
       await owner.getByRole("region", { name: "Voice connection" }).getByRole("button", { name: "Disconnect", exact: true }).click();
       await expect.poll(async () => (await evidence(owner)).allTerminated).toBe(true);
