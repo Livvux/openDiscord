@@ -96,7 +96,7 @@ test.describe("communities", () => {
   });
 
   test("an interrupted read receipt retries without an unhandled rejection", async ({ browser }, info) => {
-    // Two account setups plus the failed/retried action exceed the default budget on hosted Edge.
+    // Two account setups plus the failed/retried action exceed the default budget on hosted runners.
     test.setTimeout(60_000);
     const owner = await newUserPage(browser);
     const member = await newUserPage(browser);
