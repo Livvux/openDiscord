@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { GettingStarted } from "@/components/app/home/getting-started";
 import { InviteFriends } from "@/components/app/onboarding/invite-friends";
@@ -11,7 +10,7 @@ import { ThemeSettings } from "@/components/app/settings/theme-settings";
 import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
 import { ownAvatar } from "@/server/avatars";
 import { mediaEnabled } from "@/server/media";
-import { getProfile, needsOnboarding } from "@/server/profile";
+import { getProfile } from "@/server/profile";
 import { listPublicChannels } from "@/server/public-channels";
 import { requirePageUser } from "@/server/session";
 
@@ -29,13 +28,9 @@ export default function WelcomePage() {
 
 async function Welcome() {
   const user = await requirePageUser();
-  const [onboarding, profile, avatar, { channels }] = await Promise.all([
-    needsOnboarding(user.id), getProfile(user.id), ownAvatar(user.id), listPublicChannels(),
-  ]);
-  if (!onboarding) redirect("/app");
+  const [profile, avatar, { channels }] = await Promise.all([getProfile(user.id), ownAvatar(user.id), listPublicChannels()]);
   return (
     <OnboardingFlow
-      next="/app"
       profile={<>
         {mediaEnabled && <AvatarSettings name={user.name} avatar={avatar} />}
         <ProfileForm name={user.name} email={user.email} bio={profile.bio} customStatus={profile.customStatus} />

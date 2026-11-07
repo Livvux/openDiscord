@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createCommunity, createInviteLink, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
 
-test("a new account walks through the onboarding and lands on Home once", async ({ browser, browserName }) => {
+test("a new account walks through the onboarding and lands on Home", async ({ browser, browserName }) => {
   test.setTimeout(60_000);
   const page = await newUserPage(browser);
   try {
@@ -41,12 +41,10 @@ test("a new account walks through the onboarding and lands on Home once", async 
 
     await expect(page.getByRole("region", { name: "Find your people" }).getByRole("button", { name: "Create a community" })).toBeVisible();
     await expectNoA11yViolations(page);
-    await page.getByRole("button", { name: "Let's go" }).click();
+    await page.getByRole("link", { name: "Let's go" }).click();
     await expect(page).toHaveURL(/\/app$/);
     await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
-    await page.goto("/app/welcome");
-    await expect(page).toHaveURL(/\/app$/);
     await page.goto("/app/settings");
     await expect(page.getByLabel("Custom status")).toHaveValue("Just arrived");
   } finally {

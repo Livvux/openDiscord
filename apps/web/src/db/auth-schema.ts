@@ -26,7 +26,6 @@ export const user = pgTable("user", {
   })
     .default("approved")
     .notNull(),
-  onboardedAt: timestamp("onboarded_at"),
 });
 
 export const session = pgTable(

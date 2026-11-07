@@ -98,8 +98,6 @@ export const auth = betterAuth({
     additionalFields: {
       // Closed Alpha gate. Only the database hook and instance admins change it; clients can't set it.
       approvalStatus: { type: ["approved", "pending", "rejected"], defaultValue: "approved", input: false, required: true },
-      // Set when the first-run onboarding is finished or skipped; null sends Home to /app/welcome.
-      onboardedAt: { type: "date", required: false, input: false },
     },
     deleteUser: {
       enabled: true,

@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useFormStatus } from "react-dom";
-import { completeOnboarding, finishOnboarding } from "@/app/app/actions";
-import { Button } from "@/components/ui/button";
+import { useRef, useState } from "react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useMessages } from "@/lib/i18n/client";
 
 // The welcome page points the community step at this heading; a client module cannot export it to the server as a string.
@@ -14,14 +12,12 @@ interface OnboardingFlowProps {
   appearance: React.ReactNode;
   invite: React.ReactNode;
   community: React.ReactNode;
-  /** Where Skip and Finish continue. */
-  next: string;
 }
 
-export function OnboardingFlow({ profile, appearance, invite, community, next }: OnboardingFlowProps) {
+/** Reached only from sign-up; Skip and Finish load Home as a fresh page, exactly where sign-up used to land. */
+export function OnboardingFlow({ profile, appearance, invite, community }: OnboardingFlowProps) {
   const t = useMessages().onboarding;
   const [step, setStep] = useState(0);
-  const done = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const steps = [
@@ -31,14 +27,6 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
     { title: t.community, content: community },
   ];
   const last = step === steps.length - 1;
-
-  // Reaching the last step counts as finished: joining or creating a community there leaves this page.
-  useEffect(() => {
-    if (last && !done.current) {
-      done.current = true;
-      void completeOnboarding();
-    }
-  }, [last]);
 
   function go(to: number) {
     // Save edits the person made but did not submit (the profile form) instead of dropping them.
@@ -65,19 +53,17 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
       </section>
       <div className="flex flex-wrap items-center gap-2 border-t pt-4">
         {step > 0 && <Button variant="ghost" onClick={() => go(step - 1)}>{t.back}</Button>}
-        <form action={finishOnboarding} className="ml-auto flex gap-2">
-          <input type="hidden" name="next" value={next} />
-          {last ? <Leave size="lg">{t.finish}</Leave> : <>
-            <Leave variant="ghost">{t.skip}</Leave>
-            <Button size="lg" type="button" onClick={() => go(step + 1)}>{t.next}</Button>
+        <div className="ml-auto flex gap-2">
+          {last ? homeLink(buttonVariants({ size: "lg" }), t.finish) : <>
+            {homeLink(buttonVariants({ variant: "ghost" }), t.skip)}
+            <Button size="lg" onClick={() => go(step + 1)}>{t.next}</Button>
           </>}
-        </form>
+        </div>
       </div>
     </div>
   );
 }
 
-function Leave(props: React.ComponentProps<typeof Button>) {
-  const { pending } = useFormStatus();
-  return <Button type="submit" disabled={pending} {...props} />;
-}
+// A full page load on purpose: Home starts fresh, as right after sign-up, so DM device setup begins there cleanly.
+// eslint-disable-next-line @next/next/no-html-link-for-pages
+const homeLink = (className: string, label: string) => <a href="/app" className={className}>{label}</a>;

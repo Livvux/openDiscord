@@ -477,7 +477,7 @@ class Native:
         wait(lambda: at_app_path(self.command('GET', '/url'), '/app/welcome'))
         # New accounts start in the onboarding; this flow is about the app behind it.
         auth_progress(self.profile, 'skip_onboarding')
-        self.click('Skip')
+        self.goto('/app')
         self.wait_authenticated('/app')
         return email
 

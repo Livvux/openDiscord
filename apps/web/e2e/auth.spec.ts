@@ -21,7 +21,7 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await expect(page.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/app\/welcome$/);
-  await page.getByRole("button", { name: "Skip" }).click();
+  await page.getByRole("link", { name: "Skip" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 

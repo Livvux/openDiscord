@@ -146,8 +146,7 @@ async function signup(page, email, name) {
   assert.equal((await response).status(), 200);
   // New accounts start in the onboarding; recovery is about what comes after it.
   await page.waitForURL('**/app/welcome');
-  await page.getByRole('button', { name: 'Skip' }).click();
-  await page.waitForURL('**/app');
+  await page.goto('/app');
 }
 async function signin(page, email) {
   await page.goto('/sign-in');

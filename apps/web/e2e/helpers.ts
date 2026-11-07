@@ -84,15 +84,10 @@ export async function signUp(page: Page, name: string, path = "/sign-up", { onbo
     // Aggregate timings/status only: never write response bodies, account data, cookies or tokens.
     await writeFile(test.info().outputPath("signup-diagnostics.json"), JSON.stringify(diagnostics));
   }
-  // Most specs are about something else: get past the onboarding to Home.
-  if (!onboarding && new URL(page.url()).pathname === "/app/welcome") {
-    const skip = page.getByRole("button", { name: "Skip" });
-    // Before hydration the click posts the form natively; that reload would race the spec's next navigation.
-    await expect.poll(() => skip.evaluate((el) => Object.keys(el).some((key) => key.startsWith("__react")))).toBe(true);
-    await skip.click();
-    await expect(page).toHaveURL(destination);
-    await page.waitForLoadState();
-  }
+  // Most specs are about something else: go on to Home, as sign-up did before the onboarding existed.
+  // Not by clicking Skip: that navigation keeps a DM store open long enough to delay a sign-out wipe
+  // in specs that reload right away (dm-sign-out). onboarding.spec covers the real Skip and Finish.
+  if (!onboarding && new URL(page.url()).pathname === "/app/welcome") await page.goto(destination);
   return email;
 }
 

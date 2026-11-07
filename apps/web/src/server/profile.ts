@@ -1,9 +1,9 @@
 // Profile text beyond the display name (which Better Auth owns). Shown only where the account is
 // already visible: friends lists today.
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { user, userProfile } from "@/db/schema";
+import { userProfile } from "@/db/schema";
 import { parse } from "./validation";
 
 export const BIO_MAX = 190;
@@ -37,14 +37,4 @@ export async function updateProfile(userId: string, input: unknown): Promise<voi
 export async function setCustomStatus(userId: string, input: unknown): Promise<void> {
   const { customStatus } = parse(profileInput.pick({ customStatus: true }), { customStatus: input });
   await db.insert(userProfile).values({ userId, customStatus }).onConflictDoUpdate({ target: userProfile.userId, set: { customStatus } });
-}
-
-/** True until the first-run onboarding is finished or skipped. */
-export async function needsOnboarding(userId: string): Promise<boolean> {
-  const [row] = await db.select({ at: user.onboardedAt }).from(user).where(eq(user.id, userId));
-  return !!row && row.at === null;
-}
-
-export async function completeOnboarding(userId: string): Promise<void> {
-  await db.update(user).set({ onboardedAt: new Date() }).where(and(eq(user.id, userId), isNull(user.onboardedAt)));
 }
