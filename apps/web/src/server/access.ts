@@ -2,10 +2,10 @@
 // Non-members get "not found" rather than "forbidden" so ids don't reveal what exists.
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { channel, channelOverride, community, member, memberRole, role } from "@/db/schema";
+import { categoryOverride, channel, channelOverride, community, member, memberRole, role } from "@/db/schema";
 import { assertActiveUser } from "./instance-policy";
 import { forbidden, notFound } from "./errors";
-import { channelAuthority, has, Permission, resolveAuthority, type MemberAuthority } from "./permissions";
+import { channelAuthority, has, inheritOverrides, Permission, resolveAuthority, type ChannelOverride, type MemberAuthority } from "./permissions";
 
 /** A drizzle database or transaction handle. */
 export type Db = Pick<typeof db, "select" | "insert" | "update" | "delete" | "execute" | "query">;
@@ -62,15 +62,28 @@ export async function loadAuthority(tx: Db, communityId: string, userId: string)
 
 /** Effective permissions in each given channel (all of them must belong to the member's community). */
 export async function channelAuthorities(tx: Db, ctx: MemberContext, channelIds: string[]): Promise<Map<string, MemberAuthority>> {
-  const overrides = channelIds.length
-    ? await tx.select().from(channelOverride).where(inArray(channelOverride.channelId, channelIds))
-    : [];
+  const overrides = await effectiveOverrides(tx, channelIds);
   return new Map(
-    channelIds.map((id) => [
-      id,
-      channelAuthority(ctx.authority, overrides.filter((o) => o.channelId === id), ctx.defaultRoleId, ctx.roleIds),
-    ]),
+    channelIds.map((id) => [id, channelAuthority(ctx.authority, overrides.get(id) ?? [], ctx.defaultRoleId, ctx.roleIds)]),
   );
+}
+
+/** Each channel's own overrides plus those its category passes down (src/server/permissions.ts `inheritOverrides`). */
+export async function effectiveOverrides(tx: Db, channelIds: string[]): Promise<Map<string, ChannelOverride[]>> {
+  if (!channelIds.length) return new Map();
+  const [channels, own] = await Promise.all([
+    tx.select({ id: channel.id, categoryId: channel.categoryId }).from(channel).where(inArray(channel.id, channelIds)),
+    tx.select().from(channelOverride).where(inArray(channelOverride.channelId, channelIds)),
+  ]);
+  const categoryIds = [...new Set(channels.flatMap((c) => (c.categoryId ? [c.categoryId] : [])))];
+  const inherited = categoryIds.length
+    ? await tx.select().from(categoryOverride).where(inArray(categoryOverride.categoryId, categoryIds))
+    : [];
+  const categoryOf = new Map(channels.map((c) => [c.id, c.categoryId]));
+  return new Map(channelIds.map((id) => [
+    id,
+    inheritOverrides(own.filter((o) => o.channelId === id), inherited.filter((o) => o.categoryId === categoryOf.get(id))),
+  ]));
 }
 
 /** The member's authority inside one channel, or null when they can't see it. */

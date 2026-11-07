@@ -101,6 +101,12 @@ export interface ChannelOverride {
   deny: number;
 }
 
+/** A channel's own override for a role replaces its category's override for that role; other roles inherit. */
+export function inheritOverrides(own: readonly ChannelOverride[], category: readonly ChannelOverride[]): ChannelOverride[] {
+  const set = new Set(own.map((o) => o.roleId));
+  return [...own, ...category.filter((o) => !set.has(o.roleId))].map(({ roleId, allow, deny }) => ({ roleId, allow, deny }));
+}
+
 /**
  * Applies a channel's role overrides: first the default role's, then the union of the member's other
  * roles (allow wins over deny between roles, like Discord). Owners and administrators bypass overrides.

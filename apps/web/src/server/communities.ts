@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { and, asc, count, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLog, ban, channel, channelOverride, community, integration, invite, member, memberRole, role, user } from "@/db/schema";
-import { channelAuthorities, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
+import { channelAuthorities, effectiveOverrides, loadMember, lockCommunity, requireChannel, requireMember, type Db } from "./access";
 import { AppError, forbidden, invalid, notFound } from "./errors";
 import { enforceCap } from "./limits";
 import { assertActiveUser, assertInvitesAllowed, getInstanceSettings } from "./instance-policy";
@@ -116,12 +116,9 @@ export async function getCommunityView(userId: string, rawId: unknown): Promise<
     .where(eq(channel.communityId, communityId))
     .orderBy(asc(channel.position), asc(channel.id));
   const perms = await channelAuthorities(db, ctx, rows.map((r) => r.id));
-  const hidden = await db
-    .select({ channelId: channelOverride.channelId })
-    .from(channelOverride)
-    .where(and(eq(channelOverride.roleId, ctx.defaultRoleId), sql`${channelOverride.deny} & ${Permission.ViewChannels} <> 0`));
+  const overrides = await effectiveOverrides(db, rows.map((r) => r.id));
   const visible = rows
-    .map((r) => ({ ...r, permissions: perms.get(r.id)!.permissions, isPrivate: hidden.some((h) => h.channelId === r.id) }))
+    .map((r) => ({ ...r, permissions: perms.get(r.id)!.permissions, isPrivate: hidesFromEveryone(overrides.get(r.id) ?? [], ctx.defaultRoleId) }))
     .filter((r) => (r.permissions & Permission.ViewChannels) !== 0);
   const unread = await unreadState(userId, visible.map((r) => r.id));
   const channels = visible.map((r) => ({ ...r, ...(unread.get(r.id) ?? NOTHING_UNREAD) }));
@@ -269,12 +266,14 @@ async function requireChannelManager(tx: Db, channelId: string, userId: string) 
 
 /** The audit log is readable by people who may not see private channels, so their names stay out of it. */
 async function auditChannelName(tx: Db, ch: typeof channel.$inferSelect): Promise<string | null> {
-  const [hidden] = await tx
-    .select({ channelId: channelOverride.channelId })
-    .from(channelOverride)
-    .innerJoin(role, eq(role.id, channelOverride.roleId))
-    .where(and(eq(channelOverride.channelId, ch.id), role.isDefault, sql`${channelOverride.deny} & ${Permission.ViewChannels} <> 0`));
-  return hidden ? null : ch.name;
+  const [everyone] = await tx.select({ id: role.id }).from(role).where(and(eq(role.communityId, ch.communityId), role.isDefault));
+  const overrides = (await effectiveOverrides(tx, [ch.id])).get(ch.id) ?? [];
+  return everyone && hidesFromEveryone(overrides, everyone.id) ? null : ch.name;
+}
+
+/** Private: the everyone role's effective override denies View. */
+function hidesFromEveryone(overrides: readonly { roleId: string; deny: number }[], defaultRoleId: string): boolean {
+  return overrides.some((o) => o.roleId === defaultRoleId && (o.deny & Permission.ViewChannels) !== 0);
 }
 
 const overrideBits = z.number().int().min(0).max(CHANNEL_PERMISSIONS).refine((n) => (n & ~CHANNEL_PERMISSIONS) === 0, "Unknown permission.");
