@@ -1,8 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
-import { completeOnboarding } from "@/app/app/actions";
+import { useEffect, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
+import { completeOnboarding, finishOnboarding } from "@/app/app/actions";
 import { Button } from "@/components/ui/button";
 import { useMessages } from "@/lib/i18n/client";
 
@@ -20,9 +20,7 @@ interface OnboardingFlowProps {
 
 export function OnboardingFlow({ profile, appearance, invite, community, next }: OnboardingFlowProps) {
   const t = useMessages().onboarding;
-  const router = useRouter();
   const [step, setStep] = useState(0);
-  const [leaving, startLeaving] = useTransition();
   const done = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const steps = [
@@ -46,16 +44,6 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
     requestAnimationFrame(() => heading.current?.focus());
   }
 
-  function leave() {
-    startLeaving(async () => {
-      if (!done.current) {
-        done.current = true;
-        await completeOnboarding();
-      }
-      router.replace(next);
-    });
-  }
-
   return (
     <div className="mx-auto grid w-full max-w-2xl gap-6 p-4 md:p-8">
       <ol aria-label={t.steps} className="grid grid-cols-4 gap-2">
@@ -71,12 +59,20 @@ export function OnboardingFlow({ profile, appearance, invite, community, next }:
         {steps.map((s, i) => <div key={s.title} hidden={i !== step} className="grid gap-5">{s.content}</div>)}
       </section>
       <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-        {step > 0 && <Button variant="ghost" onClick={() => go(step - 1)} disabled={leaving}>{t.back}</Button>}
-        <div className="ml-auto flex gap-2">
-          {!last && <Button variant="ghost" onClick={leave} disabled={leaving}>{t.skip}</Button>}
-          <Button size="lg" onClick={last ? leave : () => go(step + 1)} disabled={leaving}>{last ? t.finish : t.next}</Button>
-        </div>
+        {step > 0 && <Button variant="ghost" onClick={() => go(step - 1)}>{t.back}</Button>}
+        <form action={finishOnboarding} className="ml-auto flex gap-2">
+          <input type="hidden" name="next" value={next} />
+          {last ? <Leave size="lg">{t.finish}</Leave> : <>
+            <Leave variant="ghost">{t.skip}</Leave>
+            <Button size="lg" type="button" onClick={() => go(step + 1)}>{t.next}</Button>
+          </>}
+        </form>
       </div>
     </div>
   );
+}
+
+function Leave(props: React.ComponentProps<typeof Button>) {
+  const { pending } = useFormStatus();
+  return <Button type="submit" disabled={pending} {...props} />;
 }

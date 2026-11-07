@@ -3,7 +3,9 @@
 // Next.js rejects cross-origin Server Action calls, which covers CSRF.
 import { refresh } from "next/cache";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { isAppLocale, LOCALE_COOKIE } from "@/lib/i18n";
+import { safeNextPath } from "@/lib/safe-redirect";
 import * as automod from "@/server/automod";
 import * as blocks from "@/server/blocks";
 import * as categories from "@/server/categories";
@@ -112,6 +114,11 @@ export const setPresenceStatus = async (choice: string) => run((u) => presence.s
 export const updateProfile = async (input: { bio: string; customStatus: string }) => run((u) => profile.updateProfile(u, input));
 export const setCustomStatus = async (text: string) => run((u) => profile.setCustomStatus(u, text));
 export const completeOnboarding = async () => run((u) => profile.completeOnboarding(u), false);
+/** Form action, so Skip and Finish work before the page has hydrated. */
+export async function finishOnboarding(form: FormData) {
+  const result = await run((u) => profile.completeOnboarding(u), false);
+  if (result.ok) redirect(safeNextPath(String(form.get("next") ?? "")));
+}
 
 // A read: the service applies its own rate limit instead of the mutation burst limit.
 export const getProfileCard = async (userId: string) =>

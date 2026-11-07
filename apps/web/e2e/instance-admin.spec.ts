@@ -29,6 +29,8 @@ test("global administration works without 2FA and applies reports and suspension
   try {
     // Test-only role fixture. Runtime grants are exposed exclusively through authenticated admin actions.
     await db.query("insert into instance_admin (user_id) values ($1)", [adminId]);
+    // API sign-ups skip the onboarding form; mark them done so Home stays reachable.
+    await db.query('update "user" set onboarded_at = now() where id = $1', [adminId]);
     await page.goto("/app/admin");
     await expect(page.getByRole("heading", { level: 1, name: "Instance administration" })).toBeVisible();
     await expect(page.getByLabel("Authenticator code")).toHaveCount(0);
@@ -38,6 +40,7 @@ test("global administration works without 2FA and applies reports and suspension
     const signup = await chatter.request.post("/api/auth/sign-up/email", { headers: { Origin: baseURL!, ...CAPTCHA_HEADER }, data: { email: chatterEmail, password, name: "QA Chatter" } });
     expect(signup.ok()).toBe(true);
     chatterId = (await signup.json()).user.id;
+    await db.query('update "user" set onboarded_at = now() where id = $1', [chatterId]);
     await chatter.goto("/app");
     const create = chatter.getByRole("button", { name: "Create a community", exact: true }).first();
     const navigation = chatter.getByRole("button", { name: "Open navigation", exact: true }).first();

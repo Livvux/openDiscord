@@ -470,6 +470,10 @@ class Native:
         auth_progress(self.profile, 'submit_signup')
         self.click('Create account')
         auth_progress(self.profile, 'await_signup_navigation')
+        wait(lambda: urllib.parse.urlsplit(self.command('GET', '/url')).path == '/app/welcome')
+        # New accounts start in the onboarding; this flow is about the app behind it.
+        auth_progress(self.profile, 'skip_onboarding')
+        self.click('Skip')
         self.wait_authenticated('/app')
         return email
 
@@ -622,7 +626,7 @@ def endpoint_class(path):
 
 AUTH_ACTIONS = {
     'open_signup', 'fill_display_name', 'fill_signup_email', 'fill_signup_password',
-    'confirm_registration_policy', 'submit_signup', 'await_signup_navigation',
+    'confirm_registration_policy', 'submit_signup', 'await_signup_navigation', 'skip_onboarding',
     'open_login', 'fill_login_email', 'fill_login_password', 'submit_login',
     'await_login_navigation', 'await_encryption_ready', 'open_account_settings', 'sign_out', 'await_signout_navigation',
 }
