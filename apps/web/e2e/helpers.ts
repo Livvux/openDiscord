@@ -86,8 +86,12 @@ export async function signUp(page: Page, name: string, path = "/sign-up", { onbo
   }
   // Most specs are about something else: get past the onboarding to Home.
   if (!onboarding && new URL(page.url()).pathname === "/app/welcome") {
-    await page.getByRole("button", { name: "Skip" }).click();
+    const skip = page.getByRole("button", { name: "Skip" });
+    // Before hydration the click posts the form natively; that reload would race the spec's next navigation.
+    await expect.poll(() => skip.evaluate((el) => Object.keys(el).some((key) => key.startsWith("__react")))).toBe(true);
+    await skip.click();
     await expect(page).toHaveURL(destination);
+    await page.waitForLoadState();
   }
   return email;
 }

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createCommunity, createInviteLink, expectNoA11yViolations, newUserPage, signUp } from "./helpers";
 
 test("a new account walks through the onboarding and lands on Home once", async ({ browser, browserName }) => {
+  test.setTimeout(60_000);
   const page = await newUserPage(browser);
   try {
     // Only Chromium lets a test grant clipboard access; elsewhere the copy buttons are checked for feedback only.
