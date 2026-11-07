@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { MessageView } from "@/server/messages";
 
+const REFRESH_COALESCE_MS = 300;
+
 export type ClientEvent =
   | { type: "message.created" | "message.updated"; message: MessageView }
   | { type: "message.deleted"; channelId: string; messageId: string }
@@ -56,6 +58,10 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
     let opened = false;
     let lastSeen = Date.now();
     let stopped = false;
+    // Bursts (a new channel plus its overrides) arrive together. One refresh: overlapping refreshes
+    // abort each other, and Firefox reports that as a network error, so Next reloads the whole page.
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshSoon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => router.refresh(), REFRESH_COALESCE_MS); };
 
     const connect = () => {
       source?.close();
@@ -107,7 +113,7 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
       });
       es.addEventListener("assets.changed", () => (seen(), emit({ type: "assets.changed" })));
       es.addEventListener("resync", () => (seen(), emit({ type: "resync" })));
-      es.addEventListener("channels.changed", () => (seen(), router.refresh()));
+      es.addEventListener("channels.changed", () => (seen(), refreshSoon()));
       es.addEventListener("removed", removed);
     };
 
@@ -128,6 +134,7 @@ export function RealtimeProvider({ communityId, children }: { communityId: strin
     return () => {
       stopped = true;
       clearInterval(watchdog);
+      clearTimeout(refreshTimer);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       source?.close();
