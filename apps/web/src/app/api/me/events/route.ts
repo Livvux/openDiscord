@@ -9,7 +9,7 @@ import { getMessageForBroadcast, type MessageView } from "@/server/messages";
 import { hub, userTopic, type HubEvent } from "@/server/realtime";
 import { requireUser } from "@/server/session";
 import { canReceiveDirectTyping } from "@/server/direct-messages";
-import { mutedCommunities, touchPresence } from "@/server/presence";
+import { channelMuted, touchPresence } from "@/server/presence";
 import { excerptOf } from "@/lib/mentions";
 import type { DmCallNotice } from "@/components/app/voice/dm-call-ring";
 import { acquireStreamLease, MAX_STREAM_LIFETIME_MS } from "@/server/stream-leases";
@@ -25,7 +25,7 @@ export interface MentionNotice {
   messageId: string;
   authorName: string;
   excerpt: string;
-  /** The person muted this community: badge only, no desktop notification. */
+  /** The person muted this channel or its community: badge only, no desktop notification. */
   muted: boolean;
 }
 
@@ -46,7 +46,7 @@ async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "m
   const loaded = await getMessageForBroadcast(event.messageId);
   if (!loaded || loaded.message.channelId !== event.channelId) return null;
   const [c] = await db.select({ name: community.name }).from(community).where(eq(community.id, access.channel.communityId));
-  const muted = await mutedCommunities(userId, [access.channel.communityId]);
+  const muted = await channelMuted(userId, access.channel.id, access.channel.communityId);
   return {
     communityId: access.channel.communityId,
     communityName: c?.name ?? "",
@@ -55,7 +55,7 @@ async function mentionNotice(userId: string, event: Extract<HubEvent, { type: "m
     messageId: loaded.message.id,
     authorName: loaded.message.authorName,
     excerpt: excerpt(loaded.message),
-    muted: muted.has(access.channel.communityId),
+    muted,
   };
 }
 

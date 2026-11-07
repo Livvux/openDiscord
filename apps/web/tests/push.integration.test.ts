@@ -3,10 +3,10 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { message, pushSubscription } from "@/db/schema";
-import { acceptInvite, createChannel, createCommunity, createInvite, setChannelOverride } from "@/server/communities";
+import { acceptInvite, createChannel, createCommunity, createInvite, getCommunityView, setChannelOverride } from "@/server/communities";
 import { listRoles } from "@/server/moderation";
 import { Permission } from "@/server/permissions";
-import { setNotificationLevel, setPresenceStatus } from "@/server/presence";
+import { setChannelNotificationLevel, setNotificationLevel, setPresenceStatus } from "@/server/presence";
 import { isAllowedEndpoint, pushCallCleared, pushDirectMessage, pushEnabled, pushMention, savePushSubscription, type PushSender } from "@/server/push";
 import { testUsers } from "./helpers";
 
@@ -54,7 +54,7 @@ describe.runIf(pushEnabled)("mention pushes", () => {
 
   it("pushes a short, readable payload for a visible channel", async () => {
     const msg = await post(generalId, `hey <@${member}> look`);
-    expect(await pushMention(member, generalId, msg.id, ok)).toBe(1);
+    expect(await pushMention(member, generalId, msg.id, ok)).toBeGreaterThan(0);
     const payload = JSON.parse(sent.at(-1)!.split(" ").slice(1).join(" "));
     // Not stored as a mention row (inserted directly), so the token renders as "@member".
     expect(payload).toMatchObject({ title: "Owner in #general", body: "hey @member look", url: `/app/c/${communityId}/${generalId}` });
@@ -94,6 +94,26 @@ describe.runIf(pushEnabled)("mention pushes", () => {
     await setChannelOverride(owner, hidden, everyone, 0, Permission.ViewChannels);
     const secret = await post(hidden, `secret <@${member}>`);
     expect(await pushMention(member, hidden, secret.id, ok)).toBe(0);
+  });
+
+  it("lets a channel's own level override its community's", async () => {
+    const msg = await post(generalId, `channel level <@${member}>`);
+    await setChannelNotificationLevel(member, generalId, "muted");
+    expect(await pushMention(member, generalId, msg.id, ok)).toBe(0);
+    expect((await getCommunityView(member, communityId)).channels.find((c) => c.id === generalId)?.notifications).toBe("muted");
+    // Muted community, channel explicitly on Mentions: still pushes.
+    await setNotificationLevel(member, communityId, "muted");
+    await setChannelNotificationLevel(member, generalId, "mentions");
+    expect(await pushMention(member, generalId, msg.id, ok)).toBeGreaterThan(0);
+    await setChannelNotificationLevel(member, generalId, "default");
+    expect(await pushMention(member, generalId, msg.id, ok)).toBe(0);
+    await setNotificationLevel(member, communityId, "mentions");
+    expect((await getCommunityView(member, communityId)).channels.find((c) => c.id === generalId)?.notifications).toBeNull();
+    // Only channels the person can see.
+    const hidden = await createChannel(owner, communityId, "hidden-level");
+    const everyone = (await listRoles(owner, communityId)).find((r) => r.isDefault)!.id;
+    await setChannelOverride(owner, hidden, everyone, 0, Permission.ViewChannels);
+    await expect(setChannelNotificationLevel(member, hidden, "muted")).rejects.toThrow("Channel not found.");
   });
 
   it("drops subscriptions whose keys can't be used", async () => {

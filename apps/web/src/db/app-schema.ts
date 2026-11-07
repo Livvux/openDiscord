@@ -152,6 +152,21 @@ export const channel = pgTable(
   (t) => [index("channel_community_idx").on(t.communityId), index("channel_category_idx").on(t.categoryId)],
 );
 
+/** A person's notification level for one channel; no row means the community's level applies. */
+export const channelNotification = pgTable(
+  "channel_notification",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channel.id, { onDelete: "cascade" }),
+    level: text("level", { enum: ["mentions", "muted"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.channelId] }), index("channel_notification_channel_idx").on(t.channelId), check("channel_notification_level", sql`${t.level} in ('mentions', 'muted')`)],
+);
+
 /** Per-channel allow/deny bits for one role (src/server/permissions.ts `channelAuthority`). */
 export const channelOverride = pgTable(
   "channel_override",
