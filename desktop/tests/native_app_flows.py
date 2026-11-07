@@ -1503,6 +1503,8 @@ def main():
                 metadata['attachment'] = {'sha256': hashlib.sha256(payload).hexdigest(), 'bytes': len(payload), 'outsider_status': status}
             with stage('community_export'):
                 alice.click('Community settings', 'a')
+                # The settings modal shows one category at a time (#153).
+                alice.click('Export')
                 exported = sandbox / 'community.json'
                 alice.save(exported, lambda: alice.click('Download community export', 'a'))
                 data = complete_json(exported, export_shape)
