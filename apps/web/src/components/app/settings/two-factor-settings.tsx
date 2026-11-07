@@ -9,11 +9,11 @@ import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
 
 /** QR code rendered as one SVG path, generated locally (the secret never leaves the browser). */
-function QrCode({ value }: { value: string }) {
+export function QrCode({ value, label = "QR code for your authenticator app" }: { value: string; label?: string }) {
   const { data, size } = encode(value, { border: 2 });
   const d = data.flatMap((row, y) => row.map((on, x) => (on ? `M${x} ${y}h1v1h-1z` : ""))).join("");
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="size-44 rounded-lg bg-white" role="img" aria-label="QR code for your authenticator app">
+    <svg viewBox={`0 0 ${size} ${size}`} className="size-44 rounded-lg bg-white" role="img" aria-label={label}>
       <path d={d} fill="black" shapeRendering="crispEdges" />
     </svg>
   );
