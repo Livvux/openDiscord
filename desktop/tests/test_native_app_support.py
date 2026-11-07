@@ -1097,13 +1097,17 @@ class NativeSupportTests(unittest.TestCase):
         client.goto, client.fill, client.click = Mock(), Mock(), Mock()
         client.element = Mock(return_value='checkbox')
         client.command = Mock(side_effect=[None,
+            flows.ORIGIN + '/app/welcome',
             {'url': flows.ORIGIN + '/app', 'protected_content': False},
             {'url': flows.ORIGIN + '/app', 'protected_content': True},
         ])
         with patch.object(flows, 'auth_progress'), patch.object(flows.time, 'sleep'):
             self.assertEqual(client.signup('Native Alice'), 'native-alice@example.test')
+        # New accounts land in the onboarding and go on to Home before the protected barrier.
         client.click.assert_called_once_with('Create account')
-        self.assertEqual(client.command.call_count, 3)
+        self.assertEqual(client.goto.call_args_list[-1].args, ('/app',))
+        self.assertEqual(client.command.call_count, 4)
+        self.assertEqual(client.command.call_args_list[1].args, ('GET', '/url'))
         self.assertEqual(client.command.call_args_list[0].args[:2], ('POST', '/element/checkbox/click'))
 
     def test_auth_barrier_keeps_30_second_budget_without_replaying_any_action(self):

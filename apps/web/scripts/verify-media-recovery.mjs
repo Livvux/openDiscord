@@ -144,7 +144,9 @@ async function signup(page, email, name) {
   const response = page.waitForResponse((r) => r.url().endsWith('/api/auth/sign-up/email') && r.request().method() === 'POST');
   await form.getByRole('button', { name: 'Create account' }).click();
   assert.equal((await response).status(), 200);
-  await page.waitForURL('**/app');
+  // New accounts start in the onboarding; recovery is about what comes after it.
+  await page.waitForURL('**/app/welcome');
+  await page.goto('/app');
 }
 async function signin(page, email) {
   await page.goto('/sign-in');
