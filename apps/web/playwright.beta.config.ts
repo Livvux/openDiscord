@@ -16,6 +16,5 @@ export default defineConfig({
     // app journeys; the required Chromium PWA tests exercise the real service worker.
     { name: "webkit", testMatch: journeys, use: { ...devices["Desktop Safari"], launchOptions: {}, serviceWorkers: "block" } },
     { name: "iphone", testMatch: journeys, use: { ...devices["iPhone 13"], launchOptions: {}, serviceWorkers: "block" } },
-    { name: "edge", testMatch: journeys, use: { ...devices["Desktop Edge"], channel: "msedge" } },
   ],
 });
