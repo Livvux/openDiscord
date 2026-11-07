@@ -302,9 +302,10 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     } });
     expect(call.getSnapshot().keysPrepared).toBe(false); expect(call.getSnapshot().roster[0].state).toBe("waiting");
     expect(native.port!.query).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(9_999); expect(native.port!.query).not.toHaveBeenCalled(); expect(native.port!.receiveAgreement).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(999); expect(native.port!.query).not.toHaveBeenCalled(); expect(native.port!.receiveAgreement).not.toHaveBeenCalled();
     expect(issued).toEqual(["join"]);
-    await vi.advanceTimersByTimeAsync(1); expect(native.port!.query).toHaveBeenCalledWith([memberId, remoteId]); expect(call.getSnapshot().keysPrepared).toBe(true);
+    // The first poll refreshes the roster instead of waiting for the 10 s heartbeat.
+    await vi.advanceTimersByTimeAsync(1); expect(issued).toEqual(["join", "heartbeat"]); expect(native.port!.query).toHaveBeenCalledWith([memberId, remoteId]); expect(call.getSnapshot().keysPrepared).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000); expect(native.port!.receiveAgreement).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(4_000); expect(native.port!.query).toHaveBeenCalledTimes(1);
     expect(call.getSnapshot().generation).toBe(1); expect(call.getSnapshot().admittedMemberIds).toEqual([]); expect(call.getSnapshot().sas).toEqual([]);
@@ -422,5 +423,21 @@ describe("CallSession deterministic lifetime adapter (native port mocked, no nat
     const pending = CallSession.create({ ...options, fetch: async (_path, init) => { const body = JSON.parse(String(init?.body)); nonce = body.input.joinNonce; deviceId = body.input.voiceDeviceId; return join.promise; } }).catch(error => error);
     await vi.advanceTimersByTimeAsync(4_000); join.resolve(Response.json(snapshot(1, 3_000)));
     expect(await pending).toMatchObject({ code: "lease-expired" }); expect(native.options).toBeUndefined();
+  });
+  it("refreshes the roster while a joining peer blocks polling, so later joins appear before the heartbeat", async () => {
+    const peer = (id: string, state: "waiting" | "active") => ({ ...snapshot().members[0], memberId: id, userId: id, anchorDeviceId: id, voiceUserId: `@voice_${callId}_${id}:opendiscord.local`, voiceDeviceId: id, joinNonce: id, participantIdentity: `v1:${id}`, state });
+    const second = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", third = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    let heartbeats = 0;
+    const roster = (generation: number, ...members: ReturnType<typeof peer>[]): VoiceSnapshot => { const value = snapshot(generation); return { ...value, members: [...value.members, ...members] }; };
+    call = await CallSession.create({ ...options, fetch: async (path, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.action === "join") { await fetcher()(path, init); return Response.json(roster(2, peer(second, "waiting"))); }
+      if (body.action === "heartbeat") { heartbeats++; return Response.json(roster(3, peer(second, "active"), peer(third, "waiting"))); }
+      return fetcher()(path, init);
+    } });
+    expect(call.getSnapshot().roster).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(heartbeats).toBeGreaterThan(0);
+    expect(call.getSnapshot().roster.map(member => member.memberId)).toContain(third);
   });
 });
