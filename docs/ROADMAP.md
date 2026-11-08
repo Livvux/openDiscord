@@ -103,7 +103,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local private volume and optional fail-closed ClamAV protocol integration implemented; production uses R2 and private fail-closed ClamAV |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K. Results open the exact message (`?m=<id>`, reload-safe): centered and highlighted with its context, also old messages and thread replies (thread panel); access is re-checked on every load, and deleted or unreadable targets show the same "no longer available" notice with the newest page |
-| Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
+| Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted, overridable per channel |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
 | Invites and onboarding | ✅ | Expiring/revocable invites, join requirements and versioned rules acknowledgement, enforced on joins and content mutations |
 | Presence and status | ✅ | Opt-in online status (off by default), heartbeat from open tabs, shown on avatars and member lists |
@@ -203,7 +203,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback. Unread counts, live list/Home updates over the personal event stream and content-free push added 2026-10-17. Group DMs (#112) and encrypted files (#110) added; E2EE voice/video calls with screen sharing in 1:1 and group conversations reuse the Voice call stack (conversation membership instead of channel permissions, revocation on leave/removal/block/suspension, content-free ringing and missed calls kept in the browser; Chromium and Firefox product e2e, no physical-device or Safari acceptance) |
 | Search | ✅ | Postgres full-text search limited to readable channels; results open at the exact message |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
-| Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |
+| Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted, overridable per channel |
 | Basic AutoMod | ✅ | Per-community blocked words and link rules, audited |
 
 ### P2 — important improvements

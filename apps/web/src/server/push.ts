@@ -10,7 +10,7 @@ import { loadChannelAuthority } from "./access";
 import { AppError } from "./errors";
 import { enforceCap } from "./limits";
 import { getMessageForBroadcast } from "./messages";
-import { mutedCommunities, presenceChoice } from "./presence";
+import { channelMuted, presenceChoice } from "./presence";
 import { excerptOf } from "@/lib/mentions";
 import { parse } from "./validation";
 
@@ -101,7 +101,7 @@ export async function pushMention(userId: string, channelId: string, messageId: 
   if (subs.length === 0) return 0;
   const access = await loadChannelAuthority(db, channelId, userId);
   if (!access) return 0;
-  if ((await mutedCommunities(userId, [access.channel.communityId])).size > 0) return 0;
+  if (await channelMuted(userId, access.channel.id, access.channel.communityId)) return 0;
   if ((await presenceChoice(userId)) === "dnd") return 0;
   const loaded = await getMessageForBroadcast(messageId);
   if (!loaded) return 0;

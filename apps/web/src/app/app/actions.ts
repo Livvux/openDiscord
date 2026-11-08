@@ -125,6 +125,8 @@ export const removeFriend = async (otherId: string) => run((u) => friends.remove
 export const searchPeople = async (query: string) => run((u) => friends.searchPeople(u, query), false);
 export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
   run((u) => presence.setNotificationLevel(u, communityId, level));
+export const setChannelNotificationLevel = async (channelId: string, level: "default" | "mentions" | "muted") =>
+  run((u) => presence.setChannelNotificationLevel(u, channelId, level));
 
 
 export const createIntegration = async (
