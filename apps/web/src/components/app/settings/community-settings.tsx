@@ -13,6 +13,9 @@ import { SafetySettings } from "@/components/app/settings/safety-settings";
 import { AutomodSettings } from "@/components/app/settings/automod-settings";
 import { NotificationLevel } from "@/components/app/settings/notification-level";
 import { CategoriesEditor } from "@/components/app/settings/categories-editor";
+import { OnboardingEditor } from "@/components/app/settings/onboarding-editor";
+import { ReopenOnboarding } from "@/components/app/settings/reopen-onboarding";
+import { getOnboarding } from "@/server/onboarding";
 import { getAutomod } from "@/server/automod";
 import { getListing } from "@/server/discovery";
 import { DiscoverListing } from "@/components/app/settings/discover-listing";
@@ -52,6 +55,7 @@ const AUDIT_LABELS: Record<string, string> = {
   "category.rename": "renamed a category to",
   "category.delete": "deleted category",
   "category.permissions": "changed permissions of category",
+  "onboarding.update": "changed onboarding",
   "invites.pause": "paused invites",
   "invites.resume": "resumed invites",
   "invites.auto_pause": "Raid protection paused invites",
@@ -73,7 +77,7 @@ function auditTarget(e: AuditEntry): string | null {
   if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete", "category.permissions"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
-  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist", "community.icon", "community.banner"].includes(e.action)) return null;
+  if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist", "community.icon", "community.banner", "onboarding.update"].includes(e.action)) return null;
   return e.targetName ?? "a deleted user";
 }
 
@@ -103,13 +107,15 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
   ]);
   const [assets, rules, appeals] = await Promise.all([has(a, Permission.ManageCommunity) ? listCommunityAssets(user.id, view.id) : [], getCommunityRules(user.id, view.id), has(a, Permission.BanMembers) ? listBanAppeals(user.id, view.id) : null]);
   const listing = view.isOwner ? await getListing(user.id, view.id) : null;
+  const own = await getOnboarding(user.id, view.id);
+  const onboardingState = has(a, Permission.ManageRoles) ? own : null;
   const canModerateMembers = has(a, Permission.KickMembers) || has(a, Permission.BanMembers) || has(a, Permission.ManageRoles);
 
   const groups: SettingsGroup[] = [
     { label: view.name, sections: [
       ...(has(a, Permission.ManageCommunity) ? [["overview", "Overview"], ["community-assets", "Emoji and stickers"]] as [string, string][] : []),
       ["community-rules", "Community rules"],
-      ...(has(a, Permission.ManageRoles) ? [["roles", "Roles"]] as [string, string][] : []),
+      ...(has(a, Permission.ManageRoles) ? [["roles", "Roles"], ["onboarding", "Onboarding"]] as [string, string][] : []),
       ...(has(a, Permission.ManageChannels) ? [["categories", "Categories"]] as [string, string][] : []),
     ] },
     { label: "Moderation", sections: [
@@ -124,6 +130,7 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
       ...(integrations ? [["integrations", "Bots and webhooks"]] as [string, string][] : []),
       ...(invites ? [["invites", "Active invites"]] as [string, string][] : []),
       ["notifications", "Notifications"],
+      ...(own.options.length ? [["your-roles", "Your roles"]] as [string, string][] : []),
       ...(view.isOwner ? [["export", "Export"]] as [string, string][] : []),
       ["danger", view.isOwner ? "Delete community" : "Leave community"],
     ] },
@@ -154,6 +161,16 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
           description="Roles grant permissions. Higher roles outrank lower ones; you can only manage roles below your own."
         >
           <RolesEditor communityId={view.id} authority={a} roles={roles} />
+        </Section>
+      )}
+      {own.options.length > 0 && (
+        <Section id="your-roles" title="Your roles">
+          <ReopenOnboarding communityId={view.id} />
+        </Section>
+      )}
+      {onboardingState && (
+        <Section id="onboarding" title="Onboarding" description="New members pick roles for themselves after joining.">
+          <OnboardingEditor communityId={view.id} roles={roles} options={onboardingState.options} />
         </Section>
       )}
       {has(a, Permission.ManageChannels) && (

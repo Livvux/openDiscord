@@ -92,6 +92,8 @@ export const member = pgTable(
     rulesAcceptedVersion: integer("rules_accepted_version").notNull().default(0),
     /** "muted": no desktop notifications or unread dot for this community; mention badges stay. */
     notifications: text("notifications", { enum: ["mentions", "muted"] }).notNull().default("mentions"),
+    /** When the member answered (or skipped) the community's role picker; null asks again. */
+    onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
   },
   (t) => [
     primaryKey({ columns: [t.communityId, t.userId] }),
@@ -117,6 +119,23 @@ export const memberRole = pgTable(
     ),
     index("member_role_role_idx").on(t.roleId),
   ],
+);
+
+/** A role members may pick for themselves after joining (src/server/onboarding.ts). */
+export const onboardingOption = pgTable(
+  "onboarding_option",
+  {
+    id: id(),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => community.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => role.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [uniqueIndex("onboarding_option_role_idx").on(t.roleId), index("onboarding_option_community_idx").on(t.communityId)],
 );
 
 /** A named group of channels in the sidebar. Deleting it keeps its channels (uncategorised). */
