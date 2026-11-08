@@ -12,10 +12,12 @@ import { MessageContent } from "./chat/message-item";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-/** Searches readable channels of one community. Opens with Ctrl/Cmd+K. */
+/** Searches readable channels of one community, or of every community. Opens with Ctrl/Cmd+K. */
 export function SearchDialog({ communityId, communityName }: { communityId: string; communityName: string }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [everywhere, setEverywhere] = useState(false);
+  const scope = everywhere ? null : communityId;
   const [results, setResults] = useState<{ query: string; items: SearchResult[]; done: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
@@ -36,10 +38,10 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
     if (!q) return;
     let active = true;
     const timer = setTimeout(() => {
-      void searchMessages(communityId, q).then((r) => {
+      void searchMessages(scope, q).then((r) => {
         if (!active) return;
         if (r.ok) {
-          setResults({ query: q, items: r.data, done: r.data.length < 25 });
+          setResults({ query: `${everywhere}:${q}`, items: r.data, done: r.data.length < 25 });
           setError(null);
         } else setError(r.error);
       });
@@ -48,13 +50,14 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
       active = false;
       clearTimeout(timer);
     };
-  }, [communityId, query]);
+  }, [scope, everywhere, query]);
 
-  const shown = query.trim() && results?.query === query.trim() ? results.items : null;
+  const key = `${everywhere}:${query.trim()}`;
+  const shown = query.trim() && results?.query === key ? results.items : null;
 
   async function loadOlder() {
     if (!results || results.items.length === 0) return;
-    const r = await searchMessages(communityId, results.query, results.items.at(-1)!.id);
+    const r = await searchMessages(scope, query.trim(), results.items.at(-1)!.id);
     if (r.ok) setResults((cur) => (cur && cur.query === results.query ? { ...cur, items: [...cur.items, ...r.data], done: r.data.length < 25 } : cur));
     else setError(r.error);
   }
@@ -70,10 +73,14 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
       </DialogTrigger>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Search {communityName}</DialogTitle>
+          <DialogTitle>{everywhere ? "Search all communities" : `Search ${communityName}`}</DialogTitle>
         </DialogHeader>
         <label htmlFor={inputId} className="sr-only">Search messages</label>
         <Input id={inputId} type="search" autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search messages" />
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={everywhere} onChange={(e) => setEverywhere(e.target.checked)} />
+          All communities
+        </label>
         <p role="status" className="text-xs text-muted-foreground">
           {shown ? (shown.length === 0 ? "No messages found." : `${shown.length}${results?.done ? "" : "+"} ${shown.length === 1 ? "result" : "results"}, newest first.`) : "Matches words by their beginning, in channels you can read."}
         </p>
@@ -83,13 +90,14 @@ export function SearchDialog({ communityId, communityName }: { communityId: stri
             {shown.map((m) => (
               <li key={m.id}>
                 <Link
-                  href={`/app/c/${communityId}/${m.channelId}?m=${m.id}`}
+                  href={`/app/c/${m.communityId}/${m.channelId}?m=${m.id}`}
                   onClick={() => setOpen(false)}
                   className="grid gap-0.5 px-3 py-2 text-sm hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   <span className="flex flex-wrap gap-x-2 text-xs text-zinc-400">
                     <span className="font-medium text-zinc-200">{m.authorName}</span>
                     {m.authorImported && <span className="text-zinc-500">(imported)</span>}
+                    {everywhere && <span>{m.communityName}</span>}
                     <span>#{m.channelName}</span>
                     <time dateTime={m.createdAt} suppressHydrationWarning>{dateFormat.format(new Date(m.createdAt))}</time>
                   </span>

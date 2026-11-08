@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import { createCommunity, createInviteLink, expectNoA11yViolations, joinAsNewUser, newUserPage, openMessageMenu, signUp } from "./helpers";
 
 test("explicit public creation, member consent, anonymous discovery, report and terminal unpublish", async ({ browser, isMobile }, testInfo) => {
+  // Three sign-ups, each through the onboarding, plus anonymous and report flows.
+  test.setTimeout(60_000);
   const owner = await newUserPage(browser);
   const errors: string[] = [];
   owner.on("pageerror", (error) => errors.push(error.message));
