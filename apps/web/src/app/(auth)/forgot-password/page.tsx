@@ -17,8 +17,15 @@ export default function ForgotPasswordPage() {
     setPending(true);
     setError(null);
     const email = String(new FormData(event.currentTarget).get("email"));
-    const { error } = await authClient.requestPasswordReset({ email, redirectTo: "/reset-password" });
-    setPending(false);
+    let result;
+    try {
+      result = await authClient.requestPasswordReset({ email, redirectTo: "/reset-password" });
+    } catch {
+      return setError("Could not reach the server. Please try again.");
+    } finally {
+      setPending(false);
+    }
+    const { error } = result;
     // Same message whether or not the account exists, so the form can't be used to probe emails.
     if (error) setError(error.message ?? "Something went wrong. Please try again.");
     else setSent(true);

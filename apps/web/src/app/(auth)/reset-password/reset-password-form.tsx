@@ -20,8 +20,15 @@ export function ResetPasswordForm() {
     if (!token) return;
     setPending(true);
     const newPassword = String(new FormData(event.currentTarget).get("password"));
-    const { error } = await authClient.resetPassword({ newPassword, token });
-    setPending(false);
+    let result;
+    try {
+      result = await authClient.resetPassword({ newPassword, token });
+    } catch {
+      return setError("Could not reach the server. Please try again.");
+    } finally {
+      setPending(false);
+    }
+    const { error } = result;
     if (error) return setError(error.message ?? "This reset link is invalid or has expired.");
     router.push("/sign-in");
   }

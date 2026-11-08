@@ -17,10 +17,17 @@ export function TwoFactorStep({ onDone }: { onDone: () => void }) {
     const code = String(new FormData(event.currentTarget).get("code")).replace(/\s+/g, "");
     setPending(true);
     setError(null);
-    const { error } = useBackupCode
-      ? await authClient.twoFactor.verifyBackupCode({ code })
-      : await authClient.twoFactor.verifyTotp({ code });
-    setPending(false);
+    let result;
+    try {
+      result = useBackupCode
+        ? await authClient.twoFactor.verifyBackupCode({ code })
+        : await authClient.twoFactor.verifyTotp({ code });
+    } catch {
+      return setError("Could not reach the server. Please try again.");
+    } finally {
+      setPending(false);
+    }
+    const { error } = result;
     if (error) setError(error.message ?? "That code didn't work.");
     else onDone();
   }

@@ -42,3 +42,21 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 });
+
+// A dropped connection must end the pending state: the form shows why and can be submitted again.
+test("auth forms recover from a network failure", async ({ page }) => {
+  await page.route("**/api/auth/sign-in/email", (route) => route.abort());
+  await page.goto("/sign-in");
+  await page.getByLabel("Email").fill("offline@example.test");
+  await page.getByLabel("Password").fill("correct horse battery");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator("form").getByRole("alert")).toHaveText("Could not reach the server. Please try again.");
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeEnabled();
+
+  await page.route("**/api/auth/request-password-reset", (route) => route.abort());
+  await page.goto("/forgot-password");
+  await page.getByLabel("Email").fill("offline@example.test");
+  await page.getByRole("button", { name: /reset link/i }).click();
+  await expect(page.locator("form").getByRole("alert")).toHaveText("Could not reach the server. Please try again.");
+  await expect(page.getByRole("button", { name: /reset link/i })).toBeEnabled();
+});
