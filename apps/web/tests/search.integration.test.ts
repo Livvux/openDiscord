@@ -60,4 +60,18 @@ describe("search", () => {
     const next = await searchMessages(owner, communityId, "paging", first.at(-1)!.id);
     expect(next).toHaveLength(5);
   });
+
+  it("searches every community the person belongs to, still only readable channels", async () => {
+    const { communityId: other, channelId: otherGeneral } = await createCommunity(owner, "Elsewhere");
+    await acceptInvite(member, await createInvite(owner, other, { expiresInHours: 24, maxUses: 1 }));
+    await seed(otherGeneral, owner, "Grillabend round two");
+    const { channelId: foreign } = await createCommunity(outsider, "Not mine");
+    await seed(foreign, outsider, "Grillabend elsewhere entirely");
+    const results = await searchMessages(member, null, "grillabend");
+    expect(results.map((r) => [r.content, r.communityName])).toEqual([
+      ["Grillabend round two", "Elsewhere"],
+      ["Der Grillabend ist am Freitag", "Searchable"],
+    ]);
+    expect(results[0].communityId).toBe(other);
+  });
 });

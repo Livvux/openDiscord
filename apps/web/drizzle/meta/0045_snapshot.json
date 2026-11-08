@@ -1,5 +1,5 @@
 {
-  "id": "53dd7375-d536-4ed3-bcd6-6a484f8cd5e6",
+  "id": "926e6f01-1da2-46f2-a9b0-c9fa087839c4",
   "prevId": "ffc7814e-59ed-40ff-b68a-6666642d75cc",
   "version": "7",
   "dialect": "postgresql",
@@ -1363,6 +1363,101 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.category_override": {
+      "name": "category_override",
+      "schema": "",
+      "columns": {
+        "category_id": {
+          "name": "category_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role_id": {
+          "name": "role_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allow": {
+          "name": "allow",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "deny": {
+          "name": "deny",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "category_override_role_idx": {
+          "name": "category_override_role_idx",
+          "columns": [
+            {
+              "expression": "role_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "category_override_category_id_category_id_fk": {
+          "name": "category_override_category_id_category_id_fk",
+          "tableFrom": "category_override",
+          "tableTo": "category",
+          "columnsFrom": [
+            "category_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "category_override_role_id_role_id_fk": {
+          "name": "category_override_role_id_role_id_fk",
+          "tableFrom": "category_override",
+          "tableTo": "role",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "category_override_category_id_role_id_pk": {
+          "name": "category_override_category_id_role_id_pk",
+          "columns": [
+            "category_id",
+            "role_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "category_override_bits": {
+          "name": "category_override_bits",
+          "value": "\"category_override\".\"allow\" & \"category_override\".\"deny\" = 0 and (\"category_override\".\"allow\" | \"category_override\".\"deny\") & ~15632 = 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.channel": {
       "name": "channel",
       "schema": "",
@@ -2338,12 +2433,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'mentions'"
-        },
-        "onboarded_at": {
-          "name": "onboarded_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -2966,109 +3055,6 @@
           ]
         }
       },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.onboarding_option": {
-      "name": "onboarding_option",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "community_id": {
-          "name": "community_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role_id": {
-          "name": "role_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        }
-      },
-      "indexes": {
-        "onboarding_option_role_idx": {
-          "name": "onboarding_option_role_idx",
-          "columns": [
-            {
-              "expression": "role_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "onboarding_option_community_idx": {
-          "name": "onboarding_option_community_idx",
-          "columns": [
-            {
-              "expression": "community_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "onboarding_option_community_id_community_id_fk": {
-          "name": "onboarding_option_community_id_community_id_fk",
-          "tableFrom": "onboarding_option",
-          "tableTo": "community",
-          "columnsFrom": [
-            "community_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "onboarding_option_role_id_role_id_fk": {
-          "name": "onboarding_option_role_id_role_id_fk",
-          "tableFrom": "onboarding_option",
-          "tableTo": "role",
-          "columnsFrom": [
-            "role_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

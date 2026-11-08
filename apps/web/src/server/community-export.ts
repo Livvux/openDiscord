@@ -5,7 +5,7 @@
 import { and, asc, count, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { attachment, auditLog, category, channel, channelOverride, community, communityAsset, member, mention, message, role, session, user } from "@/db/schema";
+import { attachment, auditLog, category, categoryOverride, channel, channelOverride, community, communityAsset, member, mention, message, role, session, user } from "@/db/schema";
 import { assetRefSchema, assetText, assetTokens, MAX_MESSAGE_ASSETS, MAX_MESSAGE_STICKERS, remapAssetTokens, MAX_COMMUNITY_EMOJI, MAX_COMMUNITY_STICKERS, MAX_COMMUNITY_ASSET_BYTES, type AssetRef } from "@/lib/community-assets";
 import { requireMember } from "./access";
 import { uuidv7 } from "./uuidv7";
@@ -27,7 +27,10 @@ export const communityExportSchema = z.object({
   community: z.object({ name: communityName, rules: z.string().trim().max(4000).default(""), rulesRequired: z.boolean().default(false) })
     .refine((c) => !c.rulesRequired || c.rules.length > 0, "Required community rules cannot be empty."),
   roles: z.array(z.object({ key, name: roleName, permissions: z.number().int(), position: z.number().int(), isDefault: z.boolean() })).max(100),
-  categories: z.array(z.object({ key, name: z.string().trim().min(1).max(32), position: z.number().int() })).max(50),
+  categories: z.array(z.object({
+    key, name: z.string().trim().min(1).max(32), position: z.number().int(),
+    overrides: z.array(z.object({ roleKey: key, allow: z.number().int(), deny: z.number().int() })).max(100).default([]),
+  })).max(50),
   channels: z.array(z.object({
     key,
     name: channelName,
@@ -69,6 +72,9 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown, i
     db.select({ id: communityAsset.id, name: communityAsset.name, kind: communityAsset.kind }).from(communityAsset).where(eq(communityAsset.communityId, communityId)),
   ]);
   const channelIds = channels.map((ch) => ch.id);
+  const categoryOverrides = categories.length
+    ? await db.select().from(categoryOverride).where(inArray(categoryOverride.categoryId, categories.map((cat) => cat.id)))
+    : [];
   const [overrides, messages] = channelIds.length
     ? await Promise.all([
         db.select().from(channelOverride).where(inArray(channelOverride.channelId, channelIds)),
@@ -104,7 +110,10 @@ export async function exportCommunity(userId: string, rawCommunityId: unknown, i
     assets,
     community: { name: c.name, rules: c.rules, rulesRequired: c.rulesRequired },
     roles: roles.map((r) => ({ key: r.id, name: r.name, permissions: r.permissions, position: r.position, isDefault: r.isDefault })),
-    categories: categories.map((cat) => ({ key: cat.id, name: cat.name, position: cat.position })),
+    categories: categories.map((cat) => ({
+      key: cat.id, name: cat.name, position: cat.position,
+      overrides: categoryOverrides.filter((o) => o.categoryId === cat.id).map((o) => ({ roleKey: o.roleId, allow: o.allow, deny: o.deny })),
+    })),
     channels: channels.map((ch) => ({
       key: ch.id, name: ch.name, topic: ch.topic, kind: ch.kind, position: ch.position, categoryKey: ch.categoryId,
       overrides: overrides.filter((o) => o.channelId === ch.id).map((o) => ({ roleKey: o.roleId, allow: o.allow, deny: o.deny })),
@@ -207,6 +216,8 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
     for (const [i, cat] of [...data.categories].sort((a, b) => a.position - b.position).entries()) {
       const [created] = await tx.insert(category).values({ communityId: c.id, name: cat.name, position: i + 1 }).returning({ id: category.id });
       categoryIds.set(cat.key, created.id);
+      const overrides = importOverrides(cat.overrides, roleIds);
+      if (overrides.length) await tx.insert(categoryOverride).values(overrides.map((o) => ({ ...o, categoryId: created.id })));
     }
 
     const channelIds = new Map<string, string>();
@@ -216,15 +227,7 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
         categoryId: ch.categoryKey ? (categoryIds.get(ch.categoryKey) ?? null) : null,
       }).returning({ id: channel.id });
       channelIds.set(ch.key, created.id);
-      // One override per role (a file could list a role twice): merge, allow wins.
-      const merged = new Map<string, { allow: number; deny: number }>();
-      for (const o of ch.overrides) {
-        const roleId = roleIds.get(o.roleKey);
-        if (!roleId) continue;
-        const prev = merged.get(roleId) ?? { allow: 0, deny: 0 };
-        merged.set(roleId, { allow: prev.allow | (o.allow & CHANNEL_PERMISSIONS), deny: prev.deny | (o.deny & CHANNEL_PERMISSIONS) });
-      }
-      const overrides = [...merged].map(([roleId, o]) => ({ roleId, allow: o.allow, deny: o.deny & ~o.allow })).filter((o) => o.allow !== 0 || o.deny !== 0);
+      const overrides = importOverrides(ch.overrides, roleIds);
       if (overrides.length) await tx.insert(channelOverride).values(overrides.map((o) => ({ ...o, channelId: created.id })));
     }
 
@@ -302,4 +305,16 @@ async function runImport(userId: string, data: z.infer<typeof communityExportSch
     await tx.insert(auditLog).values({ communityId: c.id, actorId: userId, action: "community.import", reason: `${sorted.length} messages` });
     return c.id;
   });
+}
+
+/** One override per role (a file could list a role twice): merge, allow wins; unknown roles and bits are dropped. */
+function importOverrides(list: readonly { roleKey: string; allow: number; deny: number }[], roleIds: ReadonlyMap<string, string>) {
+  const merged = new Map<string, { allow: number; deny: number }>();
+  for (const o of list) {
+    const roleId = roleIds.get(o.roleKey);
+    if (!roleId) continue;
+    const prev = merged.get(roleId) ?? { allow: 0, deny: 0 };
+    merged.set(roleId, { allow: prev.allow | (o.allow & CHANNEL_PERMISSIONS), deny: prev.deny | (o.deny & CHANNEL_PERMISSIONS) });
+  }
+  return [...merged].map(([roleId, o]) => ({ roleId, allow: o.allow, deny: o.deny & ~o.allow })).filter((o) => o.allow !== 0 || o.deny !== 0);
 }

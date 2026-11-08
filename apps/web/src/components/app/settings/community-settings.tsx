@@ -54,6 +54,7 @@ const AUDIT_LABELS: Record<string, string> = {
   "category.create": "created category",
   "category.rename": "renamed a category to",
   "category.delete": "deleted category",
+  "category.permissions": "changed permissions of category",
   "onboarding.update": "changed onboarding",
   "invites.pause": "paused invites",
   "invites.resume": "resumed invites",
@@ -73,7 +74,7 @@ const AUDIT_LABELS: Record<string, string> = {
 
 /** Person actions point at a user id; deletions store the deleted name; role edits show nothing. */
 function auditTarget(e: AuditEntry): string | null {
-  if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete"].includes(e.action)) return e.targetId;
+  if (["asset.create", "asset.delete", "role.delete", "category.create", "category.rename", "category.delete", "category.permissions"].includes(e.action)) return e.targetId;
   if (e.action === "channel.permissions") return e.targetId ? `#${e.targetId}` : "a private channel";
   if (e.action === "channel.delete") return e.targetId ?? "a private channel";
   if (["community.rules", "role.create", "role.update", "invites.pause", "invites.resume", "invites.auto_pause", "community.safety", "automod.update", "automod.block", "community.export", "community.import", "discover.list", "discover.unlist", "community.icon", "community.banner", "onboarding.update"].includes(e.action)) return null;
@@ -174,7 +175,7 @@ async function Settings({ params, intercepted }: Pick<PageProps<"/app/c/[communi
       )}
       {has(a, Permission.ManageChannels) && (
         <Section id="categories" title="Categories" description="Group channels in the sidebar.">
-          <CategoriesEditor communityId={view.id} categories={view.categories} />
+          <CategoriesEditor communityId={view.id} categories={view.categories} canManagePermissions={has(a, Permission.ManageRoles)} />
         </Section>
       )}
       {safety && (

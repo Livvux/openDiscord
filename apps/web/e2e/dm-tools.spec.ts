@@ -11,7 +11,8 @@ test("encrypted DM replies, edits, reactions, local search, typing and deletion 
   await bob.setViewportSize({ width: 1280, height: 900 });
   const errors: string[] = [], wire: string[] = [], throttled: string[] = [];
   for (const page of [alice, bob]) {
-    page.on("pageerror", (error) => errors.push(error.message));
+    // WebKit rejects a Next.js RSC refresh still in flight when the page reloads; Next leaves that rejection unhandled.
+    page.on("pageerror", (error) => { if (!/_rsc=\S+ due to access control checks\.$/.test(error.message)) errors.push(error.message); });
     page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/api/dm")) wire.push(request.url() + (request.postData() ?? "")); });
     // The client's own polling must stay inside the DM read budget, or explicit history loads fail.
     page.on("response", (response) => { if (response.status() === 429 && new URL(response.url()).pathname.startsWith("/api/dm")) throttled.push(new URL(response.url()).pathname); });

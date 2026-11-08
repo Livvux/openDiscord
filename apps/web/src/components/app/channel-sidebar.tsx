@@ -21,7 +21,7 @@ export async function ChannelSidebar({ view }: { view: CommunityView }) {
   const loose = view.channels.filter((c) => !c.categoryId);
   const link = (c: CommunityView["channels"][number]) => (
     <li key={c.id}>
-      <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} kind={c.kind} />
+      <ChannelLink channelId={c.id} href={`/app/c/${view.id}/${c.id}`} name={c.name} isPrivate={c.isPrivate} kind={c.kind} muted={c.notifications === "muted"} />
     </li>
   );
   const canModerate = (view.authority.permissions & SETTINGS_PERMISSIONS) !== 0;

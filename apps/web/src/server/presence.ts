@@ -1,11 +1,11 @@
-// Opt-in presence and per-community notification level. Presence is off by default: nobody sees
+// Opt-in presence and per-community and per-channel notification levels. Presence is off by default: nobody sees
 // whether you're online unless you turn it on. "Online" = an open tab sent a heartbeat recently.
 import { and, eq, gt, inArray, lt, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { member, userPresence } from "@/db/schema";
+import { channelNotification, member, userPresence } from "@/db/schema";
 import type { PresenceChoice, PresenceStatus } from "@/lib/presence";
-import { requireMember } from "./access";
+import { requireChannel, requireMember } from "./access";
 import { parse, uuid } from "./validation";
 
 export const ONLINE_WINDOW_MS = 90_000;
@@ -67,6 +67,33 @@ export async function setNotificationLevel(userId: string, rawCommunityId: unkno
   const level = parse(z.enum(["mentions", "muted"]), rawLevel);
   await requireMember(db, communityId, userId);
   await db.update(member).set({ notifications: level }).where(and(eq(member.communityId, communityId), eq(member.userId, userId)));
+}
+
+/** "default" removes the channel's own level so the community's applies again. */
+export async function setChannelNotificationLevel(userId: string, rawChannelId: unknown, rawLevel: unknown): Promise<void> {
+  const channelId = parse(uuid, rawChannelId);
+  const level = parse(z.enum(["default", "mentions", "muted"]), rawLevel);
+  await requireChannel(db, channelId, userId);
+  if (level === "default") {
+    await db.delete(channelNotification).where(and(eq(channelNotification.userId, userId), eq(channelNotification.channelId, channelId)));
+  } else {
+    await db.insert(channelNotification).values({ userId, channelId, level })
+      .onConflictDoUpdate({ target: [channelNotification.userId, channelNotification.channelId], set: { level } });
+  }
+}
+
+/** The person's own level per channel; channels without one are absent. */
+export async function channelNotificationLevels(userId: string, channelIds: string[]): Promise<Map<string, NotificationLevel>> {
+  if (channelIds.length === 0) return new Map();
+  const rows = await db.select({ channelId: channelNotification.channelId, level: channelNotification.level }).from(channelNotification)
+    .where(and(eq(channelNotification.userId, userId), inArray(channelNotification.channelId, channelIds)));
+  return new Map(rows.map((r) => [r.channelId, r.level]));
+}
+
+/** A channel's own level wins over its community's. */
+export async function channelMuted(userId: string, channelId: string, communityId: string): Promise<boolean> {
+  const own = (await channelNotificationLevels(userId, [channelId])).get(channelId);
+  return own ? own === "muted" : (await mutedCommunities(userId, [communityId])).size > 0;
 }
 
 export async function mutedCommunities(userId: string, communityIds: string[]): Promise<Set<string>> {

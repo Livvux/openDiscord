@@ -20,6 +20,8 @@ test("sign up, sign out and sign back in", async ({ page }, testInfo) => {
   await page.getByRole("checkbox", { name: /I am at least/ }).check();
   await expect(page.locator('[name="cf-turnstile-response"]')).not.toHaveValue("", { timeout: 15_000 });
   await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/app\/welcome$/);
+  await page.getByRole("link", { name: "Skip" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { level: 1, name: "Friends" })).toBeVisible();
 
