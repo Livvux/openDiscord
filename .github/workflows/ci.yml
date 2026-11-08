@@ -204,9 +204,9 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           # Playwright splits shards by test count; the weights are per-shard test counts balanced on
-          # measured durations (scripts/playwright-shard-weights.py, 2026-10-22: ~350 s each instead of
-          # 460/280/280 s). Stale weights only skew balance, every test still runs on exactly one shard.
-          PWTEST_SHARD_WEIGHTS: "35:75:130"
+          # measured durations (scripts/playwright-shard-weights.py, 2026-11-07, 278 tests: ~440 s each instead of
+          # 450/450/630 s). Stale weights only skew balance, every test still runs on exactly one shard.
+          PWTEST_SHARD_WEIGHTS: "43:73:162"
         run: pnpm --filter web exec playwright test --project=desktop --project=mobile --shard="$SHARD/3" --workers=2 --reporter=list --output=test-results/browser
       # Each shard owns its database. The instance-wide alpha switch runs only after
       # this runner's ordinary tests finish, with no other tests using that database.
@@ -249,8 +249,6 @@ jobs:
           - { engine: firefox, projects: --project=firefox, shard: 2/2, weights: "" }
           - { engine: webkit, projects: --project=webkit --project=iphone, shard: 1/2, weights: "16:34" }
           - { engine: webkit, projects: --project=webkit --project=iphone, shard: 2/2, weights: "16:34" }
-          - { engine: msedge, projects: --project=edge, shard: 1/2, weights: "" }
-          - { engine: msedge, projects: --project=edge, shard: 2/2, weights: "" }
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:

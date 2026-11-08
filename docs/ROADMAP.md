@@ -94,7 +94,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Requirement | Status | Notes / priority |
 | --- | --- | --- |
 | Communities and channels | ✅ | |
-| Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
+| Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*. Role overrides on a category reach its channels; a channel's own override for the same role wins. Changing what a category passes down needs *Manage roles* and sight of every channel in it |
 | Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
 | DM conversation tools | ✅ implementation | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` is included; candidate-specific checks/deployment remain required |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |

@@ -1,5 +1,5 @@
 {
-  "id": "d4e88108-b350-473f-a340-e507e21de4b6",
+  "id": "926e6f01-1da2-46f2-a9b0-c9fa087839c4",
   "prevId": "ffc7814e-59ed-40ff-b68a-6666642d75cc",
   "version": "7",
   "dialect": "postgresql",
@@ -1363,6 +1363,101 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.category_override": {
+      "name": "category_override",
+      "schema": "",
+      "columns": {
+        "category_id": {
+          "name": "category_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role_id": {
+          "name": "role_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allow": {
+          "name": "allow",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "deny": {
+          "name": "deny",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "category_override_role_idx": {
+          "name": "category_override_role_idx",
+          "columns": [
+            {
+              "expression": "role_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "category_override_category_id_category_id_fk": {
+          "name": "category_override_category_id_category_id_fk",
+          "tableFrom": "category_override",
+          "tableTo": "category",
+          "columnsFrom": [
+            "category_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "category_override_role_id_role_id_fk": {
+          "name": "category_override_role_id_role_id_fk",
+          "tableFrom": "category_override",
+          "tableTo": "role",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "category_override_category_id_role_id_pk": {
+          "name": "category_override_category_id_role_id_pk",
+          "columns": [
+            "category_id",
+            "role_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "category_override_bits": {
+          "name": "category_override_bits",
+          "value": "\"category_override\".\"allow\" & \"category_override\".\"deny\" = 0 and (\"category_override\".\"allow\" | \"category_override\".\"deny\") & ~15632 = 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.channel": {
       "name": "channel",
       "schema": "",
@@ -1484,93 +1579,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.channel_notification": {
-      "name": "channel_notification",
-      "schema": "",
-      "columns": {
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "channel_id": {
-          "name": "channel_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "level": {
-          "name": "level",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "channel_notification_channel_idx": {
-          "name": "channel_notification_channel_idx",
-          "columns": [
-            {
-              "expression": "channel_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "channel_notification_user_id_user_id_fk": {
-          "name": "channel_notification_user_id_user_id_fk",
-          "tableFrom": "channel_notification",
-          "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "channel_notification_channel_id_channel_id_fk": {
-          "name": "channel_notification_channel_id_channel_id_fk",
-          "tableFrom": "channel_notification",
-          "tableTo": "channel",
-          "columnsFrom": [
-            "channel_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "channel_notification_user_id_channel_id_pk": {
-          "name": "channel_notification_user_id_channel_id_pk",
-          "columns": [
-            "user_id",
-            "channel_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "channel_notification_level": {
-          "name": "channel_notification_level",
-          "value": "\"channel_notification\".\"level\" in ('mentions', 'muted')"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.channel_override": {

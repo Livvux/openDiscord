@@ -52,6 +52,10 @@ export const setChannelOverride = async (channelId: string, roleId: string, allo
 export const createCategory = async (communityId: string, name: string) => run((u) => categories.createCategory(u, communityId, name));
 export const renameCategory = async (categoryId: string, name: string) => run((u) => categories.renameCategory(u, categoryId, name));
 export const deleteCategory = async (categoryId: string) => run((u) => categories.deleteCategory(u, categoryId));
+export const listCategoryOverrides = async (categoryId: string) =>
+  run((u) => categories.listCategoryOverrides(u, categoryId), false);
+export const setCategoryOverride = async (categoryId: string, roleId: string, allow: number, deny: number) =>
+  run((u) => categories.setCategoryOverride(u, categoryId, roleId, allow, deny));
 export const setChannelCategory = async (channelId: string, categoryId: string | null) =>
   run((u) => categories.setChannelCategory(u, channelId, categoryId));
 export const deleteChannel = async (channelId: string) => run((u) => communities.deleteChannel(u, channelId));
@@ -77,7 +81,7 @@ export const sendMessage = async (
 export const sendStatus = async (sendIds: string[]) => run((u) => messages.sendStatus(u, sendIds), false);
 export const toggleReaction = async (messageId: string, emoji: string) => run((u) => messages.toggleReaction(u, messageId, emoji), false);
 export const setPinned = async (messageId: string, pinned: boolean) => run((u) => messages.setPinned(u, messageId, pinned), false);
-export const searchMessages = async (communityId: string, query: string, before?: string) =>
+export const searchMessages = async (communityId: string | null, query: string, before?: string) =>
   run((u) => messages.searchMessages(u, communityId, query, before), false);
 export const listPinned = async (channelId: string) => run((u) => messages.listPinned(u, channelId), false);
 export const editMessage = async (messageId: string, content: string, publicGeneration: string | null = null) =>

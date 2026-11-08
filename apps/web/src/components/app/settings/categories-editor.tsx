@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { CategorySummary } from "@/server/categories";
+import { ChannelPermissions } from "@/components/app/channel-permissions";
 
-export function CategoriesEditor({ communityId, categories }: { communityId: string; categories: CategorySummary[] }) {
+export function CategoriesEditor({ communityId, categories, canManagePermissions }: { communityId: string; categories: CategorySummary[]; canManagePermissions: boolean }) {
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, onOk?: () => void) =>
     startTransition(async () => {
@@ -18,7 +20,7 @@ export function CategoriesEditor({ communityId, categories }: { communityId: str
     });
 
   return (
-    <div className="grid max-w-md gap-3">
+    <div className="grid max-w-xl gap-3">
       {categories.length > 0 && (
         <ul className="divide-y rounded-lg border">
           {categories.map((c) => (
@@ -34,6 +36,18 @@ export function CategoriesEditor({ communityId, categories }: { communityId: str
                 <label htmlFor={`category-${c.id}`} className="sr-only">Name of category {c.name}</label>
                 <Input id={`category-${c.id}`} name="name" defaultValue={c.name} maxLength={32} required />
                 <Button type="submit" variant="outline" size="sm" disabled={pending}>Rename</Button>
+                {canManagePermissions && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-expanded={editing === c.id}
+                    aria-label={`Permissions of category ${c.name}`}
+                    onClick={() => setEditing(editing === c.id ? null : c.id)}
+                  >
+                    Permissions
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="destructive"
@@ -45,6 +59,7 @@ export function CategoriesEditor({ communityId, categories }: { communityId: str
                   Delete
                 </Button>
               </form>
+              {editing === c.id && <div className="mt-2"><ChannelPermissions categoryId={c.id} name={c.name} /></div>}
             </li>
           ))}
         </ul>
@@ -64,7 +79,6 @@ export function CategoriesEditor({ communityId, categories }: { communityId: str
           <Button type="submit" disabled={pending}>Create</Button>
         </div>
       </form>
-      <p className="text-xs text-muted-foreground">Move channels into a category from their channel settings. Categories don&apos;t change who can see a channel.</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </div>
   );

@@ -31,6 +31,13 @@ test.describe("search", () => {
     await dialog.getByRole("searchbox", { name: "Search messages" }).fill("budget");
     await expect(dialog.getByRole("status")).toHaveText("No messages found.");
     await expectNoA11yViolations(member);
+    // The same dialog searches every community the member belongs to.
+    await dialog.getByRole("checkbox", { name: "All communities" }).check();
+    const everywhere = member.getByRole("dialog", { name: "Search all communities" });
+    await everywhere.getByRole("searchbox", { name: "Search messages" }).fill("picnic");
+    await expect(everywhere.getByRole("status")).toHaveText("1 result, newest first.");
+    await expect(everywhere.getByText("Archive", { exact: true })).toBeVisible();
+    await everywhere.getByRole("checkbox", { name: "All communities" }).uncheck();
     await dialog.getByRole("searchbox", { name: "Search messages" }).fill("picnic");
     await dialog.getByRole("link", { name: /The picnic moves/ }).click();
     await expect(member.getByRole("heading", { level: 1, name: "general" })).toBeVisible();
