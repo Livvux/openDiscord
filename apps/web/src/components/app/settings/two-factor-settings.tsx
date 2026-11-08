@@ -30,8 +30,16 @@ export function TwoFactorSettings({ enabled }: { enabled: boolean }) {
   async function call<T>(fn: () => Promise<{ data: T | null; error: { message?: string } | null }>) {
     setPending(true);
     setError(null);
-    const { data, error } = await fn();
-    setPending(false);
+    let result;
+    try {
+      result = await fn();
+    } catch {
+      setError("Could not reach the server. Please try again.");
+      return null;
+    } finally {
+      setPending(false);
+    }
+    const { data, error } = result;
     if (error) setError(error.message ?? "Something went wrong.");
     return error ? null : data;
   }

@@ -25,9 +25,15 @@ export function ProfileForm({ name, email, bio, customStatus }: ProfileFormProps
     event.preventDefault();
     setPending(true);
     const form = new FormData(event.currentTarget);
-    const { error } = await authClient.updateUser({ name: String(form.get("name")).trim() });
-    const profile = error ? null : await updateProfile({ bio: String(form.get("bio") ?? ""), customStatus: String(form.get("customStatus") ?? "") });
-    setPending(false);
+    let error, profile;
+    try {
+      ({ error } = await authClient.updateUser({ name: String(form.get("name")).trim() }));
+      profile = error ? null : await updateProfile({ bio: String(form.get("bio") ?? ""), customStatus: String(form.get("customStatus") ?? "") });
+    } catch {
+      return setStatus({ ok: false, text: "Could not reach the server. Please try again." });
+    } finally {
+      setPending(false);
+    }
     const failure = error ? (error.message ?? "Could not save.") : profile && !profile.ok ? profile.error : null;
     setStatus(failure ? { ok: false, text: failure } : { ok: true, text: "Saved." });
     if (!failure) router.refresh();

@@ -26,8 +26,15 @@ export function DeleteAccount({ ownedCommunities }: { ownedCommunities: string[]
     if (!window.confirm("Delete your account and all your messages permanently?")) return;
     setPending(true);
     const password = String(new FormData(event.currentTarget).get("password"));
-    const { error } = await authClient.deleteUser({ password });
-    setPending(false);
+    let result;
+    try {
+      result = await authClient.deleteUser({ password });
+    } catch {
+      return setError("Could not reach the server. Please try again.");
+    } finally {
+      setPending(false);
+    }
+    const { error } = result;
     if (error) return setError(error.message ?? "Could not delete your account.");
     router.push("/");
     router.refresh();

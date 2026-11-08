@@ -60,19 +60,26 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
     setError(null);
     setNotice(null);
 
-    const { data, error } = isSignUp
-      ? await authClient.signUp.email(
-          { email, password, name: String(form.get("name")), callbackURL: landing },
-          { headers: { [REGISTRATION_HEADER]: registrationAttestation(minimumAge), ...(captchaToken ? { "x-captcha-response": captchaToken } : {}) } },
-        )
-      : await authClient.signIn.email({ email, password, callbackURL: next });
-
-    setPending(false);
-    if (captchaRequired) {
-      // Turnstile tokens are single-use: get a fresh one for the next attempt.
-      setCaptchaToken(null);
-      setCaptchaKey((k) => k + 1);
+    let response;
+    try {
+      response = isSignUp
+        ? await authClient.signUp.email(
+            { email, password, name: String(form.get("name")), callbackURL: landing },
+            { headers: { [REGISTRATION_HEADER]: registrationAttestation(minimumAge), ...(captchaToken ? { "x-captcha-response": captchaToken } : {}) } },
+          )
+        : await authClient.signIn.email({ email, password, callbackURL: next });
+    } catch {
+      setError("Could not reach the server. Please try again.");
+      return;
+    } finally {
+      setPending(false);
+      if (captchaRequired) {
+        // Turnstile tokens are single-use: get a fresh one for the next attempt.
+        setCaptchaToken(null);
+        setCaptchaKey((k) => k + 1);
+      }
     }
+    const { data, error } = response;
     if (error?.code === "ACCOUNT_PENDING") {
       setAwaitingApproval(true);
       return;
@@ -108,7 +115,9 @@ export function AuthForm({ mode, closedAlpha = false, minimumAge = 16, turnstile
 
   async function signInWithPasskey() {
     setError(null);
-    const result = await authClient.signIn.passkey();
+    let result;
+    try { result = await authClient.signIn.passkey(); }
+    catch { return setError("Could not reach the server. Please try again."); }
     if (result?.error && "code" in result.error && result.error.code === "ACCOUNT_PENDING") setAwaitingApproval(true);
     else if (result?.error) setError(result.error.message ?? "Passkey sign-in failed.");
     else done();
