@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, CopyIcon, MessageCircleIcon, SearchIcon, UserMinusIcon, UsersIcon, XIcon } from "lucide-react";
+import { CheckIcon, MessageCircleIcon, SearchIcon, UserMinusIcon, UsersIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useId, useState, useTransition } from "react";
 import { blockUser, removeFriend, respondToFriendRequest, searchPeople, sendFriendRequest } from "@/app/app/actions";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import type { BlockedUser } from "@/server/blocks";
 import type { FriendView, PersonResult } from "@/server/friends";
 import { BlockedList } from "../settings/blocked-list";
+import { InviteFriends } from "../onboarding/invite-friends";
 import { GettingStarted } from "./getting-started";
 import { PresenceAvatar } from "../presence-avatar";
 import { UserContextMenu } from "../user-context-menu";
@@ -179,7 +180,6 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PersonResult[] | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
-  const [copied, setCopied] = useState(false);
   const [busy, startTransition] = useTransition();
 
   function send(target: string, onSent?: (outcome: "sent" | "accepted" | "already") => void) {
@@ -188,16 +188,6 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
       setNotice(result.ok ? { ok: true, text: SENT[result.data] } : { ok: false, text: result.error });
       if (result.ok) onSent?.(result.data);
     });
-  }
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}/app?add=${encodeURIComponent(userId)}`);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setNotice({ ok: false, text: "Couldn't copy. Select the code and copy it manually." });
-    }
   }
 
   function refreshResults() {
@@ -274,12 +264,9 @@ function AddFriend({ userId, initialCode }: { userId: string; initialCode: strin
         )
       )}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3 text-sm">
-        <span className="text-muted-foreground">Your friend code:</span>
-        <code className="rounded bg-white/5 px-1.5 py-0.5 text-xs break-all">{userId}</code>
-        <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label={copied ? "Copied your friend link" : "Copy link to add you as a friend"}>
-          {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy link"}
-        </Button>
+      <div className="grid gap-3 border-t border-white/5 pt-3 text-sm">
+        <p><span className="text-muted-foreground">Your friend code: </span><code className="rounded bg-white/5 px-1.5 py-0.5 text-xs break-all">{userId}</code></p>
+        <InviteFriends userId={userId} />
       </div>
     </section>
   );

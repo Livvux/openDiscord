@@ -39,8 +39,8 @@ export function uniqueEmail(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
 }
 
-/** Signs up through the UI. Starts at `path` (e.g. an invite's sign-up link). */
-export async function signUp(page: Page, name: string, path = "/sign-up") {
+/** Signs up through the UI. Starts at `path` (e.g. an invite's sign-up link). Skips the onboarding unless `onboarding` is set. */
+export async function signUp(page: Page, name: string, path = "/sign-up", { onboarding = false } = {}) {
   const email = uniqueEmail(name.toLowerCase().replace(/\W+/g, "-"));
   await page.goto(path);
   const form = page.locator("form:visible");
@@ -75,13 +75,19 @@ export async function signUp(page: Page, name: string, path = "/sign-up") {
     }
     diagnostics.phase = "redirect";
     const responded = performance.now();
-    await expect(page).toHaveURL(destination, { timeout: 5_000 });
+    // Without a `next`, new accounts start in the onboarding.
+    const welcome = !signupUrl.searchParams.has("next");
+    await expect(page).toHaveURL(welcome ? /\/app\/welcome$/ : destination, { timeout: 5_000 });
     diagnostics.redirectMs = Math.round(performance.now() - responded);
     diagnostics.phase = "complete";
   } finally {
     // Aggregate timings/status only: never write response bodies, account data, cookies or tokens.
     await writeFile(test.info().outputPath("signup-diagnostics.json"), JSON.stringify(diagnostics));
   }
+  // Most specs are about something else: go on to Home, as sign-up did before the onboarding existed.
+  // Not by clicking Skip: that navigation keeps a DM store open long enough to delay a sign-out wipe
+  // in specs that reload right away (dm-sign-out). onboarding.spec covers the real Skip and Finish.
+  if (!onboarding && new URL(page.url()).pathname === "/app/welcome") await page.goto(destination);
   return email;
 }
 
