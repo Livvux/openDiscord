@@ -94,7 +94,7 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Requirement | Status | Notes / priority |
 | --- | --- | --- |
 | Communities and channels | ✅ | |
-| Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*; no permissions of their own |
+| Categories | ✅ | Collapsible sidebar groups managed with *Manage channels*. Role overrides on a category reach its channels; a channel's own override for the same role wins. Changing what a category passes down needs *Manage roles* and sight of every channel in it |
 | Direct messages | ✅ | Encrypted requests, verified devices, recovery and desktop/mobile acceptance shipped in #30; external cryptographic audit remains open |
 | DM conversation tools | ✅ implementation | Encrypted replies, author-only edits/deletion, encrypted six-emoji reactions; client-local text/filename search with progressive full-history loading; expiring permission-checked DM typing metadata. Migration `0040_dm_conversation_tools` is included; candidate-specific checks/deployment remain required |
 | Realtime text messaging | ✅ | SSE + LISTEN/NOTIFY, gap recovery on reconnect |
@@ -103,9 +103,9 @@ Legend: ✅ implemented and tested · 🟡 partial · ❌ missing · Priority fo
 | Attachments | ✅ | Images re-encoded without EXIF (8 MB); other files up to 25 MB stored unchanged and only served as downloads; S3-compatible storage (R2, MinIO, Garage). Local private volume and optional fail-closed ClamAV protocol integration implemented; production uses R2 and private fail-closed ClamAV |
 | History and pagination | ✅ | Cursor pagination (UUIDv7) |
 | Search | ✅ | Postgres full-text search (`simple` configuration, word-prefix matching), limited to channels the person can read; blocked authors excluded; Ctrl/Cmd+K. Results open the exact message (`?m=<id>`, reload-safe): centered and highlighted with its context, also old messages and thread replies (thread panel); access is re-checked on every load, and deleted or unreadable targets show the same "no longer available" notice with the newest page |
-| Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted |
+| Notification preferences | ✅ | Opt-in desktop notifications per browser; per-community Mentions/Muted, overridable per channel |
 | Roles and granular permissions | ✅ | Community roles with hierarchy; per-channel allow/deny overrides per role (view, send, delete others' messages) for private and read-only channels |
-| Invites and onboarding | ✅ | Expiring/revocable invites, join requirements and versioned rules acknowledgement, enforced on joins and content mutations |
+| Invites and onboarding | ✅ | Expiring/revocable invites, join requirements and versioned rules acknowledgement, enforced on joins and content mutations. After joining, members pick interest roles (access-only, ranked below moderators) that can unlock channels |
 | Presence and status | ✅ | Opt-in online status (off by default), heartbeat from open tabs, shown on avatars and member lists |
 | Edit, delete, moderate messages | ✅ | Pinning (max 50 per channel, audited); safe Markdown subset (code, quotes, bold/italic/strike, http(s) links) rendered without raw HTML |
 | Opt-in public, indexable channels | ✅ | Explicit publication, separate public title, current-generation author acknowledgement, text-only anonymous pages, reporting, discovery and terminal unpublish shipped in #44; existing channels remain private |
@@ -203,7 +203,7 @@ Each item ships with a migration (if needed), integration tests, a Playwright fl
 | Direct messages with audited E2EE | 🟡 external audit open | Matrix crypto WASM18.9.0 device verification, ciphertext transport and bounded recovery merged in #30. Exact-head desktop/mobile runtime acceptance passed; independent integration audit remains open. No plaintext fallback. Unread counts, live list/Home updates over the personal event stream and content-free push added 2026-10-17. Group DMs (#112) and encrypted files (#110) added; E2EE voice/video calls with screen sharing in 1:1 and group conversations reuse the Voice call stack (conversation membership instead of channel permissions, revocation on leave/removal/block/suspension, content-free ringing and missed calls kept in the browser; Chromium and Firefox product e2e, no physical-device or Safari acceptance) |
 | Search | ✅ | Postgres full-text search limited to readable channels; results open at the exact message |
 | Replies, reactions, pins, Markdown | ✅ | Safe Markdown subset rendered without raw HTML |
-| Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted |
+| Presence and notification preferences | ✅ | Opt-in presence; per-community Mentions/Muted, overridable per channel |
 | Basic AutoMod | ✅ | Per-community blocked words and link rules, audited |
 
 ### P2 — important improvements
