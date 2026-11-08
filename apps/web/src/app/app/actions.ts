@@ -12,6 +12,7 @@ import * as communities from "@/server/communities";
 import * as discovery from "@/server/discovery";
 import * as friends from "@/server/friends";
 import * as integrations from "@/server/integrations";
+import * as onboarding from "@/server/onboarding";
 import { invalid, toResult, type ActionResult } from "@/server/errors";
 import { consume, MUTATION_LIMIT } from "@/server/limits";
 import * as publicChannels from "@/server/public-channels";
@@ -52,6 +53,10 @@ export const setChannelOverride = async (channelId: string, roleId: string, allo
 export const createCategory = async (communityId: string, name: string) => run((u) => categories.createCategory(u, communityId, name));
 export const renameCategory = async (categoryId: string, name: string) => run((u) => categories.renameCategory(u, categoryId, name));
 export const deleteCategory = async (categoryId: string) => run((u) => categories.deleteCategory(u, categoryId));
+export const listCategoryOverrides = async (categoryId: string) =>
+  run((u) => categories.listCategoryOverrides(u, categoryId), false);
+export const setCategoryOverride = async (categoryId: string, roleId: string, allow: number, deny: number) =>
+  run((u) => categories.setCategoryOverride(u, categoryId, roleId, allow, deny));
 export const setChannelCategory = async (channelId: string, categoryId: string | null) =>
   run((u) => categories.setChannelCategory(u, channelId, categoryId));
 export const deleteChannel = async (channelId: string) => run((u) => communities.deleteChannel(u, channelId));
@@ -121,6 +126,8 @@ export const removeFriend = async (otherId: string) => run((u) => friends.remove
 export const searchPeople = async (query: string) => run((u) => friends.searchPeople(u, query), false);
 export const setNotificationLevel = async (communityId: string, level: "mentions" | "muted") =>
   run((u) => presence.setNotificationLevel(u, communityId, level));
+export const setChannelNotificationLevel = async (channelId: string, level: "default" | "mentions" | "muted") =>
+  run((u) => presence.setChannelNotificationLevel(u, channelId, level));
 
 
 export const createIntegration = async (
@@ -158,3 +165,9 @@ export const setLocale = async (locale: string) =>
     if (!isAppLocale(locale)) throw invalid("Unsupported language.");
     (await cookies()).set(LOCALE_COOKIE, locale, { path: "/", maxAge: 60 * 60 * 24 * 365, sameSite: "lax", httpOnly: true, secure: process.env.NODE_ENV === "production" });
   });
+
+export const setOnboardingOptions = async (communityId: string, options: { roleId: string; label: string }[]) =>
+  run((u) => onboarding.setOnboardingOptions(u, communityId, options));
+export const chooseOnboarding = async (communityId: string, optionIds: string[]) =>
+  run((u) => onboarding.chooseOnboarding(u, communityId, optionIds));
+export const reopenOnboarding = async (communityId: string) => run((u) => onboarding.reopenOnboarding(u, communityId));

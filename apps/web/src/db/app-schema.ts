@@ -92,6 +92,8 @@ export const member = pgTable(
     rulesAcceptedVersion: integer("rules_accepted_version").notNull().default(0),
     /** "muted": no desktop notifications or unread dot for this community; mention badges stay. */
     notifications: text("notifications", { enum: ["mentions", "muted"] }).notNull().default("mentions"),
+    /** When the member answered (or skipped) the community's role picker; null asks again. */
+    onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
   },
   (t) => [
     primaryKey({ columns: [t.communityId, t.userId] }),
@@ -117,6 +119,23 @@ export const memberRole = pgTable(
     ),
     index("member_role_role_idx").on(t.roleId),
   ],
+);
+
+/** A role members may pick for themselves after joining (src/server/onboarding.ts). */
+export const onboardingOption = pgTable(
+  "onboarding_option",
+  {
+    id: id(),
+    communityId: uuid("community_id")
+      .notNull()
+      .references(() => community.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => role.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [uniqueIndex("onboarding_option_role_idx").on(t.roleId), index("onboarding_option_community_idx").on(t.communityId)],
 );
 
 /** A named group of channels in the sidebar. Deleting it keeps its channels (uncategorised). */
@@ -152,6 +171,21 @@ export const channel = pgTable(
   (t) => [index("channel_community_idx").on(t.communityId), index("channel_category_idx").on(t.categoryId)],
 );
 
+/** A person's notification level for one channel; no row means the community's level applies. */
+export const channelNotification = pgTable(
+  "channel_notification",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channel.id, { onDelete: "cascade" }),
+    level: text("level", { enum: ["mentions", "muted"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.channelId] }), index("channel_notification_channel_idx").on(t.channelId), check("channel_notification_level", sql`${t.level} in ('mentions', 'muted')`)],
+);
+
 /** Per-channel allow/deny bits for one role (src/server/permissions.ts `channelAuthority`). */
 export const channelOverride = pgTable(
   "channel_override",
@@ -171,6 +205,26 @@ export const channelOverride = pgTable(
     // Only channel permission bits (view 1024, send 256, manage messages 16, connect 2048, speak 4096,
     // video 8192), never both allowed and denied.
     check("channel_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~15632 = 0`),
+  ],
+);
+
+/** Allow/deny bits a category passes to its channels; a channel's own override for the same role replaces it. */
+export const categoryOverride = pgTable(
+  "category_override",
+  {
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => category.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => role.id, { onDelete: "cascade" }),
+    allow: integer("allow").notNull().default(0),
+    deny: integer("deny").notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.categoryId, t.roleId] }),
+    index("category_override_role_idx").on(t.roleId),
+    check("category_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~15632 = 0`),
   ],
 );
 
