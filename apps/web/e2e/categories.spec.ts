@@ -32,5 +32,18 @@ test.describe("categories", () => {
     await expect(member.getByRole("link", { name: /roadmap/ })).toHaveCount(0);
     await member.reload();
     await expect(member.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+    await member.getByRole("button", { name: "Projects" }).click();
+    await expect(member.getByRole("link", { name: /roadmap/ })).toBeVisible();
+
+    // Category permissions reach every channel inside it, live for members.
+    await owner.getByRole("link", { name: "Community settings" }).click();
+    await owner.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Categories", exact: true }).click();
+    await owner.getByRole("button", { name: "Permissions of category Projects" }).click();
+    await owner.getByLabel("View for everyone").selectOption("deny");
+    await expect(member.getByRole("link", { name: /roadmap/ })).toHaveCount(0);
+    await expect(owner.getByLabel("View for everyone")).toBeEnabled();
+    await expectNoA11yViolations(owner);
+    await owner.getByRole("button", { name: "Close settings" }).click();
+    await expect(owner.getByRole("link", { name: "roadmap (private)" })).toBeVisible();
   });
 });

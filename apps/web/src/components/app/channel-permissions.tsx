@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { listChannelOverrides, setChannelOverride } from "@/app/app/actions";
+import { listCategoryOverrides, listChannelOverrides, setCategoryOverride, setChannelOverride } from "@/app/app/actions";
 import type { ChannelOverrideView } from "@/server/communities";
 import { Permission } from "@/server/permissions";
 import { DiamondOrbitSmoothLoader } from "@/components/ui/diamond-orbit-smooth-loader";
@@ -18,6 +18,14 @@ const COLUMNS = {
     { bit: Permission.Speak, label: "Speak" },
     { bit: Permission.Video, label: "Video" },
   ],
+  category: [
+    { bit: Permission.ViewChannels, label: "View" },
+    { bit: Permission.SendMessages, label: "Send" },
+    { bit: Permission.ManageMessages, label: "Delete others'" },
+    { bit: Permission.Connect, label: "Connect" },
+    { bit: Permission.Speak, label: "Speak" },
+    { bit: Permission.Video, label: "Video" },
+  ],
 } as const;
 
 type State = "inherit" | "allow" | "deny";
@@ -26,28 +34,32 @@ function stateOf(o: ChannelOverrideView, bit: number): State {
   return o.allow & bit ? "allow" : o.deny & bit ? "deny" : "inherit";
 }
 
+type Target = { channelId: string; kind: "text" | "voice" } | { categoryId: string; name: string };
+
 /** Tri-state per role and permission. Owners and administrators always bypass these. */
-export function ChannelPermissions({ channelId, kind }: { channelId: string; kind: "text" | "voice" }) {
-  const columns = COLUMNS[kind];
+export function ChannelPermissions(target: Target) {
+  const isCategory = "categoryId" in target;
+  const id = isCategory ? target.categoryId : target.channelId;
+  const columns: readonly { bit: number; label: string }[] = COLUMNS[isCategory ? "category" : target.kind];
   const [rows, setRows] = useState<ChannelOverrideView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
     let active = true;
-    void listChannelOverrides(channelId).then((r) => {
+    void (isCategory ? listCategoryOverrides(id) : listChannelOverrides(id)).then((r) => {
       if (!active) return;
       if (r.ok) setRows(r.data);
       else setError(r.error);
     });
     return () => void (active = false);
-  }, [channelId]);
+  }, [id, isCategory]);
 
   function change(row: ChannelOverrideView, bit: number, next: State) {
     const allow = (row.allow & ~bit) | (next === "allow" ? bit : 0);
     const deny = (row.deny & ~bit) | (next === "deny" ? bit : 0);
     startTransition(async () => {
-      const result = await setChannelOverride(channelId, row.roleId, allow, deny);
+      const result = await (isCategory ? setCategoryOverride : setChannelOverride)(id, row.roleId, allow, deny);
       if (!result.ok) return setError(result.error);
       setError(null);
       setRows((list) => list?.map((r) => (r.roleId === row.roleId ? { ...r, allow, deny } : r)) ?? null);
@@ -59,13 +71,13 @@ export function ChannelPermissions({ channelId, kind }: { channelId: string; kin
 
   return (
     <fieldset className="grid gap-2 border-t pt-4" disabled={pending || !rows}>
-      <legend className="font-medium">Permissions</legend>
-      <p className="text-xs text-muted-foreground">
+      <legend className="font-medium">{isCategory ? `Permissions for ${target.name}` : "Permissions"}</legend>
+      {!isCategory && <p className="text-xs text-muted-foreground">
         {isPrivate
           ? "Private: only roles allowed to view can see this channel."
           : "Set View to Deny for everyone to make this channel private."}{" "}
         Owners and administrators always have access.
-      </p>
+      </p>}
       {!rows && !error && <div className="text-primary"><DiamondOrbitSmoothLoader dotSize={4} gap={3} /></div>}
       {rows && (
         <div className="overflow-x-auto rounded-lg border">

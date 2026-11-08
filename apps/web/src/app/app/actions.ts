@@ -52,6 +52,10 @@ export const setChannelOverride = async (channelId: string, roleId: string, allo
 export const createCategory = async (communityId: string, name: string) => run((u) => categories.createCategory(u, communityId, name));
 export const renameCategory = async (categoryId: string, name: string) => run((u) => categories.renameCategory(u, categoryId, name));
 export const deleteCategory = async (categoryId: string) => run((u) => categories.deleteCategory(u, categoryId));
+export const listCategoryOverrides = async (categoryId: string) =>
+  run((u) => categories.listCategoryOverrides(u, categoryId), false);
+export const setCategoryOverride = async (categoryId: string, roleId: string, allow: number, deny: number) =>
+  run((u) => categories.setCategoryOverride(u, categoryId, roleId, allow, deny));
 export const setChannelCategory = async (channelId: string, categoryId: string | null) =>
   run((u) => categories.setChannelCategory(u, channelId, categoryId));
 export const deleteChannel = async (channelId: string) => run((u) => communities.deleteChannel(u, channelId));

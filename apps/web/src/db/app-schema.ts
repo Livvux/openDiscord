@@ -174,6 +174,26 @@ export const channelOverride = pgTable(
   ],
 );
 
+/** Allow/deny bits a category passes to its channels; a channel's own override for the same role replaces it. */
+export const categoryOverride = pgTable(
+  "category_override",
+  {
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => category.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => role.id, { onDelete: "cascade" }),
+    allow: integer("allow").notNull().default(0),
+    deny: integer("deny").notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.categoryId, t.roleId] }),
+    index("category_override_role_idx").on(t.roleId),
+    check("category_override_bits", sql`${t.allow} & ${t.deny} = 0 and (${t.allow} | ${t.deny}) & ~15632 = 0`),
+  ],
+);
+
 export const message = pgTable(
   "message",
   {
